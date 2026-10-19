@@ -11,6 +11,11 @@
 #
 # 基础镜像可用 --build-arg 覆盖（内网镜像时很方便）：
 #   docker build --build-arg GO_IMAGE=golang:1.27-alpine .
+#
+# Go 版本注意：go.mod 的 go 指令是 1.27.2，构建镜像的 Go 不能比它旧，
+# 否则会直接报 "go.mod requires go >= 1.27.2"。默认的 golang:1.27-alpine 是滚动 tag，
+# 始终指向 1.27 系列最新补丁（≥1.27.2），因此安全；若内网镜像固定在更旧的补丁，
+# 请改用 golang:1.27.2-alpine（或更新），或依赖 GOTOOLCHAIN=auto 自动切换（需网络）。
 
 ARG NODE_IMAGE=node:26-alpine
 ARG PNPM_VERSION=10

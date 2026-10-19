@@ -22,6 +22,10 @@ const (
 	maxHourRangeMS = int64(365*24*3600) * 1000
 	// maxMetricPoints 限制单次返回的总采样点数，避免响应体过大。
 	maxMetricPoints = 20000
+	// maxRawNoDegradeMS 是 raw 不降级的最大跨度（6 小时）。
+	//
+	// 契约第 15 节：step=raw 且跨度 > 6h 时自动按 1m 返回，并在 step 字段回传实际值。
+	maxRawNoDegradeMS = int64(6 * 3600 * 1000)
 	// toClockSkewToleranceMS 是客户端 to 与服务端当前时间的容许偏差。
 	//
 	// 客户端常用「截断到秒的当前时间」作为 to（例如验收脚本的 date +%s * 1000），
@@ -80,6 +84,11 @@ func (a *API) handleServerMetrics(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "from 必须是 Unix 毫秒整数")
 		return
+	}
+
+	// 大范围 raw 查询自动降级为 1m，避免一次返回几十万点。
+	if step == store.RollupBucketRaw && to-from > maxRawNoDegradeMS {
+		step = store.RollupBucketMinute
 	}
 
 	// 把窗口夹到该 step 的保留期内，避免无意义的超大查询。

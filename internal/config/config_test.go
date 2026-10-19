@@ -237,3 +237,77 @@ func TestDecodeMasterKey(t *testing.T) {
 		t.Fatal("空密钥应报错")
 	}
 }
+
+// ------------------------------------------------ M2 ------------------------------------------------
+
+// TestCheckConfigDefaults 校验 M2 检测相关配置的默认值与解析。
+func TestCheckConfigDefaults(t *testing.T) {
+	t.Setenv(EnvListen, "")
+	t.Setenv(EnvDataDir, "")
+	t.Setenv(EnvAdminPassword, "")
+	t.Setenv(EnvLogLevel, "")
+	t.Setenv(EnvSSHInterval, "")
+	t.Setenv(EnvMasterKey, "")
+	t.Setenv(EnvCheckConcurrency, "")
+	t.Setenv(EnvCheckIntervalMin, "")
+
+	cfg, err := Load("dev", nil)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if cfg.CheckConcurrency != DefaultCheckConcurrency {
+		t.Fatalf("默认 check-concurrency 期望 %d，实际 %d", DefaultCheckConcurrency, cfg.CheckConcurrency)
+	}
+	if cfg.CheckIntervalMin != DefaultCheckIntervalMin {
+		t.Fatalf("默认 check-interval-min 期望 %v，实际 %v", DefaultCheckIntervalMin, cfg.CheckIntervalMin)
+	}
+}
+
+// TestCheckConfigEnv 校验 LEADSTACK_CHECK_* 环境变量（验收脚本传 10s）。
+func TestCheckConfigEnv(t *testing.T) {
+	t.Setenv(EnvListen, "")
+	t.Setenv(EnvDataDir, "")
+	t.Setenv(EnvLogLevel, "")
+	t.Setenv(EnvSSHInterval, "")
+	t.Setenv(EnvMasterKey, "")
+
+	t.Setenv(EnvCheckConcurrency, "3")
+	t.Setenv(EnvCheckIntervalMin, "10s")
+	cfg, err := Load("dev", nil)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if cfg.CheckConcurrency != 3 {
+		t.Fatalf("check-concurrency 期望 3，实际 %d", cfg.CheckConcurrency)
+	}
+	if cfg.CheckIntervalMin != 10*time.Second {
+		t.Fatalf("check-interval-min 期望 10s，实际 %v", cfg.CheckIntervalMin)
+	}
+
+	// 纯数字按秒解释
+	t.Setenv(EnvCheckIntervalMin, "15")
+	cfg, err = Load("dev", nil)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if cfg.CheckIntervalMin != 15*time.Second {
+		t.Fatalf("check-interval-min 期望 15s，实际 %v", cfg.CheckIntervalMin)
+	}
+
+	// flag 覆盖环境变量
+	cfg, err = Load("dev", []string{"-check-interval-min", "20s", "-check-concurrency", "5"})
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if cfg.CheckIntervalMin != 20*time.Second || cfg.CheckConcurrency != 5 {
+		t.Fatalf("flag 未覆盖环境变量: %v / %d", cfg.CheckIntervalMin, cfg.CheckConcurrency)
+	}
+
+	// 非法值
+	if _, err := Load("dev", []string{"-check-concurrency", "0"}); err == nil {
+		t.Fatal("check-concurrency=0 应报错")
+	}
+	if _, err := Load("dev", []string{"-check-interval-min", "100ms"}); err == nil {
+		t.Fatal("过小的 check-interval-min 应报错")
+	}
+}

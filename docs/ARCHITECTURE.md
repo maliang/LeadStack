@@ -372,3 +372,190 @@ CREATE TABLE metrics_rollup(
 8. `?group=` 过滤生效；agent 模式服务器上报 `host_info` 后详情可见主机信息。
 9. 未带 token 访问 `/credentials` 返回 401；被引用的凭证删除返回 409。
 10. `scripts/verify_m0.sh` 仍全绿（**M1 不得回归 M0**）。
+
+---
+
+# M2 契约（监控与检测）
+
+> M2 补齐「**主动检测**」：检测项（端口/HTTP/Ping/进程/脚本）· 调度与结果时间线 · 检测视图 · 大范围指标查询降级。
+> 并按计划为 M3 告警准备数据（连续失败计数与状态起止时间）。
+
+## 13. 检测模型与执行位置
+
+| 类型 | Target 形态 | 在哪执行 | 说明 |
+|---|---|---|---|
+| `tcp` | `host:port` | 控制端直连 | 端口存活；`params.timeout_ms` 可选 |
+| `http` | 完整 URL | 控制端直连 | `params.expect_status`（默认 2xx）、`params.keyword`、`params.method`（默认 GET）、`params.insecure`（跳过证书校验） |
+| `ping` | `host` | 控制端直连 | ICMP 非特权模式（`icmp.ListenPacket("udp4")`）；**无权限时必须返回 ok=false + message「当前环境不支持非特权 ICMP」**，不得静默成功 |
+| `process` | 进程名 | 目标机 | 由控制端生成命令，经 Executor 执行后按进程数判定；`params.min_count`（默认 1）、`params.user` 可选 |
+| `script` | 脚本内容 | 目标机 | `params.exit_zero_ok`（默认 true）、`params.expect_stdout` 可选；**脚本内容会进审计日志** |
+
+**Executor 决定目标机执行通道**：agent 模式 → 控制端下发 job（`internal/jobs`）；ssh 模式 → SSH `Run`。两种模式对检测层完全透明。
+
+## 14. Go 包 API 契约（`checkdev` 交付，`backend`/`agentdev` 消费）
+
+### 14.1 `internal/checker` —— 探测与调度（`checkdev` 负责）
+
+```go
+type Kind string // "tcp" | "http" | "ping" | "process" | "script"
+
+type Spec struct {
+    ID        string         `json:"id"`
+    Name      string         `json:"name"`
+    Kind      Kind           `json:"kind"`
+    Target    string         `json:"target"`
+    IntervalS int            `json:"interval_s"` // 最小 10
+    TimeoutS  int            `json:"timeout_s"`  // 默认 10
+    Params    map[string]any `json:"params,omitempty"`
+}
+
+type Result struct {
+    OK         bool   `json:"ok"`
+    LatencyMS  int64  `json:"latency_ms"`
+    StatusCode int    `json:"status_code,omitempty"` // http 专用
+    Message    string `json:"message,omitempty"`     // 失败原因 / 摘要
+    TS         int64  `json:"ts"`                    // Unix 毫秒
+}
+
+// Executor 是「在目标机上执行一条命令」的抽象：agent 模式由 jobs.Dispatcher 实现，
+// ssh 模式由 backend 用 sshx.Client 包装。checker 不感知底层通道。
+type Executor interface {
+    Exec(ctx context.Context, serverID, command string, timeoutS int) (stdout, stderr string, exitCode int, err error)
+}
+
+// Probe 执行一次探测。exec 仅在 Kind 为 process/script 时被使用，其余可为 nil。
+// 任何失败都要转成 Result{OK:false, Message:...}，不要返回 error（除 ctx 取消）。
+func Probe(ctx context.Context, spec Spec, exec Executor, serverID string) Result
+
+// Store 是调度器对持久化的最小依赖，由 backend 实现（避免 checker import store）。
+type Store interface {
+    ListEnabledTargets(ctx context.Context) ([]Target, error)
+    SaveResult(ctx context.Context, checkID, serverID string, r Result) error
+    UpdateState(ctx context.Context, checkID, serverID string, ok bool, ts int64) error
+}
+
+type Target struct {
+    CheckID  string
+    ServerID string
+    Mode     string // "agent" | "ssh"
+    Spec     Spec
+}
+
+type Deps struct {
+    Store            Store
+    Exec             Executor
+    Concurrency      int           // 默认 8
+    OnStateChange    func(checkID, serverID string, ok bool, since int64) // 可选，M3 告警挂这里
+}
+
+type Scheduler struct{ /* ... */ }
+func NewScheduler(d Deps) *Scheduler
+func (s *Scheduler) Start(ctx context.Context)   // 阻塞直到 ctx 取消
+func (s *Scheduler) Wake()                       // 检测项变更后立即重读目标列表
+func (s *Scheduler) RunOnce(ctx context.Context, checkID, serverID string) Result // 手动「立即执行」
+```
+
+### 14.2 `internal/jobs` —— 控制端任务下发（`agentdev` 负责）
+
+M0 只做了 agent 侧的 job.exec 接收，**控制端还没有下发能力**，M2 补上。
+
+```go
+// Sender 由 backend 的 WS Hub 实现：把一条 job.exec 发给指定服务器。
+type Sender interface {
+    SendJob(serverID string, envelope []byte) error // envelope 为 protocol.Envelope 的 JSON
+    IsOnline(serverID string) bool
+}
+
+type Result struct {
+    ExitCode int
+    Stdout   string
+    Stderr   string
+}
+
+type Dispatcher struct{ /* ... */ }
+func NewDispatcher(s Sender, opts Options) *Dispatcher
+// Dispatch 下发 job 并等待 job.done；ctx 超时或服务器离线返回 error。
+// 实现 Executor 接口，因此可直接注入 checker.Deps.Exec。
+func (d *Dispatcher) Exec(ctx context.Context, serverID, command string, timeoutS int) (stdout, stderr string, exitCode int, err error)
+// Handle* 由 backend 在收到 agent 帧时调用，把结果投递给等待中的 Dispatch。
+func (d *Dispatcher) HandleAck(serverID, runID string)
+func (d *Dispatcher) HandleLog(serverID, runID string, seq int, stream, chunk string)
+func (d *Dispatcher) HandleDone(serverID, runID string, exitCode int, errMsg string)
+func (d *Dispatcher) FailServer(serverID string, cause error) // 连接断开时唤醒所有等待者
+```
+
+## 15. REST 新增端点（前缀 `/api/v1`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/checks` | 检测项列表，含目标服务器数、最近结果、当前状态（`up`/`down`/`unknown`）、可用率（24h） |
+| POST | `/checks` | 创建检测项 → 201；body 见下 |
+| GET | `/checks/{id}` | 详情 |
+| PATCH | `/checks/{id}` | 改名称/间隔/超时/参数/启用状态（改 interval 后需重排调度） |
+| DELETE | `/checks/{id}` | 删除（连带结果与状态） |
+| POST | `/checks/{id}/targets` | `{server_ids:[...]}` 覆盖式设置适用服务器 |
+| POST | `/checks/{id}/run` | 立即对全部目标执行一次 → `{results:[{server_id,ok,latency_ms,message}]}` |
+| GET | `/checks/{id}/results` | `?server_id=&from=&to=&limit=` → 结果时间线（默认最近 100 条） |
+| GET | `/checks/summary` | `{total,up,down,unknown,checks:[...]}` 供总览页 |
+| GET | `/servers/{id}/checks` | 该服务器适用的检测项 + 最近结果 + 状态 |
+
+**创建 body**：`{name,kind,target,interval_s,timeout_s,params?,server_ids?}`。
+**状态口径**：`down` = 最近一次失败且连续失败次数 ≥ `params.fail_threshold`（默认 3）；否则 `up`；无结果为 `unknown`。
+**指标查询降级（M2 附带）**：`GET /servers/{id}/metrics` 当 `step=raw` 且时间跨度 > 6 小时时**自动降级**为 `1m` 并在响应 `step` 字段返回实际值（不再返回超大原始序列）。
+
+### 15.1 响应字段（M2 冻结，前端按此实现）
+
+`GET /checks` 每项：
+```json
+{ "id":"…", "name":"…", "kind":"tcp", "target":"127.0.0.1:22",
+  "interval_s":10, "timeout_s":5, "params":{}, "enabled":true,
+  "state":"up", "status":"up",            // 同值，state 为准，status 保留兼容
+  "target_count":2, "server_count":2, "server_ids":["…","…"],
+  "availability_24h":99.5,                // 0-100 百分比
+  "results_24h":240,
+  "consecutive_fail":0,
+  "last_result":{"ts":1710000000000,"ok":true,"latency_ms":3,"message":""},
+  "created_at":1710000000000 }
+```
+`GET /checks/summary` → `{total,up,down,unknown,checks:[…]}`。
+`POST /checks/{id}/run` → `{results:[{server_id,ok,latency_ms,status_code,message}],summary:{ok,failed}}`，**results 顺序与 GET /checks 的 `server_ids` 一致**。
+`GET /checks/{id}/results` 与 `GET /servers/{id}/checks` 均返回**数组**（后者元素同上，但 state/availability_24h/last_result 是**该服务器视角**）。
+单元格语义：`status_code` 仅 http 有意义；`message` 失败时必有值、成功时可为空。
+
+## 16. 数据库迁移 `0004_checks.sql`
+
+```sql
+CREATE TABLE checks(
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL,
+  interval_s INTEGER NOT NULL, timeout_s INTEGER NOT NULL DEFAULT 10,
+  params_json TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL);
+CREATE TABLE check_targets(
+  check_id TEXT NOT NULL, server_id TEXT NOT NULL,
+  PRIMARY KEY(check_id, server_id)) WITHOUT ROWID;
+CREATE TABLE check_results(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, check_id TEXT NOT NULL, server_id TEXT NOT NULL,
+  ts INTEGER NOT NULL, ok INTEGER NOT NULL, latency_ms INTEGER NOT NULL DEFAULT 0,
+  status_code INTEGER, message TEXT);
+CREATE INDEX idx_check_results_lookup ON check_results(check_id, server_id, ts);
+CREATE TABLE check_state(
+  check_id TEXT NOT NULL, server_id TEXT NOT NULL, ok INTEGER NOT NULL,
+  consecutive_fail INTEGER NOT NULL DEFAULT 0, since INTEGER NOT NULL,
+  last_ts INTEGER NOT NULL, last_message TEXT,
+  PRIMARY KEY(check_id, server_id)) WITHOUT ROWID;
+```
+
+保留：`check_results` 保留 30 天（随清扫循环清理）。
+
+## 17. M2 验收标准（`scripts/verify_m2.sh` 一键复现）
+
+1. `make build` 成功；`go vet ./...` 与 `go test ./...` 全绿；M0/M1 两个脚本仍全绿。
+2. 创建 `tcp` 检测项指向 devssh 端口、`http` 检测项指向控制端自身 `/healthz`，各应用 1 台服务器 → `POST /checks/{id}/run` 返回 `ok=true` 且 `latency_ms` 有值。
+3. 创建指向不可达端口的 `tcp` 检测项 → 立即执行 `ok=false` 且有 message；间隔 10s 连续执行后状态变 `down`。
+4. `http` 检测项对 `/healthz` 校验 `expect_status=200` 通过；指向不存在路径且 `expect_status=200` → `ok=false`。
+5. `process` 检测项（匹配本机真实进程名，如 `leadstack`）经 **agent 模式**服务器（job.exec 下发）执行成功；同一检测项对 **ssh 模式**服务器执行也成功（两种通道都通）。
+6. 调度器按间隔产生结果：60 秒内单目标 ≥4 条结果记录。
+7. `GET /checks/{id}/results` 返回时间线；`GET /servers/{id}/checks` 返回该机器检测项与状态。
+8. 指标大范围查询：`step=raw` 且跨度 > 6h 时响应 `step` 变为 `1m`。
+9. 未带 token 访问 `/checks` 返回 401。
+10. `scripts/verify_m0.sh` 与 `scripts/verify_m1.sh` 仍全绿（**M2 不得回归**）。

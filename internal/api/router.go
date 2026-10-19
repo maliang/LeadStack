@@ -47,10 +47,26 @@ func (a *API) Router() http.Handler {
 					r.Post("/test-connection", a.handleTestConnection)
 					r.Post("/refresh-host-info", a.handleRefreshHostInfo)
 					r.Get("/metrics", a.handleServerMetrics)
+					r.Get("/checks", a.handleServerChecks)
 				})
 			})
 
 			r.Get("/groups", a.handleListGroups)
+
+			r.Route("/checks", func(r chi.Router) {
+				// /checks/summary 与 /checks/{checkID} 同为静态优先，显式先注册避免歧义。
+				r.Get("/summary", a.handleCheckSummary)
+				r.Get("/", a.handleListChecks)
+				r.Post("/", a.handleCreateCheck)
+				r.Route("/{checkID}", func(r chi.Router) {
+					r.Get("/", a.handleGetCheck)
+					r.Patch("/", a.handlePatchCheck)
+					r.Delete("/", a.handleDeleteCheck)
+					r.Post("/targets", a.handleSetCheckTargets)
+					r.Post("/run", a.handleRunCheck)
+					r.Get("/results", a.handleListCheckResults)
+				})
+			})
 
 			r.Route("/credentials", func(r chi.Router) {
 				r.Get("/", a.handleListCredentials)

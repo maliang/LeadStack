@@ -300,6 +300,112 @@ export interface InstallScript {
 }
 
 /* ------------------------------------------------------------------ */
+/* M2：检测（契约第 13/15 节）                                          */
+/* ------------------------------------------------------------------ */
+
+export type CheckKind = 'tcp' | 'http' | 'ping' | 'process' | 'script'
+
+/** 状态口径（契约第 15 节）：连续失败 ≥ fail_threshold 才算 down，无结果为 unknown。 */
+export type CheckState = 'up' | 'down' | 'unknown'
+
+export interface CheckParams {
+  /** http */
+  expect_status?: string
+  keyword?: string
+  method?: string
+  insecure?: boolean
+  /** tcp */
+  timeout_ms?: number
+  /** process */
+  min_count?: number
+  user?: string
+  /** script */
+  exit_zero_ok?: boolean
+  expect_stdout?: string
+  /** 状态判定：连续失败次数阈值，默认 3 */
+  fail_threshold?: number
+  /** 兼容后端可能多带的字段 */
+  [key: string]: unknown
+}
+
+export interface CheckResult {
+  id: number | null
+  check_id: string
+  server_id: string
+  /** 后端在结果里可能带上服务器名（omitempty），用于时间线提示 */
+  server_name?: string | null
+  ts: number | null
+  ok: boolean
+  latency_ms: number | null
+  status_code: number | null
+  message: string | null
+}
+
+export interface CheckItem {
+  id: string
+  name: string
+  kind: CheckKind | string
+  target: string
+  interval_s: number
+  timeout_s: number
+  params: CheckParams
+  enabled: boolean
+  created_at: number | null
+  server_ids: string[]
+  server_count: number
+  state: CheckState
+  /** 24 小时可用率，百分比 0-100；null 表示暂无数据 */
+  availability_24h: number | null
+  last_result: CheckResult | null
+}
+
+export interface CheckSummary {
+  total: number
+  up: number
+  down: number
+  unknown: number
+  checks: CheckItem[]
+}
+
+export interface CreateCheckPayload {
+  name: string
+  kind: CheckKind
+  target: string
+  interval_s: number
+  timeout_s: number
+  params?: CheckParams
+  server_ids?: string[]
+}
+
+export interface UpdateCheckPayload {
+  name?: string
+  target?: string
+  interval_s?: number
+  timeout_s?: number
+  params?: CheckParams
+  enabled?: boolean
+}
+
+export interface RunCheckResultItem {
+  server_id: string
+  ok: boolean
+  latency_ms: number | null
+  message: string | null
+}
+
+export interface RunCheckResponse {
+  results: RunCheckResultItem[]
+  summary: { ok: number; failed: number }
+}
+
+export interface CheckResultsQuery {
+  server_id?: string
+  from?: number
+  to?: number
+  limit?: number
+}
+
+/* ------------------------------------------------------------------ */
 /* 响应归一化：后端并行开发中，字段可能多给/少给，UI 要稳                */
 /* ------------------------------------------------------------------ */
 
@@ -439,6 +545,159 @@ function normalizeMetricSeries(input: unknown): MetricSeries {
         .filter((point): point is MetricPoint => point !== null)
     : []
   return { metric: toText(raw.metric) ?? '', points }
+}
+
+/* ---------------------- M2 检测：归一化 ---------------------- */
+
+function toBool(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const lowered = value.trim().toLowerCase()
+    if (['true', '1', 'yes', 'on'].includes(lowered)) return true
+    if (['false', '0', 'no', 'off'].includes(lowered)) return false
+  }
+  return fallback
+}
+
+function extractList(input: unknown, keys: string[]): unknown[] {
+  if (Array.isArray(input)) return input
+  const raw = toRecord(input)
+  if (!raw) return []
+  for (const key of keys) {
+    const value = raw[key]
+    if (Array.isArray(value)) return value
+  }
+  return []
+}
+
+function normalizeParams(value: unknown): CheckParams {
+  if (typeof value === 'string' && value.trim() !== '') {
+    try {
+      return normalizeParams(JSON.parse(value))
+    } catch {
+      return {}
+    }
+  }
+  const raw = toRecord(value)
+  return raw ? (raw as CheckParams) : {}
+}
+
+function normalizeCheckResult(input: unknown): CheckResult | null {
+  const raw = toRecord(input)
+  if (!raw) return null
+  return {
+    id: toNumber(raw.id),
+    check_id: toText(raw.check_id) ?? '',
+    server_id: toText(raw.server_id) ?? '',
+    server_name: toText(raw.server_name),
+    ts: toNumber(raw.ts),
+    ok: toBool(raw.ok),
+    latency_ms: toNumber(raw.latency_ms ?? raw.latency),
+    status_code: toNumber(raw.status_code ?? raw.code),
+    message: toText(raw.message),
+  }
+}
+
+function normalizeCheckState(value: unknown, lastResult: CheckResult | null, params: CheckParams): CheckState {
+  if (value === 'up' || value === 'down' || value === 'unknown') return value
+  if (lastResult === null) return 'unknown'
+  if (lastResult.ok) return 'up'
+  const threshold = toNumber(params.fail_threshold) ?? 3
+  // 后端未给状态时：只有明确给出连续失败次数且达到阈值才判 down，否则保持 up（避免误报）
+  const raw = toRecord(value)
+  if (raw) {
+    const consecutive = toNumber(raw.consecutive_fail ?? raw.consecutive_failures)
+    if (consecutive !== null) return consecutive >= threshold ? 'down' : 'up'
+  }
+  return threshold <= 1 ? 'down' : 'up'
+}
+
+export function normalizeCheck(input: unknown): CheckItem {
+  const raw = toRecord(input) ?? {}
+  const params = normalizeParams(raw.params ?? raw.params_json)
+  const lastResult =
+    normalizeCheckResult(raw.last_result ?? raw.latest_result ?? raw.last) ?? null
+
+  const serverIdsRaw = Array.isArray(raw.server_ids)
+    ? raw.server_ids
+    : Array.isArray(raw.serverIds)
+      ? raw.serverIds
+      : Array.isArray(raw.targets)
+        ? raw.targets
+        : []
+  const server_ids = serverIdsRaw
+    .map((item) => (typeof item === 'string' ? item : (toText(toRecord(item)?.server_id) ?? '')))
+    .filter((id) => id !== '')
+
+  // 契约（第 15 节）与后端实现中 availability_24h 均为百分比 0-100。
+  const rawAvailability =
+    toNumber(raw.availability_24h ?? raw.uptime_24h ?? raw.availability ?? raw.uptime_pct) ?? null
+  const availability_24h =
+    rawAvailability === null ? null : Math.max(0, Math.min(100, rawAvailability))
+
+  const serverCount =
+    toNumber(raw.server_count ?? raw.target_count ?? raw.serverCount) ?? server_ids.length
+
+  return {
+    id: String(raw.id ?? ''),
+    name: toText(raw.name) ?? '未命名检测项',
+    kind: toText(raw.kind) ?? 'tcp',
+    target: toText(raw.target) ?? '',
+    interval_s: toNumber(raw.interval_s) ?? 30,
+    timeout_s: toNumber(raw.timeout_s) ?? 10,
+    params,
+    enabled: toBool(raw.enabled, true),
+    created_at: toNumber(raw.created_at),
+    server_ids,
+    server_count: serverCount,
+    state: normalizeCheckState(raw.state ?? raw.status, lastResult, params),
+    availability_24h:
+      availability_24h === null ? null : Math.max(0, Math.min(100, availability_24h)),
+    last_result: lastResult,
+  }
+}
+
+export function normalizeCheckSummary(input: unknown): CheckSummary {
+  const raw = toRecord(input) ?? {}
+  const checks = extractList(input, ['checks', 'items']).map(normalizeCheck)
+  const derived = {
+    up: checks.filter((check) => check.state === 'up').length,
+    down: checks.filter((check) => check.state === 'down').length,
+    unknown: checks.filter((check) => check.state === 'unknown').length,
+  }
+  return {
+    total: toNumber(raw.total) ?? checks.length,
+    up: toNumber(raw.up) ?? derived.up,
+    down: toNumber(raw.down) ?? derived.down,
+    unknown: toNumber(raw.unknown) ?? derived.unknown,
+    checks,
+  }
+}
+
+export function normalizeRunCheckResponse(input: unknown): RunCheckResponse {
+  const items = extractList(input, ['results', 'items']).map((item) => {
+    const raw = toRecord(item) ?? {}
+    return {
+      server_id: toText(raw.server_id) ?? '',
+      ok: toBool(raw.ok),
+      latency_ms: toNumber(raw.latency_ms ?? raw.latency),
+      message: toText(raw.message ?? raw.error),
+    }
+  })
+  const raw = toRecord(input)
+  const summaryRaw = toRecord(raw?.summary)
+  const ok = summaryRaw ? (toNumber(summaryRaw.ok) ?? 0) : items.filter((item) => item.ok).length
+  const failed = summaryRaw
+    ? (toNumber(summaryRaw.failed) ?? 0)
+    : items.filter((item) => !item.ok).length
+  return { results: items, summary: { ok, failed } }
+}
+
+export function normalizeCheckResults(input: unknown): CheckResult[] {
+  return extractList(input, ['results', 'items', 'timeline'])
+    .map(normalizeCheckResult)
+    .filter((item): item is CheckResult => item !== null)
 }
 
 export function normalizeCredential(input: unknown): Credential {
@@ -711,6 +970,73 @@ export const api = {
 
   installScript(payload: InstallScriptPayload): Promise<InstallScript> {
     return request<InstallScript>('/agent/install-script', { method: 'POST', body: payload })
+  },
+
+  /* ---------------------- M2：检测（契约第 15 节） ---------------------- */
+
+  /** GET /checks —— 含目标服务器数、最近结果、当前状态、24h 可用率 */
+  checks(): Promise<CheckItem[]> {
+    return request<unknown>('/checks').then((raw) =>
+      extractList(raw, ['checks', 'items']).map(normalizeCheck),
+    )
+  },
+
+  check(id: string): Promise<CheckItem> {
+    return request<unknown>(`/checks/${encodeURIComponent(id)}`).then(normalizeCheck)
+  },
+
+  createCheck(payload: CreateCheckPayload): Promise<CheckItem> {
+    return request<unknown>('/checks', { method: 'POST', body: payload }).then(normalizeCheck)
+  },
+
+  updateCheck(id: string, payload: UpdateCheckPayload): Promise<CheckItem> {
+    return request<unknown>(`/checks/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: payload,
+    }).then(normalizeCheck)
+  },
+
+  deleteCheck(id: string): Promise<unknown> {
+    return request<unknown>(`/checks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  /** POST /checks/{id}/targets —— 覆盖式设置适用服务器 */
+  setCheckTargets(id: string, serverIds: string[]): Promise<unknown> {
+    return request<unknown>(`/checks/${encodeURIComponent(id)}/targets`, {
+      method: 'POST',
+      body: { server_ids: serverIds },
+    })
+  },
+
+  /** POST /checks/{id}/run —— 立即对全部目标执行一次，返回逐台结果 */
+  runCheck(id: string): Promise<RunCheckResponse> {
+    return request<unknown>(`/checks/${encodeURIComponent(id)}/run`, { method: 'POST' }).then(
+      normalizeRunCheckResponse,
+    )
+  },
+
+  /** GET /checks/{id}/results —— 结果时间线（默认最近 100 条） */
+  checkResults(id: string, query: CheckResultsQuery = {}): Promise<CheckResult[]> {
+    const params = new URLSearchParams()
+    if (query.server_id) params.set('server_id', query.server_id)
+    if (query.from) params.set('from', String(query.from))
+    if (query.to) params.set('to', String(query.to))
+    params.set('limit', String(query.limit ?? 100))
+    return request<unknown>(
+      `/checks/${encodeURIComponent(id)}/results?${params.toString()}`,
+    ).then(normalizeCheckResults)
+  },
+
+  /** GET /checks/summary —— 总览页检测概览 */
+  checksSummary(): Promise<CheckSummary> {
+    return request<unknown>('/checks/summary').then(normalizeCheckSummary)
+  },
+
+  /** GET /servers/{id}/checks —— 该服务器适用的检测项 + 最近结果 + 状态 */
+  serverChecks(serverId: string): Promise<CheckItem[]> {
+    return request<unknown>(`/servers/${encodeURIComponent(serverId)}/checks`).then((raw) =>
+      extractList(raw, ['checks', 'items']).map(normalizeCheck),
+    )
   },
 }
 

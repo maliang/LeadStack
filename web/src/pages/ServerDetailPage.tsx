@@ -36,6 +36,7 @@ import {
 import { InlineLoading } from '../components/Loading'
 import { MetricChart } from '../components/MetricChart'
 import { ModeBadge, StatusBadge } from '../components/StatusBadge'
+import { ServerChecksTab } from '../components/ServerChecksTab'
 import { useToast } from '../components/Toast'
 import { cn } from '../lib/cn'
 
@@ -108,6 +109,7 @@ export default function ServerDetailPage() {
   const query = usePolling(() => api.server(id ?? ''), 10_000, Boolean(id))
 
   const [step, setStep] = useState<MetricsStep>('raw')
+  const [tab, setTab] = useState<'overview' | 'checks'>('overview')
   const [rangeKey, setRangeKey] = useState<RangeKey>('1h')
   const range = RANGES.find((item) => item.key === rangeKey) ?? RANGES[0]
 
@@ -269,8 +271,35 @@ export default function ServerDetailPage() {
             </Button>
           </div>
         </div>
+
+        <div className="mt-4 flex items-center gap-1 border-b border-slate-200 dark:border-slate-800">
+          {(
+            [
+              { key: 'overview', label: '概览' },
+              { key: 'checks', label: '检测' },
+            ] as const
+          ).map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setTab(option.key)}
+              className={cn(
+                '-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+                tab === option.key
+                  ? 'border-indigo-600 text-indigo-700 dark:border-indigo-400 dark:text-indigo-300'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200',
+              )}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
       </div>
 
+      {tab === 'checks' ? (
+        <ServerChecksTab serverId={server.id} />
+      ) : (
+        <>
       {testResult ? (
         <div
           className={cn(
@@ -616,6 +645,8 @@ export default function ServerDetailPage() {
           M1 已支持凭证管理、SSH 连通性测试、主机信息采集与指标历史；Web 终端、任务下发与部署模板将在后续里程碑开放。
         </p>
       </section>
+        </>
+      )}
     </div>
   )
 }

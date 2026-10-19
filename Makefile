@@ -4,7 +4,7 @@
 #   make build-go   只构建两个 Go 二进制（跳过前端，前端未就绪时也能用）
 #   make cross      交叉编译 5 个目标到 dist/
 #   make devssh     DEV-ONLY 测试 SSH 服务（仅本地验收用，**绝不进发布产物**）
-#   make test-e2e   依次跑 scripts/verify_m0.sh 与 scripts/verify_m1.sh
+#   make test-e2e   按序跑 scripts/verify_m0.sh → verify_m1.sh → verify_m2.sh（缺失的自动跳过）
 #   make help       查看全部目标
 #
 # 本机 Go 可能不在 PATH 中（例如 /opt/homebrew/bin/go），下面用 command -v 兜底；
@@ -180,23 +180,26 @@ devssh: ## 构建 DEV-ONLY 测试 SSH 服务到 bin/leadstack-devssh（不参与
 	@printf '>> go build %s -> %s/leadstack-devssh（DEV-ONLY，不会进发布产物）\n' '$(CMD_DEVSSH)' '$(BIN_DIR)'
 	CGO_ENABLED=0 $(GO) build $(GOFLAGS_BUILD) -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/leadstack-devssh $(CMD_DEVSSH)
 
-# 依次跑两个验收脚本；输出（含脚本内部打印的控制端/agent 日志尾部）tee 到 $(E2E_LOG_DIR)/，
-# CI 失败时把该目录作为 artifact 上传。脚本缺失时打印提示并继续，不算失败。
-test-e2e: ## 端到端验收：先 verify_m0.sh 再 verify_m1.sh（前置：make build && make devssh）
+# 验收脚本清单（按序执行；由 lead 维护，缺失时自动跳过，落地后无需改 Makefile）
+E2E_SCRIPTS := verify_m0 verify_m1 verify_m2
+
+# 依次跑 M0/M1/M2 验收脚本；输出（含脚本内部打印的控制端/agent 日志尾部）tee 到 $(E2E_LOG_DIR)/，
+# CI 失败时把该目录作为 artifact 上传。某个脚本缺失时打印提示并跳过（不算失败）；
+# 任一已存在的脚本失败 → 立即停止（不再跑后续脚本）并让 make 失败。
+test-e2e: ## 端到端验收：按序 verify_m0 → verify_m1 → verify_m2（前置：make build && make devssh）
 	@mkdir -p $(E2E_LOG_DIR)
 	@printf '>> 前置产物：bin/leadstack、bin/leadstack-agent（make build）+ bin/leadstack-devssh（make devssh）\n'
-	@if [ -f scripts/verify_m0.sh ]; then \
-		printf '>> [1/2] bash scripts/verify_m0.sh（日志：%s/verify_m0.log）\n' '$(E2E_LOG_DIR)'; \
-		bash -o pipefail -c 'TMPDIR="$(CURDIR)/$(E2E_LOG_DIR)" bash scripts/verify_m0.sh 2>&1 | tee "$(E2E_LOG_DIR)/verify_m0.log"'; \
-	else \
-		printf '>> scripts/verify_m0.sh 不存在，跳过 M0 验收\n'; \
-	fi
-	@if [ -f scripts/verify_m1.sh ]; then \
-		printf '>> [2/2] bash scripts/verify_m1.sh（日志：%s/verify_m1.log）\n' '$(E2E_LOG_DIR)'; \
-		bash -o pipefail -c 'TMPDIR="$(CURDIR)/$(E2E_LOG_DIR)" bash scripts/verify_m1.sh 2>&1 | tee "$(E2E_LOG_DIR)/verify_m1.log"'; \
-	else \
-		printf '>> scripts/verify_m1.sh 尚未就绪（由 lead 编写）：跳过 M1 验收；脚本落地后本目标自动纳入，无需改 Makefile。\n'; \
-	fi
+	@set -eu; scripts='$(E2E_SCRIPTS)'; total=0; i=0; \
+	for s in $$scripts; do total=$$((total + 1)); done; \
+	for s in $$scripts; do \
+		i=$$((i + 1)); \
+		if [ ! -f "scripts/$$s.sh" ]; then \
+			printf '>> [%d/%d] scripts/%s.sh 尚未就绪：跳过（不算失败，脚本落地后自动纳入）\n' "$$i" "$$total" "$$s"; \
+			continue; \
+		fi; \
+		printf '>> [%d/%d] bash scripts/%s.sh（日志：%s/%s.log）\n' "$$i" "$$total" "$$s" '$(E2E_LOG_DIR)' "$$s"; \
+		bash -o pipefail -c "TMPDIR=\"$(CURDIR)/$(E2E_LOG_DIR)\" bash scripts/$$s.sh 2>&1 | tee \"$(E2E_LOG_DIR)/$$s.log\""; \
+	done
 
 e2e: test-e2e ## test-e2e 的别名
 

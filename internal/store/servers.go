@@ -227,6 +227,7 @@ func (s *Store) ApplyServerIdentity(ctx context.Context, id, remoteHost string, 
 // TouchServerHeartbeat 更新最后心跳时间与状态，返回更新前的状态。
 //
 // 返回旧状态是为了让调用方只在「离线/未知 → 在线」的跃迁上写事件，避免每 20 秒刷一条事件。
+// 心跳是 agent 通道的「成功」信号，因此顺带清空 last_error（过期故障不应继续展示）。
 func (s *Store) TouchServerHeartbeat(ctx context.Context, id string, ts int64) (string, error) {
 	var prev string
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
@@ -237,7 +238,8 @@ func (s *Store) TouchServerHeartbeat(ctx context.Context, id string, ts int64) (
 			return fmt.Errorf("查询服务器 %s 状态: %w", id, err)
 		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE servers SET last_seen_at = ?, status = ? WHERE id = ?`, ts, "online", id); err != nil {
+			`UPDATE servers SET last_seen_at = ?, status = ?, last_error = NULL WHERE id = ?`,
+			ts, "online", id); err != nil {
 			return fmt.Errorf("更新服务器 %s 心跳: %w", id, err)
 		}
 		return nil

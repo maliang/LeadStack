@@ -309,7 +309,9 @@ func (c *Collector) recordSuccess(ctx context.Context, srv store.Server, nowMS i
 	c.mu.Unlock()
 
 	status := protocol.StatusOnline
-	if err := c.store.UpdateServerCollectionState(ctx, srv.ID, &status, &nowMS, nil); err != nil {
+	// 传空串（非 nil）表示清空 last_error：采集恢复成功后不再展示过期故障。
+	clearError := ""
+	if err := c.store.UpdateServerCollectionState(ctx, srv.ID, &status, &nowMS, &clearError); err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			c.logger.Warn("更新采集状态失败", "server_id", srv.ID, "err", err)
 		}

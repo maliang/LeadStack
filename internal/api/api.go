@@ -32,7 +32,13 @@ type Options struct {
 	// Cipher 用于凭证加解密；为 nil 时凭证相关接口返回 503。
 	Cipher *credential.Cipher
 	// SSH 提供连通性测试与主机信息采集能力；为 nil 时相关接口返回 503。
-	SSH       SSHService
+	SSH SSHService
+	// CheckRunner 提供检测调度能力（立即执行 + 唤醒）；为 nil 时 /checks/{id}/run 返回 503。
+	CheckRunner CheckRunner
+	// Jobs 接收 agent 的 job.* 帧（由 jobs.Dispatcher 实现）；为 nil 时这些帧被忽略。
+	Jobs JobRouter
+	// Hub 可注入活跃连接表；为 nil 时内部新建（调用方可先建 Hub 再构造依赖它的下发器）。
+	Hub       *Hub
 	Version   string
 	StartedAt time.Time
 }
@@ -44,6 +50,8 @@ type API struct {
 	authMgr   *auth.Manager
 	cipher    *credential.Cipher
 	ssh       SSHService
+	checks    CheckRunner
+	jobs      JobRouter
 	logger    *slog.Logger
 	version   string
 	startedAt time.Time
@@ -66,6 +74,10 @@ func New(opts Options) (*API, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	hub := opts.Hub
+	if hub == nil {
+		hub = NewHub()
+	}
 	startedAt := opts.StartedAt
 	if startedAt.IsZero() {
 		startedAt = time.Now()
@@ -80,11 +92,13 @@ func New(opts Options) (*API, error) {
 		authMgr:   opts.Auth,
 		cipher:    opts.Cipher,
 		ssh:       opts.SSH,
+		checks:    opts.CheckRunner,
+		jobs:      opts.Jobs,
 		logger:    logger,
 		version:   version,
 		startedAt: startedAt,
 		web:       webui.Handler(),
-		hub:       NewHub(),
+		hub:       hub,
 	}, nil
 }
 

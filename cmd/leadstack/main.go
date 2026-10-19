@@ -19,9 +19,11 @@ import (
 
 	"github.com/maliang/leadstack/internal/api"
 	"github.com/maliang/leadstack/internal/auth"
+	"github.com/maliang/leadstack/internal/checker"
 	"github.com/maliang/leadstack/internal/collector"
 	"github.com/maliang/leadstack/internal/config"
 	"github.com/maliang/leadstack/internal/credential"
+	"github.com/maliang/leadstack/internal/jobs"
 	"github.com/maliang/leadstack/internal/store"
 )
 
@@ -113,14 +115,46 @@ func run() error {
 		return err
 	}
 
+	// M2：任务下发（agent 通道）。Hub 实现 jobs.Sender，Dispatcher 实现 checker.Executor。
+	// 先建 Hub，再建依赖它的 Dispatcher，最后把同一个 Hub 注入 API。
+	hub := api.NewHub()
+	dispatcher := jobs.NewDispatcher(api.NewHubSender(hub), jobs.Options{Logger: logger})
+
+	// M2：检测执行通道——agent 走 job 下发，ssh 走 SSH 执行通道（带连接复用）。
+	sshExec := api.NewSSHExecutor(api.SSHExecutorOptions{
+		Store:          st,
+		Cipher:         cipher,
+		Logger:         logger,
+		KnownHostsPath: filepath.Join(cfg.DataDir, "known_hosts"),
+		Concurrency:    cfg.CheckConcurrency,
+	})
+	if sshExec != nil {
+		defer sshExec.Close()
+	}
+	routingExec := api.NewRoutingExecutor(st, dispatcher, sshExec, logger)
+
+	// M2：检测调度器（Store 适配器把服务器的 mode 一并带出）。
+	checkStore := api.NewCheckerStore(st, logger)
+	scheduler := checker.NewScheduler(checker.Deps{
+		Store:       checkStore,
+		Exec:        routingExec,
+		Concurrency: cfg.CheckConcurrency,
+		OnStateChange: func(checkID, serverID string, ok bool, since int64) {
+			logger.Info("检测状态变化", "check_id", checkID, "server_id", serverID, "ok", ok, "since", since)
+		},
+	})
+
 	srv, err := api.New(api.Options{
-		Config:  cfg,
-		Store:   st,
-		Auth:    authMgr,
-		Cipher:  cipher,
-		SSH:     sshClient,
-		Logger:  logger,
-		Version: version,
+		Config:      cfg,
+		Store:       st,
+		Auth:        authMgr,
+		Cipher:      cipher,
+		SSH:         sshClient,
+		CheckRunner: api.NewCheckRunner(scheduler, logger),
+		Jobs:        dispatcher,
+		Hub:         hub,
+		Logger:      logger,
+		Version:     version,
 	})
 	if err != nil {
 		return err
@@ -135,6 +169,11 @@ func run() error {
 	collectCtx, cancelCollect := context.WithCancel(ctx)
 	defer cancelCollect()
 	go sshClient.Run(collectCtx)
+
+	// 检测调度循环；检测项增删改时由 API 层调用 Wake() 触发重排。
+	checkCtx, cancelChecks := context.WithCancel(ctx)
+	defer cancelChecks()
+	go scheduler.Start(checkCtx)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
@@ -165,6 +204,7 @@ func run() error {
 
 	cancelSweep()
 	cancelCollect()
+	cancelChecks()
 	// WebSocket 连接已被 hijack，http.Server.Shutdown 不会关闭它们，需要显式处理。
 	srv.Hub().CloseAll()
 

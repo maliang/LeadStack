@@ -152,6 +152,8 @@ func (s *Store) ListGroups(ctx context.Context) ([]GroupCount, error) {
 //
 // 三个字段都是「可选更新」：status/lastSeenAt/lastError 传 nil 表示不改动该列。
 // 这样失败次数尚未达到阈值时可以只更新 last_error，而不破坏当前状态。
+//
+// lastError 传「非 nil 的空串」表示**清空**该列（写 NULL）：采集恢复成功时用它抹掉过期故障。
 func (s *Store) UpdateServerCollectionState(ctx context.Context, id string, status *string, lastSeenAt *int64, lastError *string) error {
 	sets := make([]string, 0, 3)
 	args := make([]any, 0, 4)
@@ -165,7 +167,8 @@ func (s *Store) UpdateServerCollectionState(ctx context.Context, id string, stat
 	}
 	if lastError != nil {
 		sets = append(sets, `last_error = ?`)
-		args = append(args, *lastError)
+		// 空串 → NULL：表示「恢复正常，没有错误可展示」。
+		args = append(args, nullableStr(emptyToNil(*lastError)))
 	}
 	if len(sets) == 0 {
 		return nil

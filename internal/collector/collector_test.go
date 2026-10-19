@@ -292,3 +292,58 @@ func TestMissingCredentialOnlyRecordsError(t *testing.T) {
 		t.Fatal("应记录 last_error 说明原因")
 	}
 }
+
+// TestCollectorClearsLastErrorOnRecovery 覆盖 task-16：SSH 采集恢复成功后清空 last_error。
+func TestCollectorClearsLastErrorOnRecovery(t *testing.T) {
+	sshSrv := startTestSSH(t)
+	host, port := splitHostPort(t, sshSrv.Addr())
+
+	knownHosts := filepath.Join(t.TempDir(), "known_hosts")
+	c, st, cipher := newTestEnv(t, knownHosts)
+	ctx := context.Background()
+
+	credID := createPasswordCredential(t, st, cipher, "devuser", testPassword)
+
+	// 先用一个必然连不上的端口，制造失败与 last_error。
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("占位监听失败: %v", err)
+	}
+	_, deadPort := splitHostPort(t, listener.Addr().String())
+	if err := listener.Close(); err != nil {
+		t.Fatalf("关闭占位监听失败: %v", err)
+	}
+	srv := createSSHServer(t, st, credID, host, deadPort)
+
+	for i := 0; i < offlineAfterFailures; i++ {
+		c.CollectOnce(ctx)
+	}
+	failed, err := st.GetServer(ctx, srv.ID)
+	if err != nil {
+		t.Fatalf("读取服务器失败: %v", err)
+	}
+	if failed.LastError == nil || *failed.LastError == "" {
+		t.Fatalf("连续失败后应写入 last_error，实际 %v", failed.LastError)
+	}
+	if failed.Status != protocol.StatusOffline {
+		t.Fatalf("连续失败后状态期望 offline，实际 %q", failed.Status)
+	}
+
+	// 把端口改成真实 devssh 端口：下一轮采集应成功并清空 last_error。
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE servers SET port = ? WHERE id = ?`, port, srv.ID); err != nil {
+		t.Fatalf("更新服务器端口失败: %v", err)
+	}
+
+	c.CollectOnce(ctx)
+	recovered, err := st.GetServer(ctx, srv.ID)
+	if err != nil {
+		t.Fatalf("读取服务器失败: %v", err)
+	}
+	if recovered.Status != protocol.StatusOnline {
+		t.Fatalf("恢复后状态期望 online，实际 %q（last_error=%v）", recovered.Status, recovered.LastError)
+	}
+	if recovered.LastError != nil {
+		t.Fatalf("恢复成功后 last_error 应被清空，实际 %q", *recovered.LastError)
+	}
+}

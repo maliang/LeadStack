@@ -1,11 +1,14 @@
 # LeadStack CI（[devops]）
 #
 #   push / PR  -> jq 就绪 -> vet + build + test + 脚本语法/干跑校验 + make build + make devssh
-#                 -> M0 端到端验收（阻塞）+ M1 端到端验收（初期允许失败）
+#                 -> M0 端到端验收（阻塞）+ M1 端到端验收（阻塞）+ M2 端到端验收（稳定前允许失败）
 #                 -> docker 构建（前端工程就绪后）
 #   tag v*     -> 上面的检查全绿后，用 goreleaser 交叉编译 5 个目标并发布 Release
 #
-# 验收脚本（scripts/verify_m0.sh、scripts/verify_m1.sh，Lead 所有）依赖 jq，
+# Go 版本：两个 job 都用 `go-version-file: go.mod` 读取模块的 go 指令（当前 go 1.27.2），
+#   不写死版本，避免 runner 工具链比 go.mod 旧时直接报 "go.mod requires go >= 1.27.2"。
+#
+# 验收脚本（scripts/verify_m0.sh、verify_m1.sh、verify_m2.sh，Lead 所有）依赖 jq，
 # 失败时控制端/agent 日志与脚本输出会作为 artifact 上传（.e2e-logs/）。
 #
 # TODO(macOS 公证 / Windows 签名)：
@@ -58,7 +61,10 @@ jobs:
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.27.x"
+          # 直接读 go.mod 的 go 指令（go 1.27.2），保证与模块要求绝不漂移。
+          # 不要写死 "1.27.x" 之外的更旧版本：go.mod 要求 1.27.2，
+          # 低于它的工具链会报 "go.mod requires go >= 1.27.2"。
+          go-version-file: go.mod
           cache-dependency-path: go.sum
 
       - name: 显示工具链版本
@@ -115,7 +121,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # ---- 端到端验收（M0 阻塞；M1 初期允许失败）----
+      # ---- 端到端验收（M0/M1 阻塞；M2 初期允许失败）----
       # 日志：脚本内部会把控制端/agent 日志尾部打到 stdout，这里 tee 到 .e2e-logs/；
       # 同时把 TMPDIR 指到该目录，脚本异常中止时残留的 leadstack*.log 也会被 artifact 收走。
       - name: M0 端到端验收（阻塞）
@@ -126,9 +132,8 @@ jobs:
           TMPDIR="$PWD/.e2e-logs" bash scripts/verify_m0.sh 2>&1 | tee .e2e-logs/verify_m0.log
           exit "${PIPESTATUS[0]}"
 
-      - name: M1 端到端验收（M1 合入初期允许失败）
+      - name: M1 端到端验收（阻塞，已双验收稳定）
         id: e2e_m1
-        continue-on-error: true
         shell: bash
         run: |
           mkdir -p .e2e-logs
@@ -139,8 +144,23 @@ jobs:
           TMPDIR="$PWD/.e2e-logs" bash scripts/verify_m1.sh 2>&1 | tee .e2e-logs/verify_m1.log
           exit "${PIPESTATUS[0]}"
 
+      - name: M2 端到端验收（稳定前允许失败）
+        id: e2e_m2
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p .e2e-logs
+          if [ ! -f scripts/verify_m2.sh ]; then
+            echo "scripts/verify_m2.sh 尚未就绪，跳过 M2 验收"
+            exit 0
+          fi
+          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_m2.sh 2>&1 | tee .e2e-logs/verify_m2.log
+          exit "${PIPESTATUS[0]}"
+
       - name: 上传 e2e 日志（任一 e2e 失败时）
-        if: failure() || steps.e2e_m1.outcome == 'failure'
+        # 注意：continue-on-error 的步骤不会让 job 变成 failure，
+        # 所以必须用 steps.<id>.outcome 兜住 M2，否则 M2 的日志会丢。
+        if: failure() || steps.e2e_m1.outcome == 'failure' || steps.e2e_m2.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: e2e-logs-${{ github.sha }}
@@ -204,7 +224,8 @@ jobs:
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.27.x"
+          # 与 build-test job 同口径：按 go.mod 的 go 指令装工具链（1.27.2）
+          go-version-file: go.mod
           cache-dependency-path: go.sum
 
       # goreleaser 的 before.hooks 会执行 `make web-embed`（构建前端并放进 internal/webui/dist）

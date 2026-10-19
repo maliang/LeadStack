@@ -27,6 +27,10 @@ const (
 	EnvMasterKey = "LEADSTACK_MASTER_KEY"
 	// EnvSSHInterval 是 agentless（mode=ssh）采集间隔，支持 Go duration 字符串（如 30s、3s）。
 	EnvSSHInterval = "LEADSTACK_SSH_INTERVAL"
+	// EnvCheckConcurrency 是检测调度器的最大并发探测数。
+	EnvCheckConcurrency = "LEADSTACK_CHECK_CONCURRENCY"
+	// EnvCheckIntervalMin 是检测项 interval_s 的防呆下限，支持 Go duration 字符串。
+	EnvCheckIntervalMin = "LEADSTACK_CHECK_INTERVAL_MIN"
 )
 
 // 默认值。
@@ -43,6 +47,10 @@ const (
 	DefaultSSHInterval = 30 * time.Second
 	// DefaultSSHConcurrency 是 agentless 采集的最大并发数。
 	DefaultSSHConcurrency = 8
+	// DefaultCheckConcurrency 是检测调度的默认最大并发数。
+	DefaultCheckConcurrency = 8
+	// DefaultCheckIntervalMin 是检测项间隔的默认下限（契约第 14.1 节：interval_s 最小 10）。
+	DefaultCheckIntervalMin = 10 * time.Second
 	// MasterKeyFileName 是主密钥文件名（位于 DataDir 下）。
 	MasterKeyFileName = "master.key"
 	// MasterKeySize 是主密钥字节数（AES-256）。
@@ -74,6 +82,10 @@ type Config struct {
 	SSHInterval time.Duration
 	// SSHConcurrency 是 agentless 采集最大并发数。
 	SSHConcurrency int
+	// CheckConcurrency 是检测调度最大并发数。
+	CheckConcurrency int
+	// CheckIntervalMin 是检测项 interval_s 的防呆下限。
+	CheckIntervalMin time.Duration
 }
 
 // Load 解析配置。version 由调用方（main）传入，args 通常为 os.Args[1:]。
@@ -90,19 +102,23 @@ func Load(version string, args []string) (*Config, error) {
 	masterKeyHex := fs.String("master-key", os.Getenv(EnvMasterKey), "32 字节 hex 主密钥；留空则读取 <data-dir>/master.key（环境变量 "+EnvMasterKey+"）")
 	sshInterval := fs.Duration("ssh-interval", defaultSSHInterval(), "agentless 采集间隔，如 30s（环境变量 "+EnvSSHInterval+"）")
 	sshConcurrency := fs.Int("ssh-concurrency", DefaultSSHConcurrency, "agentless 采集最大并发数")
+	checkConcurrency := fs.Int("check-concurrency", envIntOr(EnvCheckConcurrency, DefaultCheckConcurrency), "检测调度最大并发数（环境变量 "+EnvCheckConcurrency+"）")
+	checkIntervalMin := fs.Duration("check-interval-min", defaultCheckIntervalMin(), "检测项 interval_s 的下限，如 10s（环境变量 "+EnvCheckIntervalMin+"）")
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("解析命令行参数: %w", err)
 	}
 
 	cfg := &Config{
-		Listen:          strings.TrimSpace(*listen),
-		DataDir:         strings.TrimSpace(*dataDir),
-		AdminPassword:   *adminPassword,
-		TokenTTL:        *tokenTTL,
-		ShutdownTimeout: *shutdownTimeout,
-		Version:         version,
-		SSHInterval:     *sshInterval,
-		SSHConcurrency:  *sshConcurrency,
+		Listen:           strings.TrimSpace(*listen),
+		DataDir:          strings.TrimSpace(*dataDir),
+		AdminPassword:    *adminPassword,
+		TokenTTL:         *tokenTTL,
+		ShutdownTimeout:  *shutdownTimeout,
+		Version:          version,
+		SSHInterval:      *sshInterval,
+		SSHConcurrency:   *sshConcurrency,
+		CheckConcurrency: *checkConcurrency,
+		CheckIntervalMin: *checkIntervalMin,
 	}
 
 	if cfg.Listen == "" {
@@ -123,6 +139,12 @@ func Load(version string, args []string) (*Config, error) {
 	}
 	if cfg.SSHConcurrency < 1 || cfg.SSHConcurrency > 64 {
 		return nil, errors.New("配置错误: ssh-concurrency 必须在 1-64 之间")
+	}
+	if cfg.CheckConcurrency < 1 || cfg.CheckConcurrency > 64 {
+		return nil, errors.New("配置错误: check-concurrency 必须在 1-64 之间")
+	}
+	if cfg.CheckIntervalMin < time.Second || cfg.CheckIntervalMin > 24*time.Hour {
+		return nil, errors.New("配置错误: check-interval-min 必须在 1s-24h 之间")
 	}
 
 	if raw := strings.TrimSpace(*masterKeyHex); raw != "" {
@@ -220,4 +242,32 @@ func defaultSSHInterval() time.Duration {
 		return time.Duration(secs) * time.Second
 	}
 	return DefaultSSHInterval
+}
+
+// defaultCheckIntervalMin 解析检测间隔下限；支持 Go duration 与纯数字（按秒）。
+func defaultCheckIntervalMin() time.Duration {
+	raw := strings.TrimSpace(os.Getenv(EnvCheckIntervalMin))
+	if raw == "" {
+		return DefaultCheckIntervalMin
+	}
+	if d, err := time.ParseDuration(raw); err == nil {
+		return d
+	}
+	if secs, err := strconv.Atoi(raw); err == nil {
+		return time.Duration(secs) * time.Second
+	}
+	return DefaultCheckIntervalMin
+}
+
+// envIntOr 读取整数环境变量，非法或缺失时返回 fallback。
+func envIntOr(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return v
 }

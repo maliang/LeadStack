@@ -262,3 +262,21 @@ export function ListChecksIcon(props: IconProps) {
   )
 }
 
+export function PlayIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M7 4.5v15l12-7.5Z" />
+    </Base>
+  )
+}
+
+export function ShieldCheckIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6Z" />
+      <path d="m9 12 2 2 4-4" />
+    </Base>
+  )
+}
+
+

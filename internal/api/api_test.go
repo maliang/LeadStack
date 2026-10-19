@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,8 @@ type testEnv struct {
 	http   *http.Client
 	cipher *credential.Cipher
 	ssh    *fakeSSH
+	runner *fakeCheckRunner
+	jobs   *fakeJobRouter
 }
 
 // newTestEnv 启动临时目录 + 临时 SQLite + httptest 服务。
@@ -107,8 +110,12 @@ func newTestEnv(t *testing.T) *testEnv {
 		},
 	}
 
+	runner := &fakeCheckRunner{result: CheckRunResult{OK: true, LatencyMS: 3, TS: store.NowMS()}}
+	jobRouter := &fakeJobRouter{}
+
 	a, err := New(Options{
 		Config: cfg, Store: st, Auth: manager, Cipher: cipher, SSH: sshStub,
+		CheckRunner: runner, Jobs: jobRouter,
 		Logger: logger, Version: "test",
 	})
 	if err != nil {
@@ -117,7 +124,80 @@ func newTestEnv(t *testing.T) *testEnv {
 	srv := httptest.NewServer(a.Router())
 	t.Cleanup(srv.Close)
 
-	return &testEnv{t: t, st: st, api: a, srv: srv, http: srv.Client(), cipher: cipher, ssh: sshStub}
+	return &testEnv{
+		t: t, st: st, api: a, srv: srv, http: srv.Client(),
+		cipher: cipher, ssh: sshStub, runner: runner, jobs: jobRouter,
+	}
+}
+
+// fakeCheckRunner 是 CheckRunner 的测试替身。
+type fakeCheckRunner struct {
+	mu       sync.Mutex
+	result   CheckRunResult
+	err      error
+	runCalls []string
+	wakes    int
+}
+
+func (f *fakeCheckRunner) RunOnce(_ context.Context, checkID, serverID string) (CheckRunResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.runCalls = append(f.runCalls, checkID+"/"+serverID)
+	if f.err != nil {
+		return CheckRunResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func (f *fakeCheckRunner) Wake() {
+	f.mu.Lock()
+	f.wakes++
+	f.mu.Unlock()
+}
+
+func (f *fakeCheckRunner) wakeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.wakes
+}
+
+// fakeJobRouter 是 JobRouter 的测试替身，记录三类帧的路由调用。
+type fakeJobRouter struct {
+	mu     sync.Mutex
+	acks   []string
+	logs   []string
+	dones  []string
+	failed []string
+}
+
+func (f *fakeJobRouter) HandleAck(serverID, runID string) {
+	f.mu.Lock()
+	f.acks = append(f.acks, serverID+"/"+runID)
+	f.mu.Unlock()
+}
+
+func (f *fakeJobRouter) HandleLog(serverID, runID string, seq int, stream, chunk string) {
+	f.mu.Lock()
+	f.logs = append(f.logs, fmt.Sprintf("%s/%s/%d/%s/%s", serverID, runID, seq, stream, chunk))
+	f.mu.Unlock()
+}
+
+func (f *fakeJobRouter) HandleDone(serverID, runID string, exitCode int, errMsg string) {
+	f.mu.Lock()
+	f.dones = append(f.dones, fmt.Sprintf("%s/%s/%d/%s", serverID, runID, exitCode, errMsg))
+	f.mu.Unlock()
+}
+
+func (f *fakeJobRouter) FailServer(serverID string, cause error) {
+	f.mu.Lock()
+	f.failed = append(f.failed, serverID)
+	f.mu.Unlock()
+}
+
+func (f *fakeJobRouter) counts() (int, int, int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.acks), len(f.logs), len(f.dones), len(f.failed)
 }
 
 // fakeSSH 是 SSHService 的测试替身（不建立真实 SSH 连接）。

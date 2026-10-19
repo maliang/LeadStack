@@ -123,3 +123,65 @@ const (
 	EventKindOnline  = "online"
 	EventKindOffline = "offline"
 )
+
+// ------------------------------------------------ M2：检测 ------------------------------------------------
+
+// Check 是一个检测项定义（契约第 16 节 checks 表）。
+type Check struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Target     string `json:"target"`
+	IntervalS  int    `json:"interval_s"`
+	TimeoutS   int    `json:"timeout_s"`
+	ParamsJSON string `json:"-"`
+	Enabled    bool   `json:"enabled"`
+	CreatedAt  int64  `json:"created_at"`
+}
+
+// CheckResult 是一条检测结果。
+type CheckResult struct {
+	ID         int64   `json:"id"`
+	CheckID    string  `json:"check_id"`
+	ServerID   string  `json:"server_id"`
+	TS         int64   `json:"ts"`
+	OK         bool    `json:"ok"`
+	LatencyMS  int64   `json:"latency_ms"`
+	StatusCode *int    `json:"status_code,omitempty"`
+	Message    *string `json:"message,omitempty"`
+}
+
+// CheckState 是一个 (检测项, 服务器) 的当前状态（连续失败计数供 M3 告警使用）。
+type CheckState struct {
+	CheckID         string  `json:"check_id"`
+	ServerID        string  `json:"server_id"`
+	OK              bool    `json:"ok"`
+	ConsecutiveFail int     `json:"consecutive_fail"`
+	Since           int64   `json:"since"`
+	LastTS          int64   `json:"last_ts"`
+	LastMessage     *string `json:"last_message,omitempty"`
+}
+
+// AvailabilityStat 是可用率聚合（up 次数 / 总次数）。
+type AvailabilityStat struct {
+	Total int `json:"total"`
+	Up    int `json:"up"`
+}
+
+// Ratio 返回可用率（0-1）；没有样本时返回 0。
+func (a AvailabilityStat) Ratio() float64 {
+	if a.Total <= 0 {
+		return 0
+	}
+	return float64(a.Up) / float64(a.Total)
+}
+
+// 检测项状态。
+const (
+	CheckStatusUp      = "up"
+	CheckStatusDown    = "down"
+	CheckStatusUnknown = "unknown"
+)
+
+// DefaultFailThreshold 是连续失败多少次判 down（可由 params.fail_threshold 覆盖）。
+const DefaultFailThreshold = 3

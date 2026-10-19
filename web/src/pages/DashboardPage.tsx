@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   api,
   type BatchAction,
@@ -14,7 +15,16 @@ import { BatchActionBar } from '../components/BatchActionBar'
 import { BatchResultDialog } from '../components/BatchResultDialog'
 import { Button } from '../components/Button'
 import { EmptyState } from '../components/EmptyState'
-import { OfflineIcon, PlusIcon, PulseIcon, RefreshIcon, ServerIcon } from '../components/Icons'
+import {
+  AlertTriangleIcon,
+  ChevronRightIcon,
+  OfflineIcon,
+  PlusIcon,
+  PulseIcon,
+  RefreshIcon,
+  ServerIcon,
+  ShieldCheckIcon,
+} from '../components/Icons'
 import { InlineLoading } from '../components/Loading'
 import { ServerFiltersBar } from '../components/ServerFiltersBar'
 import { DeleteServerDialog, RenameServerDialog } from '../components/ServerDialogs'
@@ -39,6 +49,7 @@ export default function DashboardPage() {
   const serversQuery = usePolling(() => api.servers(filters), 10_000, true, filterKey)
   const infoQuery = usePolling(api.systemInfo, 10_000)
   const groupsQuery = usePolling(api.groups, 10_000)
+  const checksSummaryQuery = usePolling(api.checksSummary, 10_000)
   const now = useNow()
 
   const [wizardOpen, setWizardOpen] = useState(false)
@@ -60,6 +71,14 @@ export default function DashboardPage() {
   const onlineRate =
     totalCount > 0 ? `${Math.round((onlineCount / totalCount) * 100)}%` : '暂无服务器'
   const hasFilters = Boolean(filters.group || filters.tag || filters.status || filters.mode)
+
+  const checkSummary = checksSummaryQuery.data
+  const checkCounts = {
+    total: checkSummary?.total ?? 0,
+    up: checkSummary?.up ?? 0,
+    down: checkSummary?.down ?? 0,
+    unknown: checkSummary?.unknown ?? 0,
+  }
 
   const tagOptions = useMemo(() => {
     const tags = new Set<string>()
@@ -90,7 +109,12 @@ export default function DashboardPage() {
   const refreshAll = async () => {
     setRefreshing(true)
     try {
-      await Promise.all([serversQuery.refresh(), infoQuery.refresh(), groupsQuery.refresh()])
+      await Promise.all([
+        serversQuery.refresh(),
+        infoQuery.refresh(),
+        groupsQuery.refresh(),
+        checksSummaryQuery.refresh(),
+      ])
     } finally {
       setRefreshing(false)
     }
@@ -100,6 +124,7 @@ export default function DashboardPage() {
     void serversQuery.refresh()
     void infoQuery.refresh()
     void groupsQuery.refresh()
+    void checksSummaryQuery.refresh()
   }
 
   const runBatch = async (title: string, action: BatchAction, params?: Record<string, unknown>) => {
@@ -177,6 +202,22 @@ export default function DashboardPage() {
         </div>
       ) : null}
 
+      {checkCounts.down > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-200">
+          <span className="inline-flex items-center gap-2 font-medium">
+            <AlertTriangleIcon className="h-4 w-4" />
+            检测告警：有 {checkCounts.down} 个检测项处于 down 状态，请及时排查
+          </span>
+          <Link
+            to="/checks"
+            className="inline-flex items-center gap-1 text-xs font-medium underline-offset-2 hover:underline"
+          >
+            查看检测页
+            <ChevronRightIcon className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard
           label="服务器总数"
@@ -202,6 +243,67 @@ export default function DashboardPage() {
           loading={serversQuery.loading && serversQuery.data === null}
         />
       </div>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300">
+              <ShieldCheckIcon className="h-4.5 w-4.5" />
+            </span>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">检测概览</h2>
+              <p className="text-xs text-slate-400 dark:text-slate-500">
+                端口 / HTTP / Ping / 进程 / 脚本检测的当前状态
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/checks"
+            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+          >
+            去检测页
+            <ChevronRightIcon className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {[
+            {
+              label: '检测项总数',
+              value: checkCounts.total,
+              className: 'text-slate-900 dark:text-slate-100',
+            },
+            {
+              label: '正常 (up)',
+              value: checkCounts.up,
+              className: 'text-emerald-600 dark:text-emerald-300',
+            },
+            {
+              label: '异常 (down)',
+              value: checkCounts.down,
+              className: 'text-rose-600 dark:text-rose-300',
+            },
+            {
+              label: '未知 (unknown)',
+              value: checkCounts.unknown,
+              className: 'text-slate-500 dark:text-slate-400',
+            },
+          ].map((item) => (
+            <Link
+              key={item.label}
+              to="/checks"
+              className="rounded-lg bg-slate-50 px-3 py-2.5 transition-colors hover:bg-slate-100 dark:bg-slate-950/60 dark:hover:bg-slate-900"
+            >
+              <span className="block text-[11px] text-slate-500 dark:text-slate-400">
+                {item.label}
+              </span>
+              <span className={`mt-0.5 block text-lg font-semibold tabular-nums ${item.className}`}>
+                {checksSummaryQuery.loading && checksSummaryQuery.data === null ? '—' : item.value}
+              </span>
+            </Link>
+          ))}
+        </div>
+      </section>
 
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">

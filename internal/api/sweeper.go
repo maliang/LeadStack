@@ -26,6 +26,8 @@ const (
 	minuteRollupRetentionMS = int64(30*24*3600) * 1000
 	// hourRollupRetentionMS 是 1h 汇总保留时长（1 年）。
 	hourRollupRetentionMS = int64(365*24*3600) * 1000
+	// checkResultsRetentionMS 是检测结果保留时长（30 天，契约第 16 节）。
+	checkResultsRetentionMS = int64(30*24*3600) * 1000
 )
 
 // SweepOnce 执行一次离线清扫：把超时未心跳的服务器置为 offline 并记事件。
@@ -118,6 +120,11 @@ func (a *API) runRetention(ctx context.Context) {
 		a.logger.Warn("清理 1h 汇总失败", "err", err)
 	} else if n > 0 {
 		a.logger.Info("清理 1h 汇总完成", "deleted", n)
+	}
+	if n, err := a.st.DeleteCheckResultsBefore(ctx, nowMS-checkResultsRetentionMS); err != nil {
+		a.logger.Warn("清理历史检测结果失败", "err", err)
+	} else if n > 0 {
+		a.logger.Info("清理历史检测结果完成", "deleted", n)
 	}
 	if n, err := a.st.DeleteExpiredEnrollTokens(ctx, nowMS); err != nil {
 		a.logger.Warn("清理过期接入令牌失败", "err", err)

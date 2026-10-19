@@ -214,6 +214,8 @@ func (a *API) runAgentSession(ctx context.Context, ac *agentConn, tok *store.Enr
 	defer func() {
 		if id := ac.getServerID(); id != "" {
 			a.hub.Unregister(id, ac)
+			// 连接断开：唤醒所有等待该服务器任务结果的检测/下发请求，避免它们空等到超时。
+			a.failServerJobs(id, errors.New("agent 连接已断开"))
 		}
 		ac.close()
 		a.logger.Info("agent 连接结束",
@@ -297,9 +299,19 @@ func (a *API) dispatchAgentFrame(ctx context.Context, ac *agentConn, tok *store.
 		err = a.onAgentMetrics(handleCtx, ac, tok, remoteHost, env)
 	case protocol.TypeHostInfo:
 		err = a.onAgentHostInfo(handleCtx, ac, tok, remoteHost, env)
-	case protocol.TypeJobAck, protocol.TypeJobLog, protocol.TypeJobDone, protocol.TypeTermData:
-		// M0 不实现任务与终端，收到即忽略（契约要求未识别类型不得断开连接）。
-		a.logger.Debug("M0 暂不处理该消息类型", "type", env.Type, "server_id", ac.getServerID())
+	case protocol.TypeJobAck, protocol.TypeJobLog, protocol.TypeJobDone:
+		// M2：任务帧真正转给下发器（jobs.Dispatcher），agent 模式的 process/script 检测依赖此链路。
+		result, err := a.dispatchJobFrame(ac.getServerID(), env)
+		if err == nil && result.Handled {
+			a.logger.Debug("已处理任务帧", "type", env.Type, "server_id", ac.getServerID(), "run_id", result.RunID)
+		} else if err == nil {
+			a.logger.Debug("任务下发器未装配，忽略任务帧", "type", env.Type, "server_id", ac.getServerID())
+		} else {
+			a.logger.Warn("处理任务帧失败", "type", env.Type, "server_id", ac.getServerID(), "err", err)
+		}
+	case protocol.TypeTermData:
+		// 终端是 M3 之后的能力，收到即忽略（契约要求未识别类型不得断开连接）。
+		a.logger.Debug("暂不处理终端帧", "type", env.Type, "server_id", ac.getServerID())
 	default:
 		a.logger.Debug("忽略未识别的消息类型", "type", env.Type, "server_id", ac.getServerID())
 	}
