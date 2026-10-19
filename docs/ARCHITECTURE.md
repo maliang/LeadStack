@@ -580,6 +580,16 @@ CREATE TABLE check_state(
 | `acked` | 人工确认，只改变展示与后续通知策略，**不代表恢复** |
 | 恢复 | 异常解除 → 状态置 `resolved` + 发送一次恢复通知（与故障通知走同一渠道） |
 
+### 18.1 语义细则（M3 实现后冻结，均为 Lead 裁决）
+
+- **静默只抑制 firing 通知，恢复通知必须穿透静默**。理由：静默的语义是"别再告诉我新故障"，不是"别告诉我已经好了"；恢复是降噪信息而非噪声。
+- **多规则命中同一 `dedup_key` 时，严重级别最高者为主规则**（`critical` > `warning` > `info`，同级按 `Rule.ID` 升序）。渠道与去重窗口都跟主规则走。理由：若按 ID 排序，用户同时配了 warning 与 critical 时 critical 可能永远发不出去。
+- **pending 计时为纯内存态**：控制端重启后 `for_duration` 从头计时（有意为之，不落库）。
+- **`for_duration` 的推进依赖周期 tick**（`LEADSTACK_ALERT_EVAL_INTERVAL`）。因为检测层的 `OnStateChange` 只在**状态翻转**时回调一次，异常持续期间没有第二次事件；引擎在 `EvaluateMetrics` 周期里做 `promoteDuePending`。**该周期调用必须无条件执行**（不得因"无服务器/无样本"提前返回）。
+- **`value=0` 是合法值**，不得当作"未提供"跳过。
+- **告警事件 `kind` 取值**：`firing` / `resolved` / `notify` / `acked`（引擎与 store 必须一致）。
+- **渠道配置脱敏**：密钥类字段（`secret`/`password`/`bot_token`/`token`/`api_key` 等）与 **`url`/`webhook`/`api_base` 中的路径末段与查询参数**（钉钉 `access_token`、Slack/飞书路径 token）都必须脱敏；`PATCH` 渠道为**合并式更新**，密钥字段传空串或含 `***` 的值一律视为"不修改"。
+
 ## 19. Go 包 API 契约
 
 ### 19.1 `internal/alerting` —— 规则评估与告警状态机（`alertdev` 负责）
@@ -734,7 +744,7 @@ func (c *Client) Send(ctx context.Context, ch Channel, msg Message) error
 |---|---|---|
 | GET/POST | `/alert-rules` | 规则列表 / 创建（201） |
 | GET/PATCH/DELETE | `/alert-rules/{id}` | 详情 / 修改（改后需 Reload）/ 删除 |
-| POST | `/alert-rules/{id}/silence` | `{duration_s}` 临时静默（写 `silence_until`） |
+| POST | `/alert-rules/{id}/silence` | `{duration_s}` 临时静默；**`duration_s=0` 表示取消静默**（清空 `silence_until`），负数 400 |
 | GET/POST | `/alert-channels` | 渠道列表（**配置中的密钥类字段必须脱敏返回**）/ 创建 |
 | PATCH/DELETE | `/alert-channels/{id}` | 修改 / 删除 |
 | POST | `/alert-channels/{id}/test` | 发送一条测试消息 → `{ok,error?}` |
