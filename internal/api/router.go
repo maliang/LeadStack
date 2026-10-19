@@ -1,0 +1,79 @@
+package api
+
+import (
+	"net/http"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+)
+
+// Router 组装全部路由。
+//
+// 顺序很关键：具体路由优先注册，未匹配的路径再由 NotFound 分流
+// （/api 与 /agent 返回 JSON 404，其余交给 SPA）。
+func (a *API) Router() http.Handler {
+	r := chi.NewRouter()
+
+	r.Use(a.middlewareRequestID)
+	r.Use(a.middlewareRecover)
+	r.Use(a.middlewareLog)
+
+	// 免鉴权探针。
+	r.Get("/healthz", a.handleHealthz)
+
+	// agent WebSocket：使用 enroll-token 握手，不走 JWT 中间件。
+	r.Get("/agent/ws", a.handleAgentWS)
+
+	r.Route("/api/v1", func(r chi.Router) {
+		// 登录免鉴权。
+		r.Post("/auth/login", a.handleLogin)
+
+		r.Group(func(r chi.Router) {
+			r.Use(a.authMgr.RequireAuth)
+
+			r.Get("/auth/me", a.handleMe)
+			r.Post("/auth/logout", a.handleLogout)
+			r.Get("/system/info", a.handleSystemInfo)
+
+			r.Route("/servers", func(r chi.Router) {
+				r.Get("/", a.handleListServers)
+				r.Post("/", a.handleCreateServer)
+				r.Route("/{serverID}", func(r chi.Router) {
+					r.Get("/", a.handleGetServer)
+					r.Patch("/", a.handlePatchServer)
+					r.Delete("/", a.handleDeleteServer)
+				})
+			})
+
+			r.Route("/enroll-tokens", func(r chi.Router) {
+				r.Get("/", a.handleListEnrollTokens)
+				r.Post("/", a.handleCreateEnrollToken)
+			})
+
+			r.Post("/agent/install-script", a.handleInstallScript)
+		})
+	})
+
+	r.NotFound(a.handleNotFound)
+	r.MethodNotAllowed(a.handleMethodNotAllowed)
+	return r
+}
+
+// handleNotFound 对 API/agent 路径返回 JSON 404，其余交给 SPA 回退。
+func (a *API) handleNotFound(w http.ResponseWriter, r *http.Request) {
+	if isAPIPath(r.URL.Path) {
+		writeError(w, http.StatusNotFound, codeNotFound, "接口不存在")
+		return
+	}
+	a.serveSPA(w, r)
+}
+
+// handleMethodNotAllowed 统一方法不允许的响应。
+func (a *API) handleMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusMethodNotAllowed, codeInvalidArgument, "HTTP 方法不被支持")
+}
+
+// isAPIPath 判断路径是否属于后端接口（而非前端 SPA 路由）。
+func isAPIPath(p string) bool {
+	return p == "/healthz" || strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/agent/")
+}

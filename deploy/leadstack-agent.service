@@ -1,0 +1,33 @@
+# LeadStack agent systemd 单元模板（[devops]）
+#
+# deploy/install.sh 会按本模板生成同名单元并写入 /etc/systemd/system/leadstack-agent.service；
+# 手工安装时可直接复制本文件，并准备好 /etc/leadstack/agent.env：
+#   LEADSTACK_AGENT_SERVER=http://127.0.0.1:8080
+#   LEADSTACK_AGENT_TOKEN=<接入令牌>
+# （权限 0600，systemd 启动时会把这两个变量展开进 ExecStart。）
+#
+# 手工安装：
+#   sudo install -m 0755 bin/leadstack-agent /usr/local/bin/leadstack-agent
+#   sudo install -m 0644 deploy/leadstack-agent.service /etc/systemd/system/leadstack-agent.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now leadstack-agent
+
+[Unit]
+Description=LeadStack Agent（节点采集与上报）
+Documentation=https://github.com/maliang/leadstack
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/leadstack/agent.env
+ExecStart=/usr/local/bin/leadstack-agent --server ${LEADSTACK_AGENT_SERVER} --token ${LEADSTACK_AGENT_TOKEN} --verbose
+
+Restart=always
+RestartSec=5
+# agent 需要执行运维任务（job.exec），默认以 root 运行；降权请自行添加 User=
+KillMode=process
+TimeoutStopSec=20
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,32 @@
+@import 'tailwindcss';
+
+/* Tailwind 4：用 class 控制深色模式（html.dark），默认浅色。 */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans:
+    'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, -apple-system,
+    'Segoe UI', sans-serif;
+  --font-mono:
+    'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+}
+
+/* 细滚动条，表格横向滚动时更清爽 */
+* {
+  scrollbar-width: thin;
+}
+
+::selection {
+  background-color: color-mix(in oklab, #6366f1 30%, transparent);
+}

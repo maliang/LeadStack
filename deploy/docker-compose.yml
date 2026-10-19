@@ -1,0 +1,37 @@
+# LeadStack 控制端单机部署（docker compose up -d）
+#
+# 使用：
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#   docker compose -f deploy/docker-compose.yml logs leadstack   # 首次启动会打印随机管理员密码
+#   open http://127.0.0.1:8080
+#
+# 注意：compose 文件的 build.context 是仓库根目录（相对本文件为 ..），
+#      推荐在仓库根执行：docker compose -f deploy/docker-compose.yml up -d --build
+
+services:
+  leadstack:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: leadstack:local
+    container_name: leadstack
+    restart: unless-stopped
+    ports:
+      # 默认只绑本机。要让其他机器访问就改成 "8080:8080"，并自行加 TLS 反向代理。
+      - "127.0.0.1:8080:8080"
+    environment:
+      LEADSTACK_LISTEN: 0.0.0.0:8080
+      LEADSTACK_DATA_DIR: /data
+      # 不设置 ADMIN_PASSWORD 时，首次启动会随机生成管理员密码并打印到容器日志（仅一次）
+      # LEADSTACK_ADMIN_PASSWORD: "请改成强密码"
+    volumes:
+      - leadstack-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  leadstack-data:

@@ -1,0 +1,158 @@
+# GoReleaser 配置（[devops]）—— 交叉编译 5 个目标 + 归档 + checksum
+# 本地干跑：goreleaser release --snapshot --clean
+# 校验配置：goreleaser check
+#
+# 目标矩阵（与 docs/ARCHITECTURE.md 第 6 节一致）：
+#   linux/amd64、linux/arm64、darwin/arm64、darwin/amd64、windows/amd64
+#
+# 归档命名（install.sh 依赖这个名字，改这里必须同步改 deploy/install.sh）：
+#   leadstack_<version>_<os>_<arch>.tar.gz
+#   leadstack-agent_<version>_<os>_<arch>.tar.gz
+#   windows 用 .zip
+#
+# TODO(签名/公证)：目前缺少证书，以下能力全部关闭，等凭据就绪再打开：
+#   1) macOS 公证：需要 Apple Developer ID Application 证书 + notarytool 凭据
+#      （APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID，或用 API Key）。
+#      打开方式：取消 notarize 段注释，并在 CI 里注入上述 secrets。
+#   2) Windows 代码签名：需要 EV 代码签名证书（signtool / azure-code-signing）。
+#      打开方式：取消 signs 段注释，并在 CI 里注入证书。
+#   3) Linux 包（nfpms: deb/rpm/apk）暂不做，M0 只发 tar.gz/zip。
+#   在证书就绪前，release 流程必须保持「无签名也能成功」。
+
+version: 2
+
+project_name: leadstack
+
+before:
+  hooks:
+    # 把前端产物落到 internal/webui/dist，保证 UI 内嵌进二进制。
+    # CI 的 release job 需要先装好 node + pnpm（见 .github/workflows/ci.yml）。
+    - make web-embed
+
+builds:
+  - id: leadstack
+    main: ./cmd/leadstack
+    binary: leadstack
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      # M0 不需要 windows/arm64
+      - goos: windows
+        goarch: arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: leadstack-agent
+    main: ./cmd/leadstack-agent
+    binary: leadstack-agent
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: leadstack
+    ids: [leadstack]
+    name_template: "leadstack_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - docs/*.md
+      - deploy/leadstack.service
+      - deploy/leadstack.env.example
+
+  - id: leadstack-agent
+    ids: [leadstack-agent]
+    name_template: "leadstack-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - docs/*.md
+      - deploy/install.sh
+      - deploy/leadstack-agent.service
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# TODO(SBOM)：需要 syft 才能开启；CI 目前不装 syft，等发布流水线补齐后再打开。
+# sboms:
+#   - artifacts: archive
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^style:"
+
+release:
+  github:
+    owner: maliang
+    name: leadstack
+  draft: false
+  prerelease: auto
+  make_latest: true
+  footer: |
+    ## 安装 agent
+
+    ```sh
+    curl -fsSL https://raw.githubusercontent.com/maliang/leadstack/v{{ .Version }}/deploy/install.sh \
+      | sh -s -- --server <控制端地址> --token <接入令牌>
+    ```
+
+    > 脚本也可从归档内取得（`deploy/install.sh`）；离线环境请下载对应平台的
+    > `leadstack-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}.tar.gz` 后用
+    > `sh install.sh --from-file ./leadstack-agent ...` 安装。
+
+# ---------------------------------------------------------------------------
+# TODO(签名/公证)：以下两段需要证书才能启用，未就绪前保持注释，CI 不阻塞。
+# ---------------------------------------------------------------------------
+# notarize:
+#   macos:
+#     - enabled: true
+#       sign:
+#         certificate: "{{ .Env.MACOS_CERT_P12 }}"
+#         password: "{{ .Env.MACOS_CERT_PASSWORD }}"
+#       notarize:
+#         issuer_id: "{{ .Env.APPLE_ISSUER_ID }}"
+#         key_id: "{{ .Env.APPLE_KEY_ID }}"
+#         key: "{{ .Env.APPLE_KEY_P8 }}"
+#         wait: true
+#
+# signs:
+#   - id: windows-authenticode
+#     cmd: signtool
+#     args: ["sign", "/fd", "sha256", "/f", "{{ .Env.WINDOWS_CERT_PFX }}", "/p", "{{ .Env.WINDOWS_CERT_PASSWORD }}", "{{ .Artifact }}"]
+#     artifacts: binary
+#     ids: [leadstack, leadstack-agent]
+#     goos: [windows]

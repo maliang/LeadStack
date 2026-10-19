@@ -1,0 +1,171 @@
+# LeadStack CI（[devops]）
+#
+#   push / PR  -> vet + build + test + 脚本语法/干跑校验 + make build + docker 构建
+#   tag v*     -> 上面的检查全绿后，用 goreleaser 交叉编译 5 个目标并发布 Release
+#
+# TODO(macOS 公证 / Windows 签名)：
+#   目前没有 Apple Developer ID 证书与 Windows EV 代码签名证书，因此 release job
+#   不使用 goreleaser 的 notarize / signs 段（.goreleaser.yaml 中保持注释）。
+#   凭据就绪后：1) 取消 .goreleaser.yaml 里对应段落注释；
+#               2) 在仓库 Secrets 配置
+#                  APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+#                  或 APPLE_KEY_ID / APPLE_ISSUER_ID / APPLE_KEY_P8
+#                  WINDOWS_CERT_PFX_BASE64 / WINDOWS_CERT_PASSWORD
+#               3) 在下面的 release job 里用 env 注入这些 secrets。
+#   在此之前，发布产物是未签名的 tar.gz/zip，CI 必须保持绿色。
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) 编译 + 测试 + 脚本自检
+  # ---------------------------------------------------------------------------
+  build-test:
+    name: vet / build / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache-dependency-path: go.sum
+
+      - name: 显示工具链版本
+        run: |
+          go version
+          node -v
+          pnpm -v
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: 部署脚本语法检查（sh / dash / bash）
+        run: |
+          sh -n deploy/install.sh
+          dash -n deploy/install.sh
+          bash -n deploy/install.sh
+
+      - name: install.sh dry-run 冒烟（不得改动系统）
+        run: |
+          sh deploy/install.sh --dry-run --server http://127.0.0.1:8080 --token ci-dummy-token
+          sh deploy/install.sh --uninstall --dry-run --install-dir "$RUNNER_TEMP/bin" --env-dir "$RUNNER_TEMP/env"
+
+      - name: make build（一条命令出两个二进制 + 内嵌 UI）
+        run: make build
+
+      - name: 校验产物存在
+        run: |
+          test -x bin/leadstack
+          test -x bin/leadstack-agent
+          ls -lh bin/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leadstack-bin-${{ github.sha }}
+          path: bin/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 2) 容器镜像构建（前端工程落地后才跑）
+  # ---------------------------------------------------------------------------
+  docker:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 前端工程是否就绪
+        id: web
+        run: |
+          if [ -f web/package.json ]; then
+            echo "exists=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=0" >> "$GITHUB_OUTPUT"
+            echo "web/package.json 不存在，跳过镜像构建"
+          fi
+
+      - name: 准备 Buildx
+        if: steps.web.outputs.exists == '1'
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建镜像（不推送）
+        if: steps.web.outputs.exists == '1'
+        run: docker build -t leadstack:ci .
+
+  # ---------------------------------------------------------------------------
+  # 3) tag 发布：goreleaser 交叉编译 + GitHub Release
+  # ---------------------------------------------------------------------------
+  release:
+    name: goreleaser release
+    needs: build-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache-dependency-path: go.sum
+
+      # goreleaser 的 before.hooks 会执行 `make web-embed`（构建前端并放进 internal/webui/dist）
+      - name: goreleaser release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # TODO(signing): 证书就绪后在此注入
+          #   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+          #   APPLE_KEY_ID / APPLE_ISSUER_ID / APPLE_KEY_P8
+          #   WINDOWS_CERT_PFX_BASE64 / WINDOWS_CERT_PASSWORD

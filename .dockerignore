@@ -1,0 +1,30 @@
+# 构建上下文裁剪（Dockerfile 只需要源码 + web/，其余一律不进上下文）
+.git
+.gitignore
+.github
+docs
+deploy
+
+# 构建产物 / 依赖（镜像内会重新构建）
+bin
+dist
+data
+web/node_modules
+web/dist
+internal/webui/dist
+
+# 本地数据与凭证
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+.env
+*.env
+
+# 编辑器 / 系统
+.DS_Store
+.idea
+.vscode
+*.swp
+node_modules
+coverage.out

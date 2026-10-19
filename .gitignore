@@ -1,0 +1,40 @@
+# 构建产物
+/bin/
+/dist/
+/data/
+
+# 前端依赖与产物
+node_modules/
+web/node_modules/
+web/dist/
+web/.vite/
+# go:embed 的前端产物（由 make build / make web-embed 生成）
+/internal/webui/dist/
+
+# 数据库与本地状态
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# 凭证 / 本地环境
+.env
+.env.*
+!.env.example
+deploy/*.env
+data/*.env
+
+# 测试与覆盖率
+coverage.out
+coverage.html
+*.test
+*.prof
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

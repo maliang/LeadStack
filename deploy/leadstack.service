@@ -1,0 +1,52 @@
+# LeadStack 控制端 systemd 单元模板（[devops]）
+#
+# 安装示例：
+#   sudo useradd --system --home /var/lib/leadstack --shell /usr/sbin/nologin leadstack
+#   sudo install -d -o leadstack -g leadstack /var/lib/leadstack /etc/leadstack
+#   sudo install -m 0755 bin/leadstack /usr/local/bin/leadstack
+#   sudo install -m 0644 deploy/leadstack.service /etc/systemd/system/leadstack.service
+#   sudo install -m 0640 deploy/leadstack.env.example /etc/leadstack/leadstack.env  # 按需修改
+#   sudo systemctl daemon-reload && sudo systemctl enable --now leadstack
+#
+# 环境文件 /etc/leadstack/leadstack.env 至少包含：
+#   LEADSTACK_LISTEN=127.0.0.1:8080
+#   LEADSTACK_DATA_DIR=/var/lib/leadstack/data
+# 首次启动会把随机生成的管理员密码打印到 journal（journalctl -u leadstack -n 50）。
+
+[Unit]
+Description=LeadStack 控制端（API + Web UI + Agent WebSocket）
+Documentation=https://github.com/maliang/leadstack
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=leadstack
+Group=leadstack
+WorkingDirectory=/var/lib/leadstack
+EnvironmentFile=-/etc/leadstack/leadstack.env
+ExecStart=/usr/local/bin/leadstack
+
+Restart=always
+RestartSec=3
+# 单进程 + SQLite 单写，停止时给足刷盘时间
+TimeoutStopSec=20
+KillMode=mixed
+LimitNOFILE=65536
+StateDirectory=leadstack
+StateDirectoryMode=0750
+
+# 加固：控制端只需要写数据目录
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/leadstack
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

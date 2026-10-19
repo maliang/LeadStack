@@ -1,0 +1,86 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/maliang/leadstack/internal/store"
+	"github.com/maliang/leadstack/pkg/protocol"
+)
+
+// 后台清理参数。
+const (
+	// defaultSweepInterval 是离线清扫周期；契约要求 45 秒内变 offline，5 秒粒度足够。
+	defaultSweepInterval = 5 * time.Second
+	// retentionInterval 是数据保留清理周期。
+	retentionInterval = time.Hour
+	// metricsRetentionMS 是指标保留时长（7 天）。
+	metricsRetentionMS = int64(7*24*3600) * 1000
+)
+
+// SweepOnce 执行一次离线清扫：把超时未心跳的服务器置为 offline 并记事件。
+//
+// 返回本次被判定为离线的服务器数量。
+func (a *API) SweepOnce(ctx context.Context) (int, error) {
+	threshold := a.nowMS() - a.offlineThresholdMS()
+	ids, err := a.st.MarkStaleServersOffline(ctx, threshold)
+	if err != nil {
+		return 0, fmt.Errorf("离线清扫: %w", err)
+	}
+	for _, id := range ids {
+		a.logger.Info("服务器离线", "server_id", id, "offline_after_s", protocol.OfflineAfterS)
+		a.recordEvent(id, store.EventKindOffline,
+			fmt.Sprintf("超过 %d 秒未收到心跳，判定为离线", protocol.OfflineAfterS))
+	}
+	return len(ids), nil
+}
+
+// RunSweeper 周期执行离线清扫与数据保留清理，直到 ctx 被取消。
+func (a *API) RunSweeper(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = defaultSweepInterval
+	}
+	sweepTicker := time.NewTicker(interval)
+	defer sweepTicker.Stop()
+	retentionTicker := time.NewTicker(retentionInterval)
+	defer retentionTicker.Stop()
+
+	// 启动即扫一次，避免进程重启后残留的 online 状态误导 UI。
+	if n, err := a.SweepOnce(ctx); err != nil {
+		a.logger.Warn("离线清扫失败", "err", err)
+	} else if n > 0 {
+		a.logger.Info("启动清扫：已把超时服务器置为离线", "count", n)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			a.logger.Info("后台清扫协程退出")
+			return
+		case <-sweepTicker.C:
+			if n, err := a.SweepOnce(ctx); err != nil {
+				a.logger.Warn("离线清扫失败", "err", err)
+			} else if n > 0 {
+				a.logger.Info("离线清扫完成", "count", n)
+			}
+		case <-retentionTicker.C:
+			a.runRetention(ctx)
+		}
+	}
+}
+
+// runRetention 清理过期指标与过期未使用的接入令牌。
+func (a *API) runRetention(ctx context.Context) {
+	nowMS := a.nowMS()
+	if n, err := a.st.DeleteMetricsBefore(ctx, nowMS-metricsRetentionMS); err != nil {
+		a.logger.Warn("清理历史指标失败", "err", err)
+	} else if n > 0 {
+		a.logger.Info("清理历史指标完成", "deleted", n)
+	}
+	if n, err := a.st.DeleteExpiredEnrollTokens(ctx, nowMS); err != nil {
+		a.logger.Warn("清理过期接入令牌失败", "err", err)
+	} else if n > 0 {
+		a.logger.Info("清理过期接入令牌完成", "deleted", n)
+	}
+}
