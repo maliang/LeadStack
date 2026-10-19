@@ -3,6 +3,7 @@ import { AppLayout } from './components/AppLayout'
 import { RequireAuth } from './components/RequireAuth'
 import { ToastProvider } from './components/Toast'
 import { AuthProvider } from './lib/auth'
+import CredentialsPage from './pages/CredentialsPage'
 import DashboardPage from './pages/DashboardPage'
 import LoginPage from './pages/LoginPage'
 import ServerDetailPage from './pages/ServerDetailPage'
@@ -21,6 +22,7 @@ export default function App() {
             }
           >
             <Route index element={<DashboardPage />} />
+            <Route path="/credentials" element={<CredentialsPage />} />
             <Route path="/servers/:id" element={<ServerDetailPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

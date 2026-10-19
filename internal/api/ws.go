@@ -295,6 +295,8 @@ func (a *API) dispatchAgentFrame(ctx context.Context, ac *agentConn, tok *store.
 		err = a.onAgentHeartbeat(handleCtx, ac, tok, remoteHost, env)
 	case protocol.TypeMetrics:
 		err = a.onAgentMetrics(handleCtx, ac, tok, remoteHost, env)
+	case protocol.TypeHostInfo:
+		err = a.onAgentHostInfo(handleCtx, ac, tok, remoteHost, env)
 	case protocol.TypeJobAck, protocol.TypeJobLog, protocol.TypeJobDone, protocol.TypeTermData:
 		// M0 不实现任务与终端，收到即忽略（契约要求未识别类型不得断开连接）。
 		a.logger.Debug("M0 暂不处理该消息类型", "type", env.Type, "server_id", ac.getServerID())
@@ -435,6 +437,47 @@ func (a *API) onAgentMetrics(ctx context.Context, ac *agentConn, tok *store.Enro
 	}
 	a.logger.Debug("指标已入库",
 		"server_id", serverID, "received", len(batch.Samples), "written", written, "skipped", skipped)
+	return nil
+}
+
+// onAgentHostInfo 处理 host_info：落库主机信息快照（契约第 9 节）。
+//
+// agent 上线后立即上报一次，之后每 6 小时一次；失败不影响心跳与指标。
+func (a *API) onAgentHostInfo(ctx context.Context, ac *agentConn, tok *store.EnrollToken, remoteHost string, env protocol.Envelope) error {
+	var info protocol.HostInfo
+	if len(env.Payload) > 0 {
+		if err := json.Unmarshal(env.Payload, &info); err != nil {
+			return fmt.Errorf("解析 host_info 载荷: %w", err)
+		}
+	}
+
+	serverID, _, err := a.ensureServer(ctx, ac, tok, remoteHost, protocol.Hello{})
+	if err != nil {
+		return err
+	}
+	if err := a.touchServer(ctx, serverID); err != nil {
+		return err
+	}
+
+	collectedAt := info.CollectedAt
+	if collectedAt <= 0 {
+		collectedAt = a.nowMS()
+		info.CollectedAt = collectedAt
+	}
+	raw, err := json.Marshal(info)
+	if err != nil {
+		return fmt.Errorf("序列化 host_info: %w", err)
+	}
+	if err := a.st.UpsertServerHostInfo(ctx, serverID, string(raw), collectedAt); err != nil {
+		return err
+	}
+	if err := a.st.UpdateServerSystemInfo(ctx, serverID, info.OS, info.Arch, info.Kernel); err != nil {
+		a.logger.Debug("同步系统信息到服务器记录失败", "server_id", serverID, "err", err)
+	}
+
+	a.logger.Info("收到 agent 主机信息",
+		"server_id", serverID, "hostname", info.Hostname, "os", info.OS, "arch", info.Arch,
+		"cpu_cores", info.CPUCores, "mem_total_bytes", info.MemTotalBytes)
 	return nil
 }
 

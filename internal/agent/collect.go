@@ -2,8 +2,10 @@ package agent
 
 import (
 	"log/slog"
+	netstd "net"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +14,8 @@ import (
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/load"
 	"github.com/shirou/gopsutil/v4/mem"
+	gnet "github.com/shirou/gopsutil/v4/net"
+	"github.com/shirou/gopsutil/v4/process"
 
 	"github.com/maliang/leadstack/pkg/protocol"
 )
@@ -41,6 +45,11 @@ type Snapshot struct {
 	HasLoad      bool
 	UptimeS      int64
 	HasUptime    bool
+	NetRxBytes   float64
+	NetTxBytes   float64
+	HasNet       bool
+	ProcCount    float64
+	HasProc      bool
 }
 
 // Collector 封装 gopsutil 采集逻辑。
@@ -143,6 +152,28 @@ func (c *Collector) Snapshot() Snapshot {
 		snap.HasUptime = true
 	})
 
+	// 网络累计字节数：非回环网卡收发计数之和。
+	c.safeCollect("net", func() {
+		rx, tx, ok := netCounters()
+		if !ok {
+			return
+		}
+		snap.NetRxBytes = rx
+		snap.NetTxBytes = tx
+		snap.HasNet = true
+	})
+
+	// 进程数量。
+	c.safeCollect("proc", func() {
+		pids, err := process.Pids()
+		if err != nil {
+			c.log.Debug("采集进程数失败，跳过", "err", err)
+			return
+		}
+		snap.ProcCount = float64(len(pids))
+		snap.HasProc = true
+	})
+
 	c.lastSnap = snap
 	c.lastSnapAt = time.Now()
 	return snap
@@ -240,7 +271,95 @@ func (s Snapshot) Samples() []protocol.Sample {
 	if s.HasDisk {
 		samples = append(samples, protocol.Sample{Metric: protocol.MetricDiskUsedPt, Value: s.DiskUsedPct, TS: s.TS})
 	}
+	if s.HasNet {
+		samples = append(samples,
+			protocol.Sample{Metric: protocol.MetricNetRxBytes, Value: s.NetRxBytes, TS: s.TS},
+			protocol.Sample{Metric: protocol.MetricNetTxBytes, Value: s.NetTxBytes, TS: s.TS},
+		)
+	}
+	if s.HasProc {
+		samples = append(samples, protocol.Sample{Metric: protocol.MetricProcCount, Value: s.ProcCount, TS: s.TS})
+	}
 	return samples
+}
+
+// virtualInterfacePrefixes 是网络指标口径的虚拟/桥接接口名前缀黑名单（大小写不敏感）。
+//
+// 口径说明：net.rx_bytes / net.tx_bytes 只统计「物理网卡」的累计收发字节。
+// 下列接口必须排除，否则容器/虚拟化流量会被重复计算（典型如 veth pair 与 docker0
+// 各自计数同一份流量），导致数值虚高、告警阈值失真：
+//   - docker / veth / br- / bridge：Docker 网桥及其 veth pair
+//   - virbr：libvirt 网桥
+//   - vmnet：VMware / Docker Desktop 等虚拟网络
+//   - utun / tun / tap / p2p：VPN、隧道与点到点接口
+//   - awdl / llw：macOS AirDrop 直连与低延迟 WLAN 接口
+//   - ap：AP（热点）模式接口
+var virtualInterfacePrefixes = []string{
+	"docker", "veth", "br-", "virbr", "vmnet", "utun", "awdl", "llw",
+	"bridge", "tun", "tap", "p2p", "ap",
+}
+
+// isVirtualInterface 判断接口名是否命中虚拟/桥接接口黑名单（前缀匹配、大小写不敏感）。
+func isVirtualInterface(name string) bool {
+	lower := strings.ToLower(name)
+	for _, prefix := range virtualInterfacePrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// netCounters 汇总各物理网卡的累计收发字节数：
+// 先枚举接口，再与计数器匹配求和；任一环节失败都返回 ok=false，由调用方跳过该指标。
+func netCounters() (rx, tx float64, ok bool) {
+	ifaces, err := netstd.Interfaces()
+	if err != nil {
+		return 0, 0, false
+	}
+	counters, err := gnet.IOCounters(true)
+	if err != nil {
+		return 0, 0, false
+	}
+	return sumPhysicalNetCounters(ifaces, counters)
+}
+
+// sumPhysicalNetCounters 从接口列表与计数器列表中筛选物理接口并求和。
+//
+// 排除规则：回环（FlagLoopback）、点到点（FlagPointToPoint）、以及
+// virtualInterfacePrefixes 命中的虚拟/桥接接口。
+// 若排除后没有任何物理接口（或计数器里找不到对应物理接口），返回 ok=false，
+// 表示本次跳过 net 指标，而不是上报 0（0 会被误读为「无流量」）。
+func sumPhysicalNetCounters(ifaces []netstd.Interface, counters []gnet.IOCountersStat) (rx, tx float64, ok bool) {
+	physical := make(map[string]struct{}, len(ifaces))
+	for _, iface := range ifaces {
+		if iface.Flags&netstd.FlagLoopback != 0 || iface.Flags&netstd.FlagPointToPoint != 0 {
+			continue
+		}
+		if isVirtualInterface(iface.Name) {
+			continue
+		}
+		physical[iface.Name] = struct{}{}
+	}
+	if len(physical) == 0 {
+		return 0, 0, false
+	}
+
+	var sumRx, sumTx uint64
+	matched := false
+	for _, c := range counters {
+		if _, isPhysical := physical[c.Name]; !isPhysical {
+			continue
+		}
+		matched = true
+		sumRx += c.BytesRecv
+		sumTx += c.BytesSent
+	}
+	if !matched {
+		// 有物理接口但计数器缺失（极少数平台/权限受限场景），同样跳过该指标。
+		return 0, 0, false
+	}
+	return float64(sumRx), float64(sumTx), true
 }
 
 // collectInfo 采集节点静态信息；任何字段失败都回退到 Go 运行时提供的安全默认值。

@@ -44,6 +44,10 @@ RUN go mod download
 COPY . .
 # 用前端阶段产物覆盖 internal/webui/dist，保证 UI 真正内嵌进二进制
 COPY --from=web /src/web/dist ./internal/webui/dist
+# 让容器内 GET /install.sh 直接可用（与 make build 行为一致；安装脚本唯一来源仍是 deploy/install.sh）
+COPY deploy/install.sh ./internal/webui/dist/install.sh
+# 注意：只构建发布用二进制。cmd/leadstack-devssh 是 DEV-ONLY 测试 SSH 端点，
+# 不在此处构建、也不进镜像（见 docs/ARCHITECTURE.md 8.4）。
 RUN go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
         -o /out/leadstack ./cmd/leadstack \
  && go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \

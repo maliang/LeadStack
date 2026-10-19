@@ -1,7 +1,12 @@
 # LeadStack CI（[devops]）
 #
-#   push / PR  -> vet + build + test + 脚本语法/干跑校验 + make build + docker 构建
+#   push / PR  -> jq 就绪 -> vet + build + test + 脚本语法/干跑校验 + make build + make devssh
+#                 -> M0 端到端验收（阻塞）+ M1 端到端验收（初期允许失败）
+#                 -> docker 构建（前端工程就绪后）
 #   tag v*     -> 上面的检查全绿后，用 goreleaser 交叉编译 5 个目标并发布 Release
+#
+# 验收脚本（scripts/verify_m0.sh、scripts/verify_m1.sh，Lead 所有）依赖 jq，
+# 失败时控制端/agent 日志与脚本输出会作为 artifact 上传（.e2e-logs/）。
 #
 # TODO(macOS 公证 / Windows 签名)：
 #   目前没有 Apple Developer ID 证书与 Windows EV 代码签名证书，因此 release job
@@ -62,6 +67,14 @@ jobs:
           node -v
           pnpm -v
 
+      - name: 确保 jq 可用（验收脚本依赖）
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+          jq --version
+
       - name: go vet
         run: go vet ./...
 
@@ -85,10 +98,14 @@ jobs:
       - name: make build（一条命令出两个二进制 + 内嵌 UI）
         run: make build
 
+      - name: make devssh（DEV-ONLY 测试 SSH 端点，供 M1 验收）
+        run: make devssh
+
       - name: 校验产物存在
         run: |
           test -x bin/leadstack
           test -x bin/leadstack-agent
+          test -x bin/leadstack-devssh
           ls -lh bin/
 
       - uses: actions/upload-artifact@v4
@@ -96,6 +113,40 @@ jobs:
           name: leadstack-bin-${{ github.sha }}
           path: bin/
           if-no-files-found: error
+          retention-days: 7
+
+      # ---- 端到端验收（M0 阻塞；M1 初期允许失败）----
+      # 日志：脚本内部会把控制端/agent 日志尾部打到 stdout，这里 tee 到 .e2e-logs/；
+      # 同时把 TMPDIR 指到该目录，脚本异常中止时残留的 leadstack*.log 也会被 artifact 收走。
+      - name: M0 端到端验收（阻塞）
+        id: e2e_m0
+        shell: bash
+        run: |
+          mkdir -p .e2e-logs
+          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_m0.sh 2>&1 | tee .e2e-logs/verify_m0.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: M1 端到端验收（M1 合入初期允许失败）
+        id: e2e_m1
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p .e2e-logs
+          if [ ! -f scripts/verify_m1.sh ]; then
+            echo "scripts/verify_m1.sh 尚未就绪，跳过 M1 验收"
+            exit 0
+          fi
+          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_m1.sh 2>&1 | tee .e2e-logs/verify_m1.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: 上传 e2e 日志（任一 e2e 失败时）
+        if: failure() || steps.e2e_m1.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ github.sha }}
+          path: |
+            .e2e-logs/
+          if-no-files-found: ignore
           retention-days: 7
 
   # ---------------------------------------------------------------------------

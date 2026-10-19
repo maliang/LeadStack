@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -52,8 +53,12 @@ func TestMigrateIsIdempotent(t *testing.T) {
 		`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("统计迁移记录失败: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("schema_migrations 期望 1 条，实际 %d", n)
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatalf("读取内嵌迁移失败: %v", err)
+	}
+	if n != len(migrations) {
+		t.Fatalf("schema_migrations 期望 %d 条，实际 %d", len(migrations), n)
 	}
 }
 
@@ -199,3 +204,299 @@ func TestUsersAndHeartbeat(t *testing.T) {
 		t.Fatalf("二次心跳的旧状态期望 online，实际 %q", prev)
 	}
 }
+
+// ------------------------------------------------ M1 ------------------------------------------------
+
+// seedServer 插入一台测试服务器。
+func seedServer(t *testing.T, st *Store, id, name, mode, group string, tags []string) *Server {
+	t.Helper()
+	encoded, err := json.Marshal(tags)
+	if err != nil {
+		t.Fatalf("序列化标签失败: %v", err)
+	}
+	var groupPtr *string
+	if group != "" {
+		g := group
+		groupPtr = &g
+	}
+	srv := &Server{
+		ID: id, Name: name, Host: "10.0.0.1", Port: 22, Mode: mode,
+		TagsJSON: string(encoded), Status: "unknown", CreatedAt: NowMS(),
+		Group: groupPtr, HostKeyPolicy: HostKeyPolicyAcceptNew,
+	}
+	if err := st.CreateServer(context.Background(), srv); err != nil {
+		t.Fatalf("创建服务器 %s 失败: %v", id, err)
+	}
+	return srv
+}
+
+// TestServerFilterAndGroups 校验 group/tag/status/mode 过滤与分组聚合。
+func TestServerFilterAndGroups(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	seedServer(t, st, "srv-a", "a", ModeAgent, "prod", []string{"bj", "web"})
+	seedServer(t, st, "srv-b", "b", ModeSSH, "prod", []string{"sh"})
+	seedServer(t, st, "srv-c", "c", ModeSSH, "stage", nil)
+
+	// group 过滤
+	got, err := st.ListServersFiltered(ctx, ServerFilter{Group: "prod"}, NowMS())
+	if err != nil {
+		t.Fatalf("按分组过滤失败: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("group=prod 期望 2 台，实际 %d", len(got))
+	}
+
+	// mode 过滤
+	got, err = st.ListServersFiltered(ctx, ServerFilter{Mode: ModeSSH}, NowMS())
+	if err != nil {
+		t.Fatalf("按模式过滤失败: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("mode=ssh 期望 2 台，实际 %d", len(got))
+	}
+
+	// tag 过滤
+	got, err = st.ListServersFiltered(ctx, ServerFilter{Tag: "bj"}, NowMS())
+	if err != nil {
+		t.Fatalf("按标签过滤失败: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "srv-a" {
+		t.Fatalf("tag=bj 期望命中 srv-a，实际 %+v", got)
+	}
+
+	// status 过滤：agent 模式按 last_seen_at 推导
+	now := NowMS()
+	fresh := now - 1000
+	stale := now - 120000
+	if _, err := st.DB().ExecContext(ctx, `UPDATE servers SET status='online', last_seen_at=? WHERE id='srv-a'`, fresh); err != nil {
+		t.Fatalf("构造 online 状态失败: %v", err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `UPDATE servers SET status='offline', last_seen_at=? WHERE id='srv-b'`, stale); err != nil {
+		t.Fatalf("构造 offline 状态失败: %v", err)
+	}
+	got, err = st.ListServersFiltered(ctx, ServerFilter{Status: "online"}, now)
+	if err != nil {
+		t.Fatalf("按状态过滤失败: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "srv-a" {
+		t.Fatalf("status=online 期望命中 srv-a，实际 %+v", got)
+	}
+	// ssh 模式：以采集器维护的 status 为准
+	got, err = st.ListServersFiltered(ctx, ServerFilter{Status: "offline"}, now)
+	if err != nil {
+		t.Fatalf("按状态过滤失败: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "srv-b" {
+		t.Fatalf("status=offline 期望命中 srv-b，实际 %+v", got)
+	}
+
+	// 分组聚合
+	groups, err := st.ListGroups(ctx)
+	if err != nil {
+		t.Fatalf("查询分组失败: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("期望 2 个分组，实际 %+v", groups)
+	}
+	if groups[0].Name != "prod" || groups[0].Count != 2 {
+		t.Fatalf("第一个分组期望 prod/2，实际 %+v", groups[0])
+	}
+}
+
+// TestCredentialCRUDAndReferenceProtection 校验凭证 CRUD 与 409 语义。
+func TestCredentialCRUDAndReferenceProtection(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	cred := &Credential{ID: "cred-1", Name: "k1", Kind: "key", Username: "root",
+		SecretEnc: []byte{1, 2, 3}, CreatedAt: NowMS()}
+	if err := st.CreateCredential(ctx, cred); err != nil {
+		t.Fatalf("创建凭证失败: %v", err)
+	}
+	// 重名冲突
+	if err := st.CreateCredential(ctx, &Credential{ID: "cred-2", Name: "k1", Kind: "key",
+		Username: "root", SecretEnc: []byte{1}, CreatedAt: NowMS()}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("重名凭证期望 ErrConflict，实际 %v", err)
+	}
+
+	srv := seedServer(t, st, "srv-1", "n1", ModeSSH, "", nil)
+	cid := cred.ID
+	srv.CredentialID = &cid
+	if _, err := st.UpdateServerFields(ctx, srv.ID, ServerUpdate{CredentialID: &cid}); err != nil {
+		t.Fatalf("绑定凭证失败: %v", err)
+	}
+
+	list, err := st.ListCredentials(ctx)
+	if err != nil {
+		t.Fatalf("查询凭证列表失败: %v", err)
+	}
+	if len(list) != 1 || list[0].ServerCount != 1 {
+		t.Fatalf("期望 1 条凭证且被引用 1 次，实际 %+v", list)
+	}
+
+	if err := st.DeleteCredential(ctx, cred.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("删除被引用凭证期望 ErrConflict，实际 %v", err)
+	}
+
+	// 解绑后可以删除
+	if _, err := st.UpdateServerFields(ctx, srv.ID, ServerUpdate{CredentialID: ptrString("")}); err != nil {
+		t.Fatalf("解绑凭证失败: %v", err)
+	}
+	if err := st.DeleteCredential(ctx, cred.ID); err != nil {
+		t.Fatalf("解绑后删除凭证失败: %v", err)
+	}
+	if _, err := st.GetCredential(ctx, cred.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("删除后查询期望 ErrNotFound，实际 %v", err)
+	}
+}
+
+// TestRollupAggregatesRaw 校验降采样的正确性与幂等性。
+func TestRollupAggregatesRaw(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedServer(t, st, "srv-1", "n1", ModeSSH, "", nil)
+
+	// 造 3 个采样落在同一分钟桶里（取 2 分钟前的整分桶）。
+	base := (NowMS()/60000)*60000 - 120000
+	samples := []MetricSample{
+		{Metric: "cpu.pct", TS: base, Value: 1},
+		{Metric: "cpu.pct", TS: base + 10000, Value: 2},
+		{Metric: "cpu.pct", TS: base + 20000, Value: 3},
+	}
+	if _, err := st.InsertSamples(ctx, "srv-1", samples); err != nil {
+		t.Fatalf("写入采样失败: %v", err)
+	}
+
+	stats, err := st.RollupOnce(ctx, DefaultRollupLimit)
+	if err != nil {
+		t.Fatalf("降采样失败: %v", err)
+	}
+	if stats.MinuteRows == 0 {
+		t.Fatal("1m 降采样没有产出任何行")
+	}
+
+	points, err := st.QueryRollupRange(ctx, "srv-1", RollupBucketMinute, base, base+60000, 100)
+	if err != nil {
+		t.Fatalf("查询 1m 汇总失败: %v", err)
+	}
+	if len(points) != 1 {
+		t.Fatalf("期望 1 条 1m 汇总，实际 %d", len(points))
+	}
+	p := points[0]
+	if p.TS != base {
+		t.Fatalf("桶时间期望 %d，实际 %d", base, p.TS)
+	}
+	if p.Avg != 2 || p.Min != 1 || p.Max != 3 || p.Cnt != 3 {
+		t.Fatalf("1m 汇总不正确: %+v", p)
+	}
+
+	// 幂等：再跑一次结果不变
+	if _, err := st.RollupOnce(ctx, DefaultRollupLimit); err != nil {
+		t.Fatalf("二次降采样失败: %v", err)
+	}
+	points, err = st.QueryRollupRange(ctx, "srv-1", RollupBucketMinute, base, base+60000, 100)
+	if err != nil {
+		t.Fatalf("二次查询 1m 汇总失败: %v", err)
+	}
+	if len(points) != 1 || points[0].Avg != 2 || points[0].Cnt != 3 {
+		t.Fatalf("二次降采样不应改变结果: %+v", points)
+	}
+
+	// 1h 汇总由 1m 汇总再聚合（按 cnt 加权平均）
+	hourPoints, err := st.QueryRollupRange(ctx, "srv-1", RollupBucketHour, base-3600000, base+3600000, 100)
+	if err != nil {
+		t.Fatalf("查询 1h 汇总失败: %v", err)
+	}
+	if len(hourPoints) != 1 {
+		t.Fatalf("期望 1 条 1h 汇总，实际 %d", len(hourPoints))
+	}
+	if hourPoints[0].Avg != 2 || hourPoints[0].Cnt != 3 {
+		t.Fatalf("1h 加权平均不正确: %+v", hourPoints[0])
+	}
+
+	// 保留策略清理
+	if n, err := st.DeleteRollupBefore(ctx, RollupBucketMinute, base+1); err != nil {
+		t.Fatalf("清理 1m 汇总失败: %v", err)
+	} else if n != 1 {
+		t.Fatalf("期望清理 1 条，实际 %d", n)
+	}
+}
+
+// TestServerHostInfo 校验主机信息快照的写入与批量读取。
+func TestServerHostInfo(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedServer(t, st, "srv-1", "n1", ModeAgent, "", nil)
+	seedServer(t, st, "srv-2", "n2", ModeAgent, "", nil)
+
+	if err := st.UpsertServerHostInfo(ctx, "srv-1", `{"hostname":"h1"}`, 1000); err != nil {
+		t.Fatalf("写入主机信息失败: %v", err)
+	}
+	// 覆盖写
+	if err := st.UpsertServerHostInfo(ctx, "srv-1", `{"hostname":"h1b"}`, 2000); err != nil {
+		t.Fatalf("覆盖主机信息失败: %v", err)
+	}
+	snap, err := st.GetServerHostInfo(ctx, "srv-1")
+	if err != nil {
+		t.Fatalf("读取主机信息失败: %v", err)
+	}
+	if snap.InfoJSON != `{"hostname":"h1b"}` || snap.CollectedAt != 2000 {
+		t.Fatalf("主机信息覆盖不正确: %+v", snap)
+	}
+	if _, err := st.GetServerHostInfo(ctx, "srv-2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("不存在的主机信息期望 ErrNotFound，实际 %v", err)
+	}
+
+	all, err := st.ListServerHostInfo(ctx, nil)
+	if err != nil {
+		t.Fatalf("批量读取主机信息失败: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("期望 1 条主机信息，实际 %d", len(all))
+	}
+
+	// 删除服务器应联动清理主机信息
+	if err := st.DeleteServer(ctx, "srv-1"); err != nil {
+		t.Fatalf("删除服务器失败: %v", err)
+	}
+	if _, err := st.GetServerHostInfo(ctx, "srv-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("删除服务器后主机信息应被清理，实际 %v", err)
+	}
+}
+
+// TestUpdateServerFields 校验 PATCH 语义（含清空分组）。
+func TestUpdateServerFields(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedServer(t, st, "srv-1", "n1", ModeAgent, "prod", []string{"a"})
+
+	// 改名 + 换分组
+	name := "renamed"
+	group := "stage"
+	srv, err := st.UpdateServerFields(ctx, "srv-1", ServerUpdate{Name: &name, Group: &group})
+	if err != nil {
+		t.Fatalf("更新失败: %v", err)
+	}
+	if srv.Name != "renamed" || srv.Group == nil || *srv.Group != "stage" {
+		t.Fatalf("更新结果不正确: %+v", srv)
+	}
+
+	// 空字符串清空分组
+	empty := ""
+	srv, err = st.UpdateServerFields(ctx, "srv-1", ServerUpdate{Group: &empty})
+	if err != nil {
+		t.Fatalf("清空分组失败: %v", err)
+	}
+	if srv.Group != nil {
+		t.Fatalf("分组应被清空，实际 %v", *srv.Group)
+	}
+
+	if _, err := st.UpdateServerFields(ctx, "missing", ServerUpdate{Name: &name}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("更新不存在的服务器期望 ErrNotFound，实际 %v", err)
+	}
+}
+
+// ptrString 返回字符串指针。
+func ptrString(s string) *string { return &s }

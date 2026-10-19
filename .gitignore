@@ -2,6 +2,8 @@
 /bin/
 /dist/
 /data/
+# e2e 验收日志（make test-e2e 产出，失败时由 CI 上传为 artifact）
+/.e2e-logs/
 
 # 前端依赖与产物
 node_modules/

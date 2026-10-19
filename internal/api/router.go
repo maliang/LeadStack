@@ -38,11 +38,24 @@ func (a *API) Router() http.Handler {
 			r.Route("/servers", func(r chi.Router) {
 				r.Get("/", a.handleListServers)
 				r.Post("/", a.handleCreateServer)
+				// 批量操作必须先于 /{serverID} 注册，避免 "batch" 被当成服务器 ID。
+				r.Post("/batch", a.handleBatchServers)
 				r.Route("/{serverID}", func(r chi.Router) {
 					r.Get("/", a.handleGetServer)
 					r.Patch("/", a.handlePatchServer)
 					r.Delete("/", a.handleDeleteServer)
+					r.Post("/test-connection", a.handleTestConnection)
+					r.Post("/refresh-host-info", a.handleRefreshHostInfo)
+					r.Get("/metrics", a.handleServerMetrics)
 				})
+			})
+
+			r.Get("/groups", a.handleListGroups)
+
+			r.Route("/credentials", func(r chi.Router) {
+				r.Get("/", a.handleListCredentials)
+				r.Post("/", a.handleCreateCredential)
+				r.Delete("/{credentialID}", a.handleDeleteCredential)
 			})
 
 			r.Route("/enroll-tokens", func(r chi.Router) {

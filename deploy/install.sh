@@ -14,6 +14,7 @@
 #   --server URL       控制端地址（http/https，或直接给 ws/wss），必填
 #   --token TOKEN      agent 接入令牌（POST /api/v1/enroll-tokens 获取），必填
 #   --version V        安装版本，默认 latest（自动解析最新 release tag）
+#   --agent-version V  --version 的别名（显式指定要安装的 agent 版本，便于回滚）
 #   --base-url URL     发布包前缀，默认 https://github.com/maliang/leadstack/releases/download
 #   --from-file PATH   直接安装本地二进制（离线场景 / 自测），跳过下载
 #   --install-dir DIR  安装目录，默认 /usr/local/bin
@@ -52,6 +53,7 @@ LeadStack agent 安装脚本
   --server URL       控制端地址（http/https/ws/wss），必填
   --token TOKEN      agent 接入令牌，必填
   --version V        版本号，默认 latest
+  --agent-version V  --version 的别名（显式指定 agent 版本，便于回滚）
   --base-url URL     发布包下载前缀，默认 GitHub Releases
   --from-file PATH   使用本地二进制安装（离线 / 自测）
   --install-dir DIR  安装目录，默认 /usr/local/bin
@@ -64,7 +66,7 @@ LeadStack agent 安装脚本
 环境变量：
   LEADSTACK_AGENT_BINARY     等价于 --from-file
   LEADSTACK_INSTALL_BASE_URL 等价于 --base-url
-  LEADSTACK_VERSION          等价于 --version
+  LEADSTACK_VERSION          等价于 --version / --agent-version
 EOF
 }
 
@@ -88,7 +90,7 @@ fi
 
 SERVER="${LEADSTACK_AGENT_SERVER:-}"
 TOKEN="${LEADSTACK_AGENT_TOKEN:-}"
-VERSION="${LEADSTACK_VERSION:-latest}"
+VERSION="${LEADSTACK_VERSION:-${LEADSTACK_AGENT_VERSION:-latest}}"
 BASE_URL="${LEADSTACK_INSTALL_BASE_URL:-$DEFAULT_BASE_URL}"
 FROM_FILE="${LEADSTACK_AGENT_BINARY:-}"
 INSTALL_DIR="$DEFAULT_INSTALL_DIR"
@@ -108,6 +110,7 @@ while [ $# -gt 0 ]; do
 		--server)     need_value "$_opt" $(($# - 1)); SERVER=$2; shift 2 ;;
 		--token)      need_value "$_opt" $(($# - 1)); TOKEN=$2; shift 2 ;;
 		--version)    need_value "$_opt" $(($# - 1)); VERSION=$2; shift 2 ;;
+		--agent-version) need_value "$_opt" $(($# - 1)); VERSION=$2; shift 2 ;;
 		--base-url)   need_value "$_opt" $(($# - 1)); BASE_URL=$2; shift 2 ;;
 		--from-file)  need_value "$_opt" $(($# - 1)); FROM_FILE=$2; shift 2 ;;
 		--install-dir) need_value "$_opt" $(($# - 1)); INSTALL_DIR=$2; shift 2 ;;
@@ -272,6 +275,29 @@ sha256_of() { # sha256_of <文件>
 	fi
 }
 
+# 校验并规范化 --version / --agent-version。
+# 版本号会拼进下载 URL，必须拒绝空白、路径分隔符与 ..；同时接受 vX.Y.Z 并去掉前导 v。
+validate_agent_version() {
+	if [ -z "$VERSION" ]; then
+		die "--version/--agent-version 不能为空"
+	fi
+	if [ "$VERSION" = "latest" ]; then
+		return 0
+	fi
+	case "$VERSION" in
+		v[0-9]*) VERSION="${VERSION#v}" ;;
+	esac
+	case "$VERSION" in
+		*[!A-Za-z0-9._+-]*) die "--version/--agent-version 含非法字符：${VERSION}（只允许字母、数字与 . _ + -）" ;;
+		*..*)               die "--version/--agent-version 非法：${VERSION}（不允许 ..）" ;;
+	esac
+	case "$VERSION" in
+		[0-9]*.[0-9]*.[0-9]*) : ;;
+		*) die "--version/--agent-version 格式非法：${VERSION}（期望 latest 或 vX.Y.Z，例如 --agent-version v0.2.0）" ;;
+	esac
+	return 0
+}
+
 resolve_latest_version() {
 	_api="https://api.github.com/repos/${REPO}/releases/latest"
 	log "解析最新版本号：$_api"
@@ -327,9 +353,14 @@ install_binary() {
 	trap 'rm -rf "${_tmpdir:-}"' EXIT INT TERM
 
 	log "下载：$_url"
-	download "$_url" "${_tmpdir}/${_archive}" || die "下载失败：$_url
-  - 检查控制端/发布地址是否可达，或用 --base-url 指定镜像前缀
-  - 离线安装可用 --from-file <本地二进制路径>"
+	download "$_url" "${_tmpdir}/${_archive}" || die "下载 agent 二进制失败
+  请求地址：$_url
+  目标平台：${OS}/${ARCH}    版本：${VERSION}
+  请依次确认：
+    1) 控制端 / 发布地址是否可达（代理、镜像可用 --base-url <前缀> 指定）
+    2) 该版本是否发布了 ${OS}/${ARCH} 产物（到 release 页面核对文件名与 checksums.txt）
+    3) 版本号是否写错（--version / --agent-version 需为 latest 或 vX.Y.Z）
+  离线安装：--from-file <本地 leadstack-agent 路径>（仓库根 make build 后即 bin/leadstack-agent）"
 
 	if download_optional "${BASE_URL}/v${VERSION}/checksums.txt" "${_tmpdir}/checksums.txt"; then
 		_want=$(awk -v f="$_archive" '$2 == f || $2 == "*"f {print $1}' "${_tmpdir}/checksums.txt" | head -n 1)
@@ -489,20 +520,32 @@ uninstall_service() {
 	_removed=0
 	case "$OS" in
 		linux)
+			# 单元文件可能已被手工删除，但服务仍处于 enabled/loaded 状态——
+			# 所以 disable/reset-failed 不看文件是否存在，一律 best-effort 执行。
+			if command -v systemctl >/dev/null 2>&1; then
+				run_priv systemctl disable --now "${SERVICE_NAME}.service" || warn "systemctl disable 未成功（服务可能本来就没运行），继续清理残留"
+				run_priv systemctl reset-failed "${SERVICE_NAME}.service" 2>/dev/null || true
+			fi
+			# 单元残留 1：单元文件本体
 			if [ -f "$UNIT_PATH" ]; then
-				if command -v systemctl >/dev/null 2>&1; then
-					run_priv systemctl disable --now "${SERVICE_NAME}.service" || warn "systemctl disable 失败（服务可能本来就没运行），继续卸载"
-					run_priv rm -f "$UNIT_PATH"
-					run_priv systemctl daemon-reload || true
-				else
-					run_priv rm -f "$UNIT_PATH"
-				fi
+				run_priv rm -f "$UNIT_PATH"
 				_removed=1
+			fi
+			# 单元残留 2：enable 生成的 wants 符号链接（单元被手工删除时最容易遗留）
+			for _want in /etc/systemd/system/*.wants/"${SERVICE_NAME}.service"; do
+				if [ -L "$_want" ]; then
+					run_priv rm -f "$_want"
+					_removed=1
+				fi
+			done
+			if command -v systemctl >/dev/null 2>&1 && [ "$_removed" -eq 1 ]; then
+				run_priv systemctl daemon-reload || true
 			fi
 			;;
 		darwin)
+			# plist 可能已被手工删除但服务仍加载——bootout 按 label 执行，不依赖文件
+			run_priv launchctl bootout "system/${LAUNCHD_LABEL}" 2>/dev/null || true
 			if [ -f "$UNIT_PATH" ]; then
-				run_priv launchctl bootout "system/${LAUNCHD_LABEL}" 2>/dev/null || true
 				run_priv launchctl unload -w "$UNIT_PATH" 2>/dev/null || true
 				run_priv rm -f "$UNIT_PATH"
 				_removed=1
@@ -543,6 +586,7 @@ do_install() {
 	case "$TOKEN" in
 		*[!A-Za-z0-9._~-]*) warn "--token 含非常规字符，请确认复制时没有带入空格或换行" ;;
 	esac
+	validate_agent_version
 
 	log "安装 LeadStack agent：os=${OS} arch=${ARCH} version=${VERSION}"
 	log "  安装目录：${INSTALL_DIR}"

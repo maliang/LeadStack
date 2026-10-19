@@ -29,6 +29,13 @@ before:
     # CI 的 release job 需要先装好 node + pnpm（见 .github/workflows/ci.yml）。
     - make web-embed
 
+# DEV-ONLY 排除说明（docs/ARCHITECTURE.md 8.4）：
+#   cmd/leadstack-devssh 是测试专用 SSH 端点，**绝不能进发布产物**。
+#   本文件的 builds 是显式白名单（只列 leadstack / leadstack-agent），没有通配入口，
+#   因此 devssh 不会被编译、不会进归档、不会出现在 checksums.txt。
+#   goreleaser v2 没有“排除目录”这种规则，白名单就是排除手段；
+#   若将来要加新构建项，请在此处确认它属于发布范围。
+#   另有双重保险：`make cross` 末尾会断言 dist/ 中没有 *devssh* 产物。
 builds:
   - id: leadstack
     main: ./cmd/leadstack

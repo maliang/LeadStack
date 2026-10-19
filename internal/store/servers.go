@@ -9,8 +9,9 @@ import (
 )
 
 // serverColumns 是 servers 表的固定列顺序，查询与扫描共用，避免两边字段错位。
+// "group" 是 SQLite 关键字，必须加双引号。
 const serverColumns = `id, name, host, port, mode, tags, status, last_seen_at,
-	agent_version, os, arch, kernel, created_at`
+	agent_version, os, arch, kernel, created_at, credential_id, "group", host_key_policy, last_error`
 
 // CreateServer 插入一台服务器。调用方负责填好 ID/CreatedAt。
 func (s *Store) CreateServer(ctx context.Context, srv *Server) error {
@@ -26,11 +27,17 @@ func (s *Store) CreateServer(ctx context.Context, srv *Server) error {
 	if srv.Status == "" {
 		srv.Status = "unknown"
 	}
+	if srv.HostKeyPolicy == "" {
+		srv.HostKeyPolicy = HostKeyPolicyAcceptNew
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO servers (`+serverColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO servers (`+serverColumns+`)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		srv.ID, srv.Name, srv.Host, srv.Port, srv.Mode, srv.TagsJSON, srv.Status,
 		nullableInt(srv.LastSeenAt), nullableStr(srv.AgentVersion), nullableStr(srv.OS),
 		nullableStr(srv.Arch), nullableStr(srv.Kernel), srv.CreatedAt,
+		nullableStr(srv.CredentialID), nullableStr(srv.Group), srv.HostKeyPolicy,
+		nullableStr(srv.LastError),
 	)
 	if err != nil {
 		return fmt.Errorf("创建服务器 %s: %w", srv.Name, err)
@@ -71,17 +78,72 @@ func (s *Store) GetServer(ctx context.Context, id string) (*Server, error) {
 	return srv, nil
 }
 
-// UpdateServerNameTags 更新名称与标签（PATCH 语义：nil 表示不修改）。
-func (s *Store) UpdateServerNameTags(ctx context.Context, id string, name, tagsJSON *string) (*Server, error) {
+// ServerUpdate 描述 PATCH 语义的服务器字段更新；nil 表示不修改。
+//
+// Group/CredentialID 传空字符串表示清空该字段（写 NULL）。
+type ServerUpdate struct {
+	Name          *string
+	TagsJSON      *string
+	Group         *string
+	HostKeyPolicy *string
+	CredentialID  *string
+}
+
+// UpdateServerFields 按 PATCH 语义更新服务器字段，返回更新后的记录。
+func (s *Store) UpdateServerFields(ctx context.Context, id string, upd ServerUpdate) (*Server, error) {
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		if name != nil {
-			if _, err := tx.ExecContext(ctx, `UPDATE servers SET name = ? WHERE id = ?`, *name, id); err != nil {
-				return fmt.Errorf("更新服务器 %s 名称: %w", id, err)
-			}
+		type setClause struct {
+			sql   string
+			value any
 		}
-		if tagsJSON != nil {
-			if _, err := tx.ExecContext(ctx, `UPDATE servers SET tags = ? WHERE id = ?`, *tagsJSON, id); err != nil {
-				return fmt.Errorf("更新服务器 %s 标签: %w", id, err)
+		sets := make([]setClause, 0, 5)
+		if upd.Name != nil {
+			sets = append(sets, setClause{`name = ?`, *upd.Name})
+		}
+		if upd.TagsJSON != nil {
+			sets = append(sets, setClause{`tags = ?`, *upd.TagsJSON})
+		}
+		if upd.Group != nil {
+			sets = append(sets, setClause{`"group" = ?`, nullableStr(emptyToNil(*upd.Group))})
+		}
+		if upd.HostKeyPolicy != nil {
+			sets = append(sets, setClause{`host_key_policy = ?`, *upd.HostKeyPolicy})
+		}
+		if upd.CredentialID != nil {
+			sets = append(sets, setClause{`credential_id = ?`, nullableStr(emptyToNil(*upd.CredentialID))})
+		}
+		if len(sets) == 0 {
+			return nil
+		}
+
+		query := `UPDATE servers SET `
+		args := make([]any, 0, len(sets)+1)
+		for i, sc := range sets {
+			if i > 0 {
+				query += `, `
+			}
+			query += sc.sql
+			args = append(args, sc.value)
+		}
+		query += ` WHERE id = ?`
+		args = append(args, id)
+
+		res, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("更新服务器 %s: %w", id, err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("更新服务器 %s 后读取影响行数: %w", id, err)
+		}
+		if affected == 0 {
+			// 字段值与旧值相同时也可能为 0，这里再确认一次记录是否存在。
+			var exists int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE id = ?`, id).Scan(&exists); err != nil {
+				return fmt.Errorf("确认服务器 %s 是否存在: %w", id, err)
+			}
+			if exists == 0 {
+				return fmt.Errorf("更新服务器 %s: %w", id, ErrNotFound)
 			}
 		}
 		return nil
@@ -92,7 +154,7 @@ func (s *Store) UpdateServerNameTags(ctx context.Context, id string, name, tagsJ
 	return s.GetServer(ctx, id)
 }
 
-// DeleteServer 删除服务器，并清理其指标、事件，同时解绑接入令牌。
+// DeleteServer 删除服务器，并清理其指标、事件、主机信息与汇总，同时解绑接入令牌。
 func (s *Store) DeleteServer(ctx context.Context, id string) error {
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `DELETE FROM servers WHERE id = ?`, id)
@@ -108,6 +170,12 @@ func (s *Store) DeleteServer(ctx context.Context, id string) error {
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM metrics_samples WHERE server_id = ?`, id); err != nil {
 			return fmt.Errorf("清理服务器 %s 的指标: %w", id, err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM metrics_rollup WHERE server_id = ?`, id); err != nil {
+			return fmt.Errorf("清理服务器 %s 的汇总指标: %w", id, err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM server_host_info WHERE server_id = ?`, id); err != nil {
+			return fmt.Errorf("清理服务器 %s 的主机信息: %w", id, err)
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM events WHERE server_id = ?`, id); err != nil {
 			return fmt.Errorf("清理服务器 %s 的事件: %w", id, err)
@@ -185,9 +253,10 @@ func (s *Store) TouchServerHeartbeat(ctx context.Context, id string, ts int64) (
 func (s *Store) MarkStaleServersOffline(ctx context.Context, offlineBefore int64) ([]string, error) {
 	var ids []string
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		// 只对 agent 模式生效：ssh 模式服务器的在线状态由 collector 按「连续 3 次失败」裁决。
 		rows, err := tx.QueryContext(ctx,
-			`SELECT id FROM servers WHERE status = ? AND (last_seen_at IS NULL OR last_seen_at < ?)`,
-			"online", offlineBefore)
+			`SELECT id FROM servers WHERE status = ? AND mode = ? AND (last_seen_at IS NULL OR last_seen_at < ?)`,
+			"online", ModeAgent, offlineBefore)
 		if err != nil {
 			return fmt.Errorf("查询超时未心跳的服务器: %w", err)
 		}
@@ -288,9 +357,14 @@ func scanServer(row interface{ Scan(...any) error }) (*Server, error) {
 		osName   sql.NullString
 		arch     sql.NullString
 		kernel   sql.NullString
+		credID   sql.NullString
+		group    sql.NullString
+		policy   sql.NullString
+		lastErr  sql.NullString
 	)
 	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.Mode, &srv.TagsJSON,
-		&srv.Status, &lastSeen, &ver, &osName, &arch, &kernel, &srv.CreatedAt)
+		&srv.Status, &lastSeen, &ver, &osName, &arch, &kernel, &srv.CreatedAt,
+		&credID, &group, &policy, &lastErr)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询服务器: %w", ErrNotFound)
@@ -302,6 +376,13 @@ func scanServer(row interface{ Scan(...any) error }) (*Server, error) {
 	srv.OS = strPtr(osName)
 	srv.Arch = strPtr(arch)
 	srv.Kernel = strPtr(kernel)
+	srv.CredentialID = strPtr(credID)
+	srv.Group = strPtr(group)
+	srv.LastError = strPtr(lastErr)
+	srv.HostKeyPolicy = HostKeyPolicyAcceptNew
+	if policy.Valid && policy.String != "" {
+		srv.HostKeyPolicy = policy.String
+	}
 	return &srv, nil
 }
 
@@ -319,6 +400,15 @@ func nullableStr(p *string) any {
 		return nil
 	}
 	return *p
+}
+
+// emptyToNil 把空字符串（含纯空白）转成 nil，用于「清空该字段」的语义。
+func emptyToNil(s string) *string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	v := strings.TrimSpace(s)
+	return &v
 }
 
 // intPtr 把 sql.NullInt64 转成 *int64。

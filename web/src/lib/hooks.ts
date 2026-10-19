@@ -13,11 +13,13 @@ export interface PollingQuery<T> {
 /**
  * 轻量轮询 hook（不引额外数据请求库）。
  * 默认 10 秒一次；页面不可见时跳过轮询，回到前台后的下一个 tick 自动补上。
+ * `key` 变化（例如筛选条件改变）时立即重新拉取。
  */
 export function usePolling<T>(
   fetcher: () => Promise<T>,
   intervalMs: number = 10_000,
   enabled: boolean = true,
+  key: string = '',
 ): PollingQuery<T> {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -66,7 +68,7 @@ export function usePolling<T>(
       if (document.visibilityState === 'visible') void run()
     }, intervalMs)
     return () => window.clearInterval(timer)
-  }, [enabled, intervalMs, run])
+  }, [enabled, intervalMs, run, key])
 
   return { data, error, loading, updatedAt, refresh: run }
 }

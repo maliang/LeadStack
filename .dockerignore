@@ -1,9 +1,13 @@
-# 构建上下文裁剪（Dockerfile 只需要源码 + web/，其余一律不进上下文）
+# 构建上下文裁剪（Dockerfile 只需要源码 + web/ + deploy/install.sh，其余一律不进上下文）
 .git
 .gitignore
 .github
 docs
-deploy
+
+# deploy/ 只放行安装脚本（会被 COPY 进 internal/webui/dist/install.sh，
+# 使容器内 GET /install.sh 可用）；其余部署文件不进镜像。
+deploy/*
+!deploy/install.sh
 
 # 构建产物 / 依赖（镜像内会重新构建）
 bin
@@ -12,6 +16,7 @@ data
 web/node_modules
 web/dist
 internal/webui/dist
+.e2e-logs
 
 # 本地数据与凭证
 *.db

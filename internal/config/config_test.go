@@ -112,3 +112,128 @@ func TestEnsureDataDir(t *testing.T) {
 		t.Fatalf("数据库路径应在数据目录内: %s", cfg.DBPath)
 	}
 }
+
+// ------------------------------------------------ M1 ------------------------------------------------
+
+// TestMasterKeyFromEnv 校验 LEADSTACK_MASTER_KEY 解析与校验。
+func TestMasterKeyFromEnv(t *testing.T) {
+	t.Setenv(EnvListen, "")
+	t.Setenv(EnvDataDir, "")
+	t.Setenv(EnvAdminPassword, "")
+	t.Setenv(EnvLogLevel, "")
+	t.Setenv(EnvSSHInterval, "")
+
+	hexKey := strings.Repeat("ab", 32) // 64 个 hex 字符 = 32 字节
+	t.Setenv(EnvMasterKey, hexKey)
+
+	cfg, err := Load("dev", nil)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if len(cfg.MasterKey) != MasterKeySize {
+		t.Fatalf("主密钥期望 %d 字节，实际 %d", MasterKeySize, len(cfg.MasterKey))
+	}
+	if cfg.MasterKey[0] != 0xab || cfg.MasterKey[31] != 0xab {
+		t.Fatalf("主密钥解码不正确: %x", cfg.MasterKey)
+	}
+
+	// 长度不对 / 非 hex 都要报错
+	t.Setenv(EnvMasterKey, "abcd")
+	if _, err := Load("dev", nil); err == nil {
+		t.Fatal("长度不足的主密钥应报错")
+	}
+	t.Setenv(EnvMasterKey, strings.Repeat("zz", 32))
+	if _, err := Load("dev", nil); err == nil {
+		t.Fatal("非 hex 主密钥应报错")
+	}
+	// 未设置则不读取文件（由 cmd 决定）
+	t.Setenv(EnvMasterKey, "")
+	cfg, err = Load("dev", nil)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if len(cfg.MasterKey) != 0 {
+		t.Fatalf("未设置主密钥时应为空，实际 %d 字节", len(cfg.MasterKey))
+	}
+}
+
+// TestSSHIntervalParsing 校验 LEADSTACK_SSH_INTERVAL 支持 Go duration 字符串（验收脚本传 3s）。
+func TestSSHIntervalParsing(t *testing.T) {
+	t.Setenv(EnvListen, "")
+	t.Setenv(EnvDataDir, "")
+	t.Setenv(EnvLogLevel, "")
+	t.Setenv(EnvAdminPassword, "")
+
+	t.Setenv(EnvSSHInterval, "3s")
+	cfg, err := Load("dev", nil)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if cfg.SSHInterval != 3*time.Second {
+		t.Fatalf("ssh-interval 期望 3s，实际 %v", cfg.SSHInterval)
+	}
+
+	// 纯数字按秒解释
+	t.Setenv(EnvSSHInterval, "45")
+	cfg, err = Load("dev", nil)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if cfg.SSHInterval != 45*time.Second {
+		t.Fatalf("ssh-interval 期望 45s，实际 %v", cfg.SSHInterval)
+	}
+
+	// 默认值
+	t.Setenv(EnvSSHInterval, "")
+	cfg, err = Load("dev", nil)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if cfg.SSHInterval != DefaultSSHInterval {
+		t.Fatalf("默认 ssh-interval 期望 %v，实际 %v", DefaultSSHInterval, cfg.SSHInterval)
+	}
+	if cfg.SSHConcurrency != DefaultSSHConcurrency {
+		t.Fatalf("默认 ssh-concurrency 期望 %d，实际 %d", DefaultSSHConcurrency, cfg.SSHConcurrency)
+	}
+
+	// 过小/过大都要报错
+	if _, err := Load("dev", []string{"-ssh-interval", "10ms"}); err == nil {
+		t.Fatal("过小的 ssh-interval 应报错")
+	}
+	if _, err := Load("dev", []string{"-ssh-concurrency", "0"}); err == nil {
+		t.Fatal("非法 ssh-concurrency 应报错")
+	}
+}
+
+// TestMasterKeyPath 校验主密钥文件路径。
+func TestMasterKeyPath(t *testing.T) {
+	t.Setenv(EnvListen, "")
+	t.Setenv(EnvDataDir, "")
+	t.Setenv(EnvLogLevel, "")
+	t.Setenv(EnvSSHInterval, "")
+
+	dir := t.TempDir()
+	cfg, err := Load("dev", []string{"-data-dir", dir})
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	want := filepath.Join(dir, MasterKeyFileName)
+	if cfg.MasterKeyPath() != want {
+		t.Fatalf("主密钥路径期望 %s，实际 %s", want, cfg.MasterKeyPath())
+	}
+}
+
+// TestDecodeMasterKey 覆盖主密钥解码的容错形式。
+func TestDecodeMasterKey(t *testing.T) {
+	raw := strings.Repeat("cd", 32)
+	key, err := DecodeMasterKey("0x" + raw)
+	if err != nil {
+		t.Fatalf("带前缀的密钥解码失败: %v", err)
+	}
+	if len(key) != MasterKeySize {
+		t.Fatalf("期望 %d 字节，实际 %d", MasterKeySize, len(key))
+	}
+	if _, err := DecodeMasterKey(""); err == nil {
+		t.Fatal("空密钥应报错")
+	}
+}

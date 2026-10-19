@@ -17,6 +17,7 @@ import (
 
 	"github.com/maliang/leadstack/internal/auth"
 	"github.com/maliang/leadstack/internal/config"
+	"github.com/maliang/leadstack/internal/credential"
 	"github.com/maliang/leadstack/internal/store"
 	"github.com/maliang/leadstack/internal/webui"
 	"github.com/maliang/leadstack/pkg/protocol"
@@ -24,10 +25,14 @@ import (
 
 // Options 是构造 API 服务的入参。
 type Options struct {
-	Config    *config.Config
-	Store     *store.Store
-	Auth      *auth.Manager
-	Logger    *slog.Logger
+	Config *config.Config
+	Store  *store.Store
+	Auth   *auth.Manager
+	Logger *slog.Logger
+	// Cipher 用于凭证加解密；为 nil 时凭证相关接口返回 503。
+	Cipher *credential.Cipher
+	// SSH 提供连通性测试与主机信息采集能力；为 nil 时相关接口返回 503。
+	SSH       SSHService
 	Version   string
 	StartedAt time.Time
 }
@@ -37,6 +42,8 @@ type API struct {
 	cfg       *config.Config
 	st        *store.Store
 	authMgr   *auth.Manager
+	cipher    *credential.Cipher
+	ssh       SSHService
 	logger    *slog.Logger
 	version   string
 	startedAt time.Time
@@ -71,6 +78,8 @@ func New(opts Options) (*API, error) {
 		cfg:       opts.Config,
 		st:        opts.Store,
 		authMgr:   opts.Auth,
+		cipher:    opts.Cipher,
+		ssh:       opts.SSH,
 		logger:    logger,
 		version:   version,
 		startedAt: startedAt,

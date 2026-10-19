@@ -18,7 +18,9 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/maliang/leadstack/internal/auth"
+	"github.com/maliang/leadstack/internal/collector"
 	"github.com/maliang/leadstack/internal/config"
+	"github.com/maliang/leadstack/internal/credential"
 	"github.com/maliang/leadstack/internal/store"
 	"github.com/maliang/leadstack/pkg/protocol"
 )
@@ -28,11 +30,13 @@ const testAdminPassword = "TestPassword-123"
 
 // testEnv 是一套独立运行的控制端测试环境。
 type testEnv struct {
-	t    *testing.T
-	st   *store.Store
-	api  *API
-	srv  *httptest.Server
-	http *http.Client
+	t      *testing.T
+	st     *store.Store
+	api    *API
+	srv    *httptest.Server
+	http   *http.Client
+	cipher *credential.Cipher
+	ssh    *fakeSSH
 }
 
 // newTestEnv 启动临时目录 + 临时 SQLite + httptest 服务。
@@ -86,14 +90,65 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	a, err := New(Options{Config: cfg, Store: st, Auth: manager, Logger: logger, Version: "test"})
+	cipher, err := credential.NewCipher(bytes.Repeat([]byte("m"), credential.MasterKeySize))
+	if err != nil {
+		t.Fatalf("构造凭证加密器失败: %v", err)
+	}
+	sshStub := &fakeSSH{
+		st: st,
+		testResult: collector.TestResult{
+			OK: true, LatencyMS: 12, SSHBanner: "SSH-2.0-OpenSSH_test", HostKeyFingerprint: "SHA256:test",
+		},
+		hostInfo: protocol.HostInfo{
+			Hostname: "stub-host", OS: "linux", OSVersion: "1.0", Kernel: "6.1.0", Arch: "x86_64",
+			CPUModel: "Test CPU", CPUCores: 4, MemTotalBytes: 8 << 30,
+			DiskTotalBytes: 100 << 30, DiskUsedBytes: 50 << 30, UptimeS: 1000,
+			Timezone: "UTC", IPAddrs: []string{"10.0.0.1"}, CollectedAt: store.NowMS(),
+		},
+	}
+
+	a, err := New(Options{
+		Config: cfg, Store: st, Auth: manager, Cipher: cipher, SSH: sshStub,
+		Logger: logger, Version: "test",
+	})
 	if err != nil {
 		t.Fatalf("构造 API 失败: %v", err)
 	}
 	srv := httptest.NewServer(a.Router())
 	t.Cleanup(srv.Close)
 
-	return &testEnv{t: t, st: st, api: a, srv: srv, http: srv.Client()}
+	return &testEnv{t: t, st: st, api: a, srv: srv, http: srv.Client(), cipher: cipher, ssh: sshStub}
+}
+
+// fakeSSH 是 SSHService 的测试替身（不建立真实 SSH 连接）。
+//
+// 与真实 collector 一致：服务器不存在时返回 store.ErrNotFound（API 层映射为 404）。
+type fakeSSH struct {
+	st         *store.Store
+	testResult collector.TestResult
+	testErr    error
+	hostInfo   protocol.HostInfo
+	hostErr    error
+}
+
+func (f *fakeSSH) TestConnection(ctx context.Context, serverID string) (collector.TestResult, error) {
+	if _, err := f.st.GetServer(ctx, serverID); err != nil {
+		return collector.TestResult{}, err
+	}
+	if f.testErr != nil {
+		return collector.TestResult{}, f.testErr
+	}
+	return f.testResult, nil
+}
+
+func (f *fakeSSH) RefreshHostInfo(ctx context.Context, serverID string) (protocol.HostInfo, error) {
+	if _, err := f.st.GetServer(ctx, serverID); err != nil {
+		return protocol.HostInfo{}, err
+	}
+	if f.hostErr != nil {
+		return protocol.HostInfo{}, f.hostErr
+	}
+	return f.hostInfo, nil
 }
 
 // wsURL 把 httptest 的 http 地址转换成 ws 地址。

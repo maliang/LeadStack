@@ -217,9 +217,10 @@ fi
 
 # ---------------------------------------------------------------- 10. 分组过滤
 step "10. 分组过滤"
-GROUPS="$(api GET /api/v1/groups "" "$TOKEN")"
-printf '%s' "$GROUPS" | jq -e '.data | length > 0' >/dev/null 2>&1 \
-  && pass "GET /groups 返回分组聚合" || fail "GET /groups 异常：$GROUPS"
+# 注意：不能用 GROUPS —— bash 里它是只读的「当前用户组 ID」特殊数组变量（bash 3.2 下赋值直接失败）
+GROUPS_JSON="$(api GET /api/v1/groups "" "$TOKEN")"
+printf '%s' "$GROUPS_JSON" | jq -e '.data | length > 0' >/dev/null 2>&1 \
+  && pass "GET /groups 返回分组聚合" || fail "GET /groups 异常：$GROUPS_JSON"
 FILTERED="$(api GET "/api/v1/servers?group=verify" "" "$TOKEN")"
 F_COUNT="$(printf '%s' "$FILTERED" | jq -r '.data | length' 2>/dev/null)"
 [ "${F_COUNT:-0}" -ge 2 ] 2>/dev/null && pass "?group=verify 过滤命中 ${F_COUNT} 台" || fail "分组过滤异常：$FILTERED"

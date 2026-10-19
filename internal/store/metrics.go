@@ -88,6 +88,39 @@ func (s *Store) QuerySeries(ctx context.Context, serverID, metric string, since,
 	return out, nil
 }
 
+// QuerySamplesRange 查询某服务器在 [from, to] 闭区间内的全部原始指标采样，按 metric、ts 升序。
+//
+// 端点取闭区间：调用方的 to 往往来自「当前时间」，若按半开区间处理，
+// 刚刚写入（同一秒内）的采样会被排除，导致刚采集完就查不到数据。
+func (s *Store) QuerySamplesRange(ctx context.Context, serverID string, from, to int64, limit int) ([]MetricSample, error) {
+	if limit <= 0 {
+		limit = DefaultRollupLimit
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT server_id, metric, ts, value FROM metrics_samples
+		  WHERE server_id = ? AND ts >= ? AND ts <= ?
+		  ORDER BY metric ASC, ts ASC
+		  LIMIT ?`,
+		serverID, from, to, limit)
+	if err != nil {
+		return nil, fmt.Errorf("查询指标区间 %s: %w", serverID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]MetricSample, 0, 128)
+	for rows.Next() {
+		var smp MetricSample
+		if err := rows.Scan(&smp.ServerID, &smp.Metric, &smp.TS, &smp.Value); err != nil {
+			return nil, fmt.Errorf("扫描指标采样: %w", err)
+		}
+		out = append(out, smp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历指标采样: %w", err)
+	}
+	return out, nil
+}
+
 // DeleteMetricsBefore 清理 before（Unix 毫秒）之前的指标，返回删除条数。
 func (s *Store) DeleteMetricsBefore(ctx context.Context, before int64) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM metrics_samples WHERE ts < ?`, before)

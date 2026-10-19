@@ -21,9 +21,12 @@ const (
 	maxServerHostRunes = 255
 	maxTagRunes        = 64
 	maxTagCount        = 32
+	maxGroupRunes      = 64
+	// maxBatchIDs 限制单次批量操作的服务器数量，避免一次请求打爆 SSH 连接池。
+	maxBatchIDs = 200
 )
 
-// serverPayload 是服务器的对外表示，字段与契约第 3 节一致。
+// serverPayload 是服务器的对外表示，字段与契约第 3/10 节一致。
 type serverPayload struct {
 	ID             string             `json:"id"`
 	Name           string             `json:"name"`
@@ -39,26 +42,55 @@ type serverPayload struct {
 	Tags           []string           `json:"tags"`
 	CreatedAt      int64              `json:"created_at"`
 	MetricsSummary map[string]float64 `json:"metrics_summary,omitempty"`
+	// M1 扩展字段。
+	CredentialID  *string         `json:"credential_id"`
+	Group         *string         `json:"group"`
+	HostKeyPolicy string          `json:"host_key_policy"`
+	LastError     *string         `json:"last_error"`
+	HostInfo      json.RawMessage `json:"host_info"`
 }
 
-// createServerRequest 是新增服务器请求体。
+// createServerRequest 是新增服务器请求体（M1 扩展 credential_id/mode/group/tags/host_key_policy）。
 type createServerRequest struct {
-	Name string `json:"name"`
-	Host string `json:"host"`
-	Port *int   `json:"port"`
-	Mode string `json:"mode"`
+	Name          string    `json:"name"`
+	Host          string    `json:"host"`
+	Port          *int      `json:"port"`
+	Mode          string    `json:"mode"`
+	CredentialID  *string   `json:"credential_id"`
+	Group         *string   `json:"group"`
+	Tags          *[]string `json:"tags"`
+	HostKeyPolicy string    `json:"host_key_policy"`
 }
 
-// patchServerRequest 是改名/改标签请求体；nil 表示不改。
+// patchServerRequest 是改名/改标签/改分组请求体；nil 表示不改。
 type patchServerRequest struct {
-	Name *string   `json:"name"`
-	Tags *[]string `json:"tags"`
+	Name          *string   `json:"name"`
+	Tags          *[]string `json:"tags"`
+	Group         *string   `json:"group"`
+	HostKeyPolicy *string   `json:"host_key_policy"`
+	CredentialID  *string   `json:"credential_id"`
 }
 
-// handleListServers 处理 GET /api/v1/servers。
+// handleListServers 处理 GET /api/v1/servers，支持 ?group=&tag=&status=&mode= 过滤。
 func (a *API) handleListServers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	servers, err := a.st.ListServers(ctx)
+	filter := store.ServerFilter{
+		Group:  strings.TrimSpace(r.URL.Query().Get("group")),
+		Tag:    strings.TrimSpace(r.URL.Query().Get("tag")),
+		Status: strings.TrimSpace(r.URL.Query().Get("status")),
+		Mode:   strings.TrimSpace(r.URL.Query().Get("mode")),
+	}
+	if filter.Status != "" && !isValidStatus(filter.Status) {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "status 只能是 online|offline|unknown")
+		return
+	}
+	if filter.Mode != "" && filter.Mode != store.ModeAgent && filter.Mode != store.ModeSSH {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "mode 只能是 agent|ssh")
+		return
+	}
+
+	nowMS := a.nowMS()
+	servers, err := a.st.ListServersFiltered(ctx, filter, nowMS)
 	if err != nil {
 		a.internalError(w, r, err)
 		return
@@ -73,11 +105,19 @@ func (a *API) handleListServers(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	// 注意：ListServerHostInfo 传空切片表示「全部」，列表为空时直接跳过查询。
+	hostInfos := map[string]store.HostInfoSnapshot{}
+	if len(ids) > 0 {
+		hostInfos, err = a.st.ListServerHostInfo(ctx, ids)
+		if err != nil {
+			a.internalError(w, r, err)
+			return
+		}
+	}
 
-	nowMS := a.nowMS()
 	out := make([]serverPayload, 0, len(servers))
 	for _, srv := range servers {
-		out = append(out, toServerPayload(srv, nowMS, metrics[srv.ID]))
+		out = append(out, toServerPayload(srv, nowMS, metrics[srv.ID], hostInfoRaw(hostInfos, srv.ID)))
 	}
 	writeData(w, http.StatusOK, out)
 }
@@ -101,7 +141,12 @@ func (a *API) handleGetServer(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	writeData(w, http.StatusOK, toServerPayload(*srv, a.nowMS(), metrics[id]))
+	hostInfos, err := a.st.ListServerHostInfo(ctx, []string{id})
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, toServerPayload(*srv, a.nowMS(), metrics[id], hostInfoRaw(hostInfos, id)))
 }
 
 // handleCreateServer 处理 POST /api/v1/servers。
@@ -132,29 +177,80 @@ func (a *API) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 	}
 	mode := strings.TrimSpace(req.Mode)
 	if mode == "" {
-		mode = "agent"
+		mode = store.ModeAgent
 	}
-	if err := validateMode(mode); err != nil {
-		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+	if mode != store.ModeAgent && mode != store.ModeSSH {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "mode 只能是 agent 或 ssh")
 		return
 	}
 
-	srv := &store.Server{
-		ID:        uuid.NewString(),
-		Name:      name,
-		Host:      host,
-		Port:      port,
-		Mode:      mode,
-		TagsJSON:  "[]",
-		Status:    protocol.StatusUnknown,
-		CreatedAt: a.nowMS(),
+	policy := strings.TrimSpace(req.HostKeyPolicy)
+	if policy == "" {
+		policy = store.HostKeyPolicyAcceptNew
 	}
-	if err := a.st.CreateServer(r.Context(), srv); err != nil {
+	if !isValidHostKeyPolicy(policy) {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "host_key_policy 只能是 insecure|accept-new|strict")
+		return
+	}
+
+	ctx := r.Context()
+	// 可选：绑定凭证（mode=ssh 时建议绑定；不存在则直接报错，避免留下悬空引用）。
+	var credentialID *string
+	if req.CredentialID != nil && strings.TrimSpace(*req.CredentialID) != "" {
+		cid := strings.TrimSpace(*req.CredentialID)
+		if _, err := a.st.GetCredential(ctx, cid); err != nil {
+			a.writeStoreError(w, r, err)
+			return
+		}
+		credentialID = &cid
+	}
+
+	tagsJSON := "[]"
+	if req.Tags != nil {
+		tags, err := normalizeTags(*req.Tags)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		encoded, err := json.Marshal(tags)
+		if err != nil {
+			a.internalError(w, r, fmt.Errorf("序列化标签: %w", err))
+			return
+		}
+		tagsJSON = string(encoded)
+	}
+
+	var group *string
+	if req.Group != nil {
+		if g := strings.TrimSpace(*req.Group); g != "" {
+			if err := validateText("group", g, maxGroupRunes, false); err != nil {
+				writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+				return
+			}
+			group = &g
+		}
+	}
+
+	srv := &store.Server{
+		ID:            uuid.NewString(),
+		Name:          name,
+		Host:          host,
+		Port:          port,
+		Mode:          mode,
+		TagsJSON:      tagsJSON,
+		Status:        protocol.StatusUnknown,
+		CreatedAt:     a.nowMS(),
+		CredentialID:  credentialID,
+		Group:         group,
+		HostKeyPolicy: policy,
+	}
+	if err := a.st.CreateServer(ctx, srv); err != nil {
 		a.writeStoreError(w, r, err)
 		return
 	}
-	a.logger.Info("新增服务器", "server_id", srv.ID, "name", srv.Name, "host", srv.Host)
-	writeData(w, http.StatusCreated, toServerPayload(*srv, a.nowMS(), nil))
+	a.logger.Info("新增服务器",
+		"server_id", srv.ID, "name", srv.Name, "host", srv.Host, "mode", srv.Mode, "group", req.Group)
+	writeData(w, http.StatusCreated, toServerPayload(*srv, a.nowMS(), nil, nil))
 }
 
 // handlePatchServer 处理 PATCH /api/v1/servers/{id}。
@@ -170,8 +266,10 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
 		return
 	}
-	if req.Name == nil && req.Tags == nil {
-		writeError(w, http.StatusBadRequest, codeInvalidArgument, "至少需要提供 name 或 tags 之一")
+	if req.Name == nil && req.Tags == nil && req.Group == nil &&
+		req.HostKeyPolicy == nil && req.CredentialID == nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument,
+			"至少需要提供 name/tags/group/host_key_policy/credential_id 之一")
 		return
 	}
 
@@ -201,17 +299,61 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 		tagsJSON = &s
 	}
 
-	srv, err := a.st.UpdateServerNameTags(r.Context(), id, name, tagsJSON)
+	var policy *string
+	if req.HostKeyPolicy != nil {
+		p := strings.TrimSpace(*req.HostKeyPolicy)
+		if !isValidHostKeyPolicy(p) {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, "host_key_policy 只能是 insecure|accept-new|strict")
+			return
+		}
+		policy = &p
+	}
+
+	var group *string
+	if req.Group != nil {
+		g := strings.TrimSpace(*req.Group)
+		if err := validateText("group", g, maxGroupRunes, false); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		group = &g
+	}
+
+	ctx := r.Context()
+	var credentialID *string
+	if req.CredentialID != nil {
+		cid := strings.TrimSpace(*req.CredentialID)
+		if cid != "" {
+			if _, err := a.st.GetCredential(ctx, cid); err != nil {
+				a.writeStoreError(w, r, err)
+				return
+			}
+		}
+		credentialID = &cid // 空字符串表示解绑
+	}
+
+	srv, err := a.st.UpdateServerFields(ctx, id, store.ServerUpdate{
+		Name:          name,
+		TagsJSON:      tagsJSON,
+		Group:         group,
+		HostKeyPolicy: policy,
+		CredentialID:  credentialID,
+	})
 	if err != nil {
 		a.writeStoreError(w, r, err)
 		return
 	}
-	metrics, err := a.st.LatestMetrics(r.Context(), []string{id})
+	metrics, err := a.st.LatestMetrics(ctx, []string{id})
 	if err != nil {
 		a.internalError(w, r, err)
 		return
 	}
-	writeData(w, http.StatusOK, toServerPayload(*srv, a.nowMS(), metrics[id]))
+	hostInfos, err := a.st.ListServerHostInfo(ctx, []string{id})
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, toServerPayload(*srv, a.nowMS(), metrics[id], hostInfoRaw(hostInfos, id)))
 }
 
 // handleDeleteServer 处理 DELETE /api/v1/servers/{id}。
@@ -230,21 +372,26 @@ func (a *API) handleDeleteServer(w http.ResponseWriter, r *http.Request) {
 }
 
 // toServerPayload 把存储模型转换为对外结构，并实时推导在线状态。
-func toServerPayload(srv store.Server, nowMS int64, metrics map[string]float64) serverPayload {
+func toServerPayload(srv store.Server, nowMS int64, metrics map[string]float64, hostInfo json.RawMessage) serverPayload {
 	out := serverPayload{
-		ID:           srv.ID,
-		Name:         srv.Name,
-		Host:         srv.Host,
-		Port:         srv.Port,
-		Mode:         srv.Mode,
-		Status:       deriveStatus(srv, nowMS),
-		LastSeenAt:   srv.LastSeenAt,
-		AgentVersion: srv.AgentVersion,
-		OS:           srv.OS,
-		Arch:         srv.Arch,
-		Kernel:       srv.Kernel,
-		Tags:         parseTags(srv.TagsJSON),
-		CreatedAt:    srv.CreatedAt,
+		ID:            srv.ID,
+		Name:          srv.Name,
+		Host:          srv.Host,
+		Port:          srv.Port,
+		Mode:          srv.Mode,
+		Status:        deriveStatus(srv, nowMS),
+		LastSeenAt:    srv.LastSeenAt,
+		AgentVersion:  srv.AgentVersion,
+		OS:            srv.OS,
+		Arch:          srv.Arch,
+		Kernel:        srv.Kernel,
+		Tags:          parseTags(srv.TagsJSON),
+		CreatedAt:     srv.CreatedAt,
+		CredentialID:  srv.CredentialID,
+		Group:         srv.Group,
+		HostKeyPolicy: srv.HostKeyPolicy,
+		LastError:     srv.LastError,
+		HostInfo:      hostInfo,
 	}
 	if len(metrics) > 0 {
 		out.MetricsSummary = metrics
@@ -252,15 +399,42 @@ func toServerPayload(srv store.Server, nowMS int64, metrics map[string]float64) 
 	return out
 }
 
-// deriveStatus 按契约第 3 节由 last_seen_at 推导状态。
+// hostInfoRaw 从快照 map 中取出某台服务器的主机信息 JSON；不存在返回 nil（JSON 序列化为 null）。
+func hostInfoRaw(snapshots map[string]store.HostInfoSnapshot, serverID string) json.RawMessage {
+	snap, ok := snapshots[serverID]
+	if !ok || strings.TrimSpace(snap.InfoJSON) == "" {
+		return nil
+	}
+	raw := json.RawMessage(snap.InfoJSON)
+	if !json.Valid(raw) {
+		return nil
+	}
+	return raw
+}
+
+// deriveStatus 按契约第 10 节推导状态（ssh 模式以采集器裁决为准，agent 模式按心跳阈值）。
 func deriveStatus(srv store.Server, nowMS int64) string {
-	if srv.LastSeenAt == nil {
-		return protocol.StatusUnknown
+	return store.EffectiveStatus(srv, nowMS)
+}
+
+// isValidStatus 校验状态过滤值。
+func isValidStatus(s string) bool {
+	switch s {
+	case protocol.StatusOnline, protocol.StatusOffline, protocol.StatusUnknown:
+		return true
+	default:
+		return false
 	}
-	if nowMS-*srv.LastSeenAt <= int64(protocol.OfflineAfterS)*1000 {
-		return protocol.StatusOnline
+}
+
+// isValidHostKeyPolicy 校验主机密钥策略。
+func isValidHostKeyPolicy(s string) bool {
+	switch s {
+	case store.HostKeyPolicyInsecure, store.HostKeyPolicyAcceptNew, store.HostKeyPolicyStrict:
+		return true
+	default:
+		return false
 	}
-	return protocol.StatusOffline
 }
 
 // parseTags 把库里的 JSON 文本还原为字符串切片；异常数据按空标签处理。

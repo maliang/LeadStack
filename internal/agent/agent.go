@@ -227,10 +227,18 @@ func (a *Agent) serve(ctx context.Context, w *wsConn) error {
 		defer wg.Done()
 		w.writeLoop(ctx)
 	}()
+
+	// hello_ack 到达信号：主机信息必须在握手完成后立即上报第一次。
+	ackReady := make(chan struct{})
+	var ackOnce sync.Once
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		w.readLoop(ctx, func(env protocol.Envelope) {
+			if env.Type == protocol.TypeHelloAck {
+				ackOnce.Do(func() { close(ackReady) })
+			}
 			a.handleFrame(ctx, w, env)
 		})
 	}()
@@ -252,6 +260,11 @@ func (a *Agent) serve(ctx context.Context, w *wsConn) error {
 	go func() {
 		defer wg.Done()
 		a.senderLoop(ctx, w)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.hostInfoLoop(ctx, w, ackReady)
 	}()
 
 	// 等待连接断开或父 ctx 取消。
@@ -454,6 +467,18 @@ func (a *Agent) runOnce(ctx context.Context) error {
 		}
 	}
 	_ = w.conn.SetReadDeadline(time.Time{})
+
+	// 握手完成后立即上报一次主机信息，便于控制台立刻展示主机信息卡。
+	hostInfo := a.col.HostInfo()
+	if err := w.writeDirect(newEnvelope(protocol.TypeHostInfo, hostInfo)); err != nil {
+		return fmt.Errorf("发送 host_info 失败: %w", err)
+	}
+	a.log.Info("已上报主机信息",
+		"hostname", hostInfo.Hostname,
+		"os", hostInfo.OS,
+		"os_version", hostInfo.OSVersion,
+		"cpu_cores", hostInfo.CPUCores,
+		"docker", hostInfo.Docker)
 
 	if err := w.writeDirect(a.heartbeatEnvelope()); err != nil {
 		return fmt.Errorf("发送 heartbeat 失败: %w", err)

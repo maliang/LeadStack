@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	gnet "github.com/shirou/gopsutil/v4/net"
 
 	"github.com/maliang/leadstack/pkg/protocol"
 )
@@ -173,13 +174,14 @@ func TestSampleBufferRingAndRetention(t *testing.T) {
 	}
 }
 
-// TestRunOnce 验证 --once 路径：hello → hello_ack → heartbeat → metrics，
+// TestRunOnce 验证 --once 路径：hello → hello_ack → host_info → heartbeat → metrics，
 // 同时验证未知 type 被忽略而不断开。
 func TestRunOnce(t *testing.T) {
 	type capture struct {
-		types   []string
-		hello   protocol.Hello
-		metrics protocol.Metrics
+		types    []string
+		hello    protocol.Hello
+		hostInfo protocol.HostInfo
+		metrics  protocol.Metrics
 	}
 	var mu sync.Mutex
 	var c capture
@@ -214,7 +216,10 @@ func TestRunOnce(t *testing.T) {
 			}
 			mu.Lock()
 			c.types = append(c.types, env.Type)
-			if env.Type == protocol.TypeMetrics {
+			switch env.Type {
+			case protocol.TypeHostInfo:
+				_ = json.Unmarshal(env.Payload, &c.hostInfo)
+			case protocol.TypeMetrics:
 				_ = json.Unmarshal(env.Payload, &c.metrics)
 			}
 			mu.Unlock()
@@ -245,11 +250,21 @@ func TestRunOnce(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(c.types) < 3 {
+	if len(c.types) < 4 {
 		t.Fatalf("收到的帧过少：%v", c.types)
 	}
 	if c.types[0] != protocol.TypeHello {
 		t.Errorf("首帧应为 hello，实际 %q", c.types[0])
+	}
+	// host_info 必须在握手完成后、心跳/指标之前或之间到达。
+	foundHostInfo := false
+	for _, tp := range c.types {
+		if tp == protocol.TypeHostInfo {
+			foundHostInfo = true
+		}
+	}
+	if !foundHostInfo {
+		t.Fatalf("未收到 host_info，收到类型：%v", c.types)
 	}
 	if c.hello.Hostname == "" {
 		t.Error("hello 缺少 hostname")
@@ -260,6 +275,7 @@ func TestRunOnce(t *testing.T) {
 	if c.hello.AgentVersion != "test-version" {
 		t.Errorf("hello 的 agent_version 错误：%q", c.hello.AgentVersion)
 	}
+	assertHostInfo(t, c.hostInfo)
 	if len(c.metrics.Samples) == 0 {
 		t.Fatal("metrics 没有任何样本")
 	}
@@ -269,6 +285,9 @@ func TestRunOnce(t *testing.T) {
 		protocol.MetricMemUsedB:   true,
 		protocol.MetricLoad1:      true,
 		protocol.MetricDiskUsedPt: true,
+		protocol.MetricNetRxBytes: true,
+		protocol.MetricNetTxBytes: true,
+		protocol.MetricProcCount:  true,
 	}
 	for _, s := range c.metrics.Samples {
 		if !allowed[s.Metric] {
@@ -276,6 +295,45 @@ func TestRunOnce(t *testing.T) {
 		}
 		if s.TS <= 0 {
 			t.Errorf("指标 %q 的 ts 非法：%d", s.Metric, s.TS)
+		}
+	}
+}
+
+// assertHostInfo 校验主机信息关键字段的合法性。
+func assertHostInfo(t *testing.T, info protocol.HostInfo) {
+	t.Helper()
+	if info.Hostname == "" {
+		t.Error("host_info 缺少 hostname")
+	}
+	if info.OS != runtime.GOOS || info.Arch != runtime.GOARCH {
+		t.Errorf("host_info 的 os/arch 错误：%s/%s", info.OS, info.Arch)
+	}
+	if info.CPUCores <= 0 {
+		t.Errorf("host_info 的 cpu_cores 非法：%d", info.CPUCores)
+	}
+	if info.MemTotalBytes == 0 {
+		t.Error("host_info 缺少 mem_total_bytes")
+	}
+	if info.DiskTotalBytes == 0 {
+		t.Error("host_info 缺少 disk_total_bytes")
+	}
+	if info.UptimeS <= 0 {
+		t.Errorf("host_info 的 uptime_s 非法：%d", info.UptimeS)
+	}
+	if info.CollectedAt <= 0 {
+		t.Errorf("host_info 的 collected_at 非法：%d", info.CollectedAt)
+	}
+	if info.Timezone == "" {
+		t.Error("host_info 缺少 timezone")
+	}
+	for _, ipStr := range info.IPAddrs {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			t.Errorf("host_info 的 IP 非法：%q", ipStr)
+			continue
+		}
+		if ip.IsLoopback() {
+			t.Errorf("host_info 不应包含回环地址：%q", ipStr)
 		}
 	}
 }
@@ -565,5 +623,235 @@ func TestCollectorShortCache(t *testing.T) {
 	third := c.Snapshot()
 	if third.TS == first.TS {
 		t.Error("超过缓存有效期后仍返回旧快照")
+	}
+}
+
+// TestCollectorExtraMetrics 验证 M1 新增的网络累计字节与进程数指标。
+func TestCollectorExtraMetrics(t *testing.T) {
+	c := NewCollector(testLogger())
+	snap := c.Snapshot()
+	if !snap.HasNet {
+		t.Error("未采集到网络累计字节指标")
+	} else if snap.NetRxBytes < 0 || snap.NetTxBytes < 0 {
+		t.Errorf("网络字节数非法：rx=%v tx=%v", snap.NetRxBytes, snap.NetTxBytes)
+	}
+	if !snap.HasProc {
+		t.Error("未采集到进程数指标")
+	} else if snap.ProcCount <= 0 {
+		t.Errorf("进程数非法：%v", snap.ProcCount)
+	}
+
+	names := make(map[string]bool)
+	for _, s := range snap.Samples() {
+		names[s.Metric] = true
+	}
+	for _, want := range []string{
+		protocol.MetricNetRxBytes,
+		protocol.MetricNetTxBytes,
+		protocol.MetricProcCount,
+	} {
+		if !names[want] {
+			t.Errorf("Samples 缺少指标 %q", want)
+		}
+	}
+}
+
+// TestHostInfoCollection 验证主机信息采集的字段与 Docker 探测（探测结果注入）。
+func TestHostInfoCollection(t *testing.T) {
+	oldProbe := dockerDetect
+	dockerDetect = func(*slog.Logger) (bool, string) { return true, "24.0.7-test" }
+	defer func() { dockerDetect = oldProbe }()
+
+	c := NewCollector(testLogger())
+	info := c.HostInfo()
+	assertHostInfo(t, info)
+
+	if info.CPUCores != runtime.NumCPU() {
+		t.Errorf("cpu_cores = %d，期望 runtime.NumCPU() = %d", info.CPUCores, runtime.NumCPU())
+	}
+	if info.OSVersion == "" {
+		t.Error("host_info 缺少 os_version")
+	}
+	if !info.Docker || info.DockerVersion != "24.0.7-test" {
+		t.Errorf("Docker 探测结果错误：docker=%v version=%q", info.Docker, info.DockerVersion)
+	}
+}
+
+// TestHostInfoPeriodic 验证收到 hello_ack 后立即上报 host_info，并按周期重复上报；
+// 同时确认主机信息采集不会阻塞心跳。
+func TestHostInfoPeriodic(t *testing.T) {
+	oldInterval := hostInfoInterval
+	oldProbe := dockerDetect
+	hostInfoInterval = 150 * time.Millisecond
+	dockerDetect = func(*slog.Logger) (bool, string) { return false, "" }
+	defer func() {
+		hostInfoInterval = oldInterval
+		dockerDetect = oldProbe
+	}()
+
+	const want = 3
+	hostInfos := make(chan protocol.HostInfo, 8)
+	heartbeats := make(chan protocol.Heartbeat, 8)
+	srv := newMockServer(t, func(conn *websocket.Conn, _ int) {
+		env, ok := readEnvelope(conn, 5*time.Second)
+		if !ok || env.Type != protocol.TypeHello {
+			return
+		}
+		if err := sendHelloAck(conn, 20, 15); err != nil {
+			return
+		}
+		for {
+			env, ok := readEnvelope(conn, 5*time.Second)
+			if !ok {
+				return
+			}
+			switch env.Type {
+			case protocol.TypeHostInfo:
+				var hi protocol.HostInfo
+				if json.Unmarshal(env.Payload, &hi) == nil {
+					select {
+					case hostInfos <- hi:
+					default:
+					}
+				}
+			case protocol.TypeHeartbeat:
+				var hb protocol.Heartbeat
+				if json.Unmarshal(env.Payload, &hb) == nil {
+					select {
+					case heartbeats <- hb:
+					default:
+					}
+				}
+			}
+		}
+	})
+
+	a := New(Config{Server: srv.URL, Token: "test-token", Version: "test", Logger: testLogger()})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- a.Run(ctx) }()
+
+	for i := 0; i < want; i++ {
+		select {
+		case info := <-hostInfos:
+			assertHostInfo(t, info)
+		case <-time.After(8 * time.Second):
+			t.Fatalf("等待第 %d 次 host_info 超时", i+1)
+		}
+	}
+
+	// 主机信息采集（含 Docker 探测）是独立协程，心跳必须照常发送。
+	select {
+	case <-heartbeats:
+	case <-time.After(3 * time.Second):
+		t.Fatal("未收到 heartbeat，主机信息采集可能阻塞了心跳")
+	}
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("Run 返回非预期错误: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("context 取消后 agent.Run 未退出")
+	}
+}
+
+// TestVirtualInterfaceFilter 验证虚拟/桥接接口黑名单的前缀匹配（大小写不敏感）。
+func TestVirtualInterfaceFilter(t *testing.T) {
+	virtual := []string{
+		"docker0", "DOCKER0", "veth1a2b3c", "VethXYZ", "br-abcdef", "BR-42",
+		"virbr0", "vmnet8", "utun3", "awdl0", "llw0", "bridge0", "tun0", "tap0", "p2p0", "ap1",
+	}
+	for _, name := range virtual {
+		if !isVirtualInterface(name) {
+			t.Errorf("接口 %q 应被识别为虚拟/桥接接口", name)
+		}
+	}
+	physical := []string{"en0", "en1", "eth0", "enp0s3", "wlan0", "em0", "pdp_ip0"}
+	for _, name := range physical {
+		if isVirtualInterface(name) {
+			t.Errorf("接口 %q 不应被识别为虚拟接口", name)
+		}
+	}
+}
+
+// TestNetCountersInterfaceFilter 覆盖四种情况：
+// 1) 容器/虚拟接口被排除、物理接口被计入；
+// 2) 多个物理接口求和（黑名单大小写不敏感）；
+// 3) 物理接口全被排除时跳过 net 指标（ok=false，而不是上报 0）；
+// 4) 有物理接口但计数器缺失时同样跳过。
+func TestNetCountersInterfaceFilter(t *testing.T) {
+	mkIface := func(name string, flags net.Flags) net.Interface {
+		return net.Interface{Name: name, Flags: flags}
+	}
+	mkCounter := func(name string, rx, tx uint64) gnet.IOCountersStat {
+		return gnet.IOCountersStat{Name: name, BytesRecv: rx, BytesSent: tx}
+	}
+
+	// 情况 1：只有 en0 是物理接口，回环/容器/桥接/隧道/点到点全部排除。
+	ifaces := []net.Interface{
+		mkIface("lo0", net.FlagUp|net.FlagLoopback),
+		mkIface("docker0", net.FlagUp),
+		mkIface("veth1a2b3c", net.FlagUp),
+		mkIface("br-abcdef", net.FlagUp),
+		mkIface("en0", net.FlagUp|net.FlagBroadcast),
+		mkIface("utun3", net.FlagUp|net.FlagPointToPoint),
+		mkIface("awdl0", net.FlagUp),
+	}
+	counters := []gnet.IOCountersStat{
+		mkCounter("lo0", 100, 100),
+		mkCounter("docker0", 1000, 2000),
+		mkCounter("veth1a2b3c", 3000, 4000),
+		mkCounter("br-abcdef", 5000, 6000),
+		mkCounter("en0", 10, 20),
+		mkCounter("utun3", 7000, 8000),
+		mkCounter("awdl0", 9000, 10000),
+	}
+	rx, tx, ok := sumPhysicalNetCounters(ifaces, counters)
+	if !ok {
+		t.Fatal("存在物理接口 en0 时不应跳过 net 指标")
+	}
+	if rx != 10 || tx != 20 {
+		t.Errorf("net 汇总错误：rx=%v tx=%v，期望 10/20", rx, tx)
+	}
+
+	// 情况 2：多个物理接口求和；黑名单大小写不敏感（DOCKER0 仍被排除）。
+	ifaces = []net.Interface{
+		mkIface("en0", net.FlagUp|net.FlagBroadcast),
+		mkIface("en7", net.FlagUp|net.FlagBroadcast),
+		mkIface("DOCKER0", net.FlagUp),
+	}
+	counters = []gnet.IOCountersStat{
+		mkCounter("en0", 1, 2),
+		mkCounter("en7", 3, 4),
+		mkCounter("DOCKER0", 100, 100),
+	}
+	rx, tx, ok = sumPhysicalNetCounters(ifaces, counters)
+	if !ok || rx != 4 || tx != 6 {
+		t.Errorf("多物理接口汇总错误：ok=%v rx=%v tx=%v，期望 true/4/6", ok, rx, tx)
+	}
+
+	// 情况 3：物理接口全被排除（只剩回环、容器与虚拟接口）→ 跳过指标，不上报 0。
+	ifaces = []net.Interface{
+		mkIface("lo", net.FlagUp|net.FlagLoopback),
+		mkIface("docker0", net.FlagUp),
+		mkIface("veth99", net.FlagUp),
+		mkIface("virbr0", net.FlagUp),
+	}
+	counters = []gnet.IOCountersStat{
+		mkCounter("lo", 1, 1),
+		mkCounter("docker0", 2, 2),
+		mkCounter("veth99", 3, 3),
+	}
+	if rx, tx, ok = sumPhysicalNetCounters(ifaces, counters); ok {
+		t.Errorf("物理接口全被排除时必须跳过 net 指标，实际 rx=%v tx=%v", rx, tx)
+	}
+
+	// 情况 4：有物理接口但计数器缺失 → 同样跳过。
+	if rx, tx, ok = sumPhysicalNetCounters([]net.Interface{mkIface("en0", net.FlagUp)}, nil); ok {
+		t.Errorf("计数器缺失时必须跳过 net 指标，实际 rx=%v tx=%v", rx, tx)
 	}
 }

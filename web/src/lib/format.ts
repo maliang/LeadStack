@@ -75,3 +75,57 @@ export function usageTone(value: number | null | undefined): 'normal' | 'warn' |
   if (value >= 75) return 'warn'
   return 'normal'
 }
+
+/** 字节数：1.5 GB / 512 MB / 8 KB。 */
+export function formatBytes(bytes: number | null | undefined, digits = 1): string {
+  if (bytes === null || bytes === undefined || Number.isNaN(bytes)) return '—'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+  let value = Math.abs(bytes)
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value.toFixed(unit === 0 ? 0 : digits)} ${units[unit]}`
+}
+
+/** 延迟：123 ms / 1.20 s。 */
+export function formatLatency(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return '—'
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`
+  return `${Math.round(ms)} ms`
+}
+
+/** 长指纹中段省略：SHA256:AbCdEf…WxYz。 */
+export function truncateMiddle(value: string | null | undefined, head = 14, tail = 6): string {
+  if (!value) return '—'
+  if (value.length <= head + tail + 1) return value
+  return `${value.slice(0, head)}…${value.slice(-tail)}`
+}
+
+/** 指标 key → 中文名（契约 3.1 的点分命名）。 */
+export function metricLabel(metric: string): string {
+  switch (metric) {
+    case 'cpu.pct':
+      return 'CPU 使用率'
+    case 'mem.used_pct':
+      return '内存使用率'
+    case 'mem.used_bytes':
+      return '内存使用量'
+    case 'disk.used.pct':
+    case 'disk.used_pct':
+      return '磁盘使用率'
+    case 'load.1':
+      return '系统负载（1 分钟）'
+    case 'net.rx_bytes':
+      return '网络接收'
+    case 'net.tx_bytes':
+      return '网络发送'
+    case 'proc.count':
+      return '进程数'
+    case 'uptime_s':
+      return '运行时长'
+    default:
+      return metric
+  }
+}

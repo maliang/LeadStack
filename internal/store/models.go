@@ -27,6 +27,68 @@ type Server struct {
 	Arch         *string `json:"arch"`
 	Kernel       *string `json:"kernel"`
 	CreatedAt    int64   `json:"created_at"`
+	// M1 扩展列（契约第 11 节）。
+	CredentialID  *string `json:"credential_id"`
+	Group         *string `json:"group"`
+	HostKeyPolicy string  `json:"host_key_policy"`
+	LastError     *string `json:"last_error"`
+}
+
+// 服务器接入模式。
+const (
+	// ModeAgent 表示由节点上的 leadstack-agent 主动上报。
+	ModeAgent = "agent"
+	// ModeSSH 表示由控制端通过 SSH 主动采集（agentless）。
+	ModeSSH = "ssh"
+)
+
+// 主机密钥校验策略，取值与 internal/sshx.HostKeyPolicy 一致。
+const (
+	HostKeyPolicyInsecure  = "insecure"
+	HostKeyPolicyAcceptNew = "accept-new"
+	HostKeyPolicyStrict    = "strict"
+)
+
+// Credential 是一条 SSH 凭证；库内只存密文，明文永不落库。
+type Credential struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Kind        string  `json:"kind"`
+	Username    string  `json:"username"`
+	SecretEnc   []byte  `json:"-"`
+	Fingerprint *string `json:"fingerprint"`
+	CreatedAt   int64   `json:"created_at"`
+}
+
+// CredentialSummary 是凭证列表项，附带引用它的服务器数量。
+type CredentialSummary struct {
+	Credential
+	ServerCount int `json:"server_count"`
+}
+
+// HostInfoSnapshot 是主机信息的落库形态（InfoJSON 为 hostinfo.Info 的 JSON）。
+type HostInfoSnapshot struct {
+	ServerID    string `json:"server_id"`
+	InfoJSON    string `json:"info_json"`
+	CollectedAt int64  `json:"collected_at"`
+}
+
+// RollupPoint 是一条降采样汇总。
+type RollupPoint struct {
+	ServerID string  `json:"server_id"`
+	Metric   string  `json:"metric"`
+	Bucket   string  `json:"bucket"`
+	TS       int64   `json:"ts"`
+	Avg      float64 `json:"avg"`
+	Min      float64 `json:"min"`
+	Max      float64 `json:"max"`
+	Cnt      int64   `json:"cnt"`
+}
+
+// GroupCount 是分组的聚合结果。
+type GroupCount struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
 }
 
 // EnrollToken 是 agent 接入令牌；库内只保存哈希。

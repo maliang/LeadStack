@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -18,7 +19,9 @@ import (
 
 	"github.com/maliang/leadstack/internal/api"
 	"github.com/maliang/leadstack/internal/auth"
+	"github.com/maliang/leadstack/internal/collector"
 	"github.com/maliang/leadstack/internal/config"
+	"github.com/maliang/leadstack/internal/credential"
 	"github.com/maliang/leadstack/internal/store"
 )
 
@@ -91,10 +94,31 @@ func run() error {
 		return err
 	}
 
+	// M1：主密钥（LEADSTACK_MASTER_KEY 或 <data-dir>/master.key）→ 凭证加解密器。
+	cipher, err := buildCipher(cfg, logger)
+	if err != nil {
+		return err
+	}
+
+	// M1：agentless 采集器，同时提供 SSH 连通性测试与主机信息采集能力。
+	sshClient, err := collector.New(collector.Options{
+		Store:          st,
+		Cipher:         cipher,
+		Logger:         logger,
+		Interval:       cfg.SSHInterval,
+		Concurrency:    cfg.SSHConcurrency,
+		KnownHostsPath: filepath.Join(cfg.DataDir, "known_hosts"),
+	})
+	if err != nil {
+		return err
+	}
+
 	srv, err := api.New(api.Options{
 		Config:  cfg,
 		Store:   st,
 		Auth:    authMgr,
+		Cipher:  cipher,
+		SSH:     sshClient,
 		Logger:  logger,
 		Version: version,
 	})
@@ -102,10 +126,15 @@ func run() error {
 		return err
 	}
 
-	// 后台清扫：45 秒无心跳即判定离线并记事件。
+	// 后台清扫：45 秒无心跳即判定离线并记事件；同时推进降采样与保留策略清理。
 	sweepCtx, cancelSweep := context.WithCancel(ctx)
 	defer cancelSweep()
 	go srv.RunSweeper(sweepCtx, sweepInterval)
+
+	// agentless 采集循环（mode=ssh）。
+	collectCtx, cancelCollect := context.WithCancel(ctx)
+	defer cancelCollect()
+	go sshClient.Run(collectCtx)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
@@ -135,6 +164,7 @@ func run() error {
 	}
 
 	cancelSweep()
+	cancelCollect()
 	// WebSocket 连接已被 hijack，http.Server.Shutdown 不会关闭它们，需要显式处理。
 	srv.Hub().CloseAll()
 
@@ -144,6 +174,51 @@ func run() error {
 		return fmt.Errorf("优雅关闭超时: %w", err)
 	}
 	logger.Info("已优雅关闭")
+	return nil
+}
+
+// buildCipher 准备主密钥并构造凭证加解密器。
+//
+// 密钥来源优先级：LEADSTACK_MASTER_KEY（hex）> <data-dir>/master.key（不存在则随机生成）。
+// 安全要求：密钥文件必须 0600；**任何日志都不得输出密钥内容**。
+func buildCipher(cfg *config.Config, logger *slog.Logger) (*credential.Cipher, error) {
+	key := cfg.MasterKey
+	if len(key) == 0 {
+		path := cfg.MasterKeyPath()
+		loaded, err := credential.LoadOrCreateMasterKey(path)
+		if err != nil {
+			return nil, fmt.Errorf("加载主密钥 %s: %w", path, err)
+		}
+		key = loaded
+		if err := ensureMasterKeyPerm(path, logger); err != nil {
+			return nil, err
+		}
+		logger.Info("主密钥已就绪", "source", "file", "path", path)
+	} else {
+		logger.Info("主密钥已就绪", "source", "env", "env", config.EnvMasterKey)
+	}
+
+	cipher, err := credential.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("构造凭证加解密器: %w", err)
+	}
+	return cipher, nil
+}
+
+// ensureMasterKeyPerm 确保主密钥文件权限为 0600；权限过宽时先告警再收紧。
+func ensureMasterKeyPerm(path string, logger *slog.Logger) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("检查主密钥文件 %s: %w", path, err)
+	}
+	if info.Mode().Perm() == 0o600 {
+		return nil
+	}
+	logger.Warn("主密钥文件权限过宽，正在收紧为 0600",
+		"path", path, "old_mode", fmt.Sprintf("%04o", info.Mode().Perm()))
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("收紧主密钥文件权限 %s: %w", path, err)
+	}
 	return nil
 }
 

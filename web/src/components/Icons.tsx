@@ -190,3 +190,75 @@ export function SpinnerIcon({ className, ...props }: IconProps) {
     </svg>
   )
 }
+
+export function KeyIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <circle cx="8" cy="15" r="4" />
+      <path d="m10.8 12.2 7.2-7.2M15.5 5.5 18 8M13 8l3 3" />
+    </Base>
+  )
+}
+
+export function TagIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0l-7.2-7.2a2 2 0 0 1-.6-1.4V5a2 2 0 0 1 2-2h7a2 2 0 0 1 1.4.6l7.4 7.4a2 2 0 0 1 0 2.4Z" />
+      <path d="M7.5 7.5h.01" />
+    </Base>
+  )
+}
+
+export function FolderIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+    </Base>
+  )
+}
+
+export function WifiIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M2.5 9a15 15 0 0 1 19 0M6 12.5a10 10 0 0 1 12 0M9.5 16a5 5 0 0 1 5 0" />
+      <path d="M12 19.5h.01" />
+    </Base>
+  )
+}
+
+export function AlertTriangleIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M10.3 3.9 2.5 17.4A2 2 0 0 0 4.2 20.4h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+      <path d="M12 9v4M12 16.5h.01" />
+    </Base>
+  )
+}
+
+export function ChartIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M4 4v16h16" />
+      <path d="m7 14 3.5-4 3 2.5L18 7" />
+    </Base>
+  )
+}
+
+export function InfoIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 7.8h.01" />
+    </Base>
+  )
+}
+
+export function ListChecksIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="m3 6 2 2 3-3M3 14l2 2 3-3M3 20h4" />
+      <path d="M13 7h8M13 15h8M13 21h8" />
+    </Base>
+  )
+}
+

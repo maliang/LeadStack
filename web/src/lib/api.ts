@@ -157,13 +157,34 @@ export interface SystemInfo {
   online_count: number
 }
 
-/** 列表/详情里附带的最新指标快照。 */
+/** 列表/详情里附带的最新指标快照（契约 3.1，map[string]float64）。 */
 export interface MetricsSummary {
   cpu_pct: number | null
   mem_used_pct: number | null
+  mem_used_bytes: number | null
   disk_used_pct: number | null
   load1: number | null
   uptime_s: number | null
+}
+
+/** 主机信息（契约 8.3 hostinfo.Info / 第 10 节 host_info）。 */
+export interface HostInfo {
+  hostname: string | null
+  os: string | null
+  os_version: string | null
+  kernel: string | null
+  arch: string | null
+  cpu_model: string | null
+  cpu_cores: number | null
+  mem_total_bytes: number | null
+  disk_total_bytes: number | null
+  disk_used_bytes: number | null
+  uptime_s: number | null
+  timezone: string | null
+  docker: boolean
+  docker_version: string | null
+  ip_addrs: string[]
+  collected_at: number | null
 }
 
 export interface Server {
@@ -181,6 +202,89 @@ export interface Server {
   tags: string[]
   metrics_summary: MetricsSummary | null
   created_at: number | null
+  /** M1 扩展字段（契约第 10 节） */
+  group: string | null
+  credential_id: string | null
+  last_error: string | null
+  host_info: HostInfo | null
+}
+
+export type CredentialKind = 'password' | 'key'
+
+/** 凭证对外元数据：接口绝不返回密钥内容。 */
+export interface Credential {
+  id: string
+  name: string
+  kind: CredentialKind | string
+  username: string
+  fingerprint: string | null
+  created_at: number | null
+  server_count: number
+}
+
+export interface CreateCredentialPayload {
+  name: string
+  kind: CredentialKind
+  username: string
+  password?: string
+  private_key?: string
+  passphrase?: string
+}
+
+export interface TestConnectionResult {
+  ok: boolean
+  latency_ms: number | null
+  ssh_banner: string | null
+  host_key_fingerprint: string | null
+  error?: string | null
+}
+
+export interface MetricPoint {
+  ts: number
+  value: number
+}
+
+export interface MetricSeries {
+  metric: string
+  points: MetricPoint[]
+}
+
+export type MetricsStep = 'raw' | '1m' | '1h'
+
+export interface MetricsResponse {
+  series: MetricSeries[]
+  step: string
+}
+
+export type BatchAction =
+  | 'test-connection'
+  | 'refresh-host-info'
+  | 'add-tags'
+  | 'set-group'
+  | 'delete'
+
+export interface BatchResultItem {
+  id: string
+  ok: boolean
+  error?: string | null
+}
+
+export interface BatchResponse {
+  results: BatchResultItem[]
+  summary: { ok: number; failed: number }
+}
+
+export interface GroupSummary {
+  name: string
+  count: number
+}
+
+/** GET /servers 过滤参数（契约第 10 节）。 */
+export interface ServerFilters {
+  group?: string
+  tag?: string
+  status?: ServerStatus
+  mode?: string
 }
 
 export interface EnrollToken {
@@ -220,12 +324,17 @@ function toText(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null
 }
 
-const METRIC_KEYS = {
-  cpu: ['cpu_pct', 'cpu.pct', 'cpu', 'cpu_percent'],
-  mem: ['mem_used_pct', 'mem.used_pct', 'mem.pct', 'mem', 'mem_percent', 'memory_used_pct'],
-  disk: ['disk_used_pct', 'disk.used_pct', 'disk.pct', 'disk', 'disk_percent'],
-  load: ['load1', 'load.1', 'load'],
+// 指标 key 以协议点分命名为准（契约 3.1），同时兼容 M0 期间出现过的下划线别名。
+export const METRIC_KEYS = {
+  cpu: ['cpu.pct', 'cpu_pct', 'cpu', 'cpu_percent'],
+  mem: ['mem.used_pct', 'mem_used_pct', 'mem.pct', 'mem', 'mem_percent', 'memory_used_pct'],
+  memBytes: ['mem.used_bytes', 'mem_used_bytes'],
+  disk: ['disk.used.pct', 'disk.used_pct', 'disk_used_pct', 'disk.pct', 'disk', 'disk_percent'],
+  load: ['load.1', 'load1', 'load'],
   uptime: ['uptime_s', 'uptime'],
+  netRx: ['net.rx_bytes', 'net_rx_bytes'],
+  netTx: ['net.tx_bytes', 'net_tx_bytes'],
+  proc: ['proc.count', 'proc_count'],
 } as const
 
 /** 兼容 {cpu_pct:..} / {"cpu.pct":..} / [{metric,value,ts}] 三种形态。 */
@@ -257,6 +366,7 @@ function normalizeMetrics(input: unknown): MetricsSummary | null {
   const metrics: MetricsSummary = {
     cpu_pct: pick(METRIC_KEYS.cpu),
     mem_used_pct: pick(METRIC_KEYS.mem),
+    mem_used_bytes: pick(METRIC_KEYS.memBytes),
     disk_used_pct: pick(METRIC_KEYS.disk),
     load1: pick(METRIC_KEYS.load),
     uptime_s: pick(METRIC_KEYS.uptime),
@@ -288,6 +398,62 @@ function normalizeStatus(value: unknown, lastSeenAt: number | null): ServerStatu
   return Date.now() - lastSeenAt <= 45_000 ? 'online' : 'offline'
 }
 
+function normalizeHostInfo(input: unknown): HostInfo | null {
+  const raw = toRecord(input)
+  if (!raw) return null
+  const ipAddrs = Array.isArray(raw.ip_addrs)
+    ? raw.ip_addrs.filter((ip): ip is string => typeof ip === 'string' && ip.trim() !== '')
+    : []
+  return {
+    hostname: toText(raw.hostname),
+    os: toText(raw.os),
+    os_version: toText(raw.os_version),
+    kernel: toText(raw.kernel),
+    arch: toText(raw.arch),
+    cpu_model: toText(raw.cpu_model),
+    cpu_cores: toNumber(raw.cpu_cores),
+    mem_total_bytes: toNumber(raw.mem_total_bytes),
+    disk_total_bytes: toNumber(raw.disk_total_bytes),
+    disk_used_bytes: toNumber(raw.disk_used_bytes),
+    uptime_s: toNumber(raw.uptime_s),
+    timezone: toText(raw.timezone),
+    docker: raw.docker === true,
+    docker_version: toText(raw.docker_version),
+    ip_addrs: ipAddrs,
+    collected_at: toNumber(raw.collected_at),
+  }
+}
+
+function normalizeMetricSeries(input: unknown): MetricSeries {
+  const raw = toRecord(input) ?? {}
+  const points = Array.isArray(raw.points)
+    ? raw.points
+        .map((point) => {
+          const record = toRecord(point)
+          if (!record) return null
+          const ts = toNumber(record.ts)
+          const value = toNumber(record.value)
+          if (ts === null || value === null) return null
+          return { ts, value }
+        })
+        .filter((point): point is MetricPoint => point !== null)
+    : []
+  return { metric: toText(raw.metric) ?? '', points }
+}
+
+export function normalizeCredential(input: unknown): Credential {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: String(raw.id ?? ''),
+    name: toText(raw.name) ?? '未命名凭证',
+    kind: toText(raw.kind) ?? 'password',
+    username: toText(raw.username) ?? '',
+    fingerprint: toText(raw.fingerprint),
+    created_at: toNumber(raw.created_at),
+    server_count: toNumber(raw.server_count) ?? 0,
+  }
+}
+
 export function normalizeServer(input: unknown): Server {
   const raw = toRecord(input) ?? {}
   const lastSeenAt = toNumber(raw.last_seen_at)
@@ -313,6 +479,10 @@ export function normalizeServer(input: unknown): Server {
     tags: normalizeTags(raw.tags),
     metrics_summary: metrics,
     created_at: toNumber(raw.created_at),
+    group: toText(raw.group),
+    credential_id: toText(raw.credential_id),
+    last_error: toText(raw.last_error),
+    host_info: normalizeHostInfo(raw.host_info),
   }
 }
 
@@ -321,11 +491,18 @@ export function normalizeServer(input: unknown): Server {
 /* ------------------------------------------------------------------ */
 
 /** 列表接口契约未包含指标，若后端未附带则回退拉详情取 metrics_summary。 */
-async function fetchServers(): Promise<Server[]> {
-  const raw = await request<unknown>('/servers')
+async function fetchServers(filters: ServerFilters = {}): Promise<Server[]> {
+  const query = new URLSearchParams()
+  if (filters.group) query.set('group', filters.group)
+  if (filters.tag) query.set('tag', filters.tag)
+  if (filters.status) query.set('status', filters.status)
+  if (filters.mode) query.set('mode', filters.mode)
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+
+  const raw = await request<unknown>(`/servers${suffix}`)
   const list = Array.isArray(raw) ? raw.map(normalizeServer) : []
 
-  // 最多补拉 20 台，避免对控制端造成请求风暴（M0 场景足够）。
+  // 最多补拉 20 台，避免对控制端造成请求风暴（M1 列表已带指标，通常不触发）。
   const missing = list
     .filter((server) => server.id !== '' && server.metrics_summary === null)
     .slice(0, 20)
@@ -357,6 +534,19 @@ async function fetchServers(): Promise<Server[]> {
 export interface UpdateServerPayload {
   name?: string
   tags?: string[]
+  group?: string | null
+}
+
+/** POST /servers 请求体（M1 扩展字段，契约第 10 节）。 */
+export interface CreateServerPayload {
+  name: string
+  host: string
+  port: number
+  mode: 'agent' | 'ssh'
+  credential_id?: string
+  group?: string
+  tags?: string[]
+  host_key_policy?: 'insecure' | 'accept-new' | 'strict'
 }
 
 export interface CreateEnrollTokenPayload {
@@ -367,6 +557,35 @@ export interface CreateEnrollTokenPayload {
 export interface InstallScriptPayload {
   token: string
   server_url: string
+}
+
+export interface PasswordCredentialInput {
+  name: string
+  kind: 'password'
+  username: string
+  password: string
+}
+
+export interface KeyCredentialInput {
+  name: string
+  kind: 'key'
+  username: string
+  private_key: string
+  passphrase?: string
+}
+
+export type CreateCredentialInput = PasswordCredentialInput | KeyCredentialInput
+
+export interface MetricsQuery {
+  from: number
+  to: number
+  step: MetricsStep
+}
+
+export interface BatchPayload {
+  ids: string[]
+  action: BatchAction
+  params?: Record<string, unknown>
 }
 
 export const api = {
@@ -390,8 +609,12 @@ export const api = {
     return request<SystemInfo>('/system/info')
   },
 
-  servers(): Promise<Server[]> {
-    return fetchServers()
+  servers(filters?: ServerFilters): Promise<Server[]> {
+    return fetchServers(filters)
+  },
+
+  createServer(payload: CreateServerPayload): Promise<Server> {
+    return request<unknown>('/servers', { method: 'POST', body: payload }).then(normalizeServer)
   },
 
   server(id: string): Promise<Server> {
@@ -407,6 +630,75 @@ export const api = {
 
   deleteServer(id: string): Promise<unknown> {
     return request<unknown>(`/servers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  /** 契约第 10 节：POST /servers/{id}/test-connection */
+  testConnection(id: string): Promise<TestConnectionResult> {
+    return request<TestConnectionResult>(`/servers/${encodeURIComponent(id)}/test-connection`, {
+      method: 'POST',
+    })
+  },
+
+  /** 契约第 10 节：POST /servers/{id}/refresh-host-info → host_info */
+  refreshHostInfo(id: string): Promise<HostInfo | null> {
+    return request<unknown>(`/servers/${encodeURIComponent(id)}/refresh-host-info`, {
+      method: 'POST',
+    }).then(normalizeHostInfo)
+  },
+
+  /** 契约第 10 节：POST /servers/batch → 逐台结果 + 汇总 */
+  batch(payload: BatchPayload): Promise<BatchResponse> {
+    return request<BatchResponse>('/servers/batch', { method: 'POST', body: payload })
+  },
+
+  /** 契约第 10 节：GET /servers/{id}/metrics?from&to&step */
+  metrics(id: string, query: MetricsQuery): Promise<MetricsResponse> {
+    const params = new URLSearchParams({
+      from: String(query.from),
+      to: String(query.to),
+      step: query.step,
+    })
+    return request<MetricsResponse>(
+      `/servers/${encodeURIComponent(id)}/metrics?${params.toString()}`,
+    ).then((raw) => ({
+      series: Array.isArray(raw?.series) ? raw.series.map(normalizeMetricSeries) : [],
+      step: typeof raw?.step === 'string' && raw.step !== '' ? raw.step : query.step,
+    }))
+  },
+
+  /** 契约第 10 节：GET /groups —— 由 servers 聚合出的分组与数量 */
+  groups(): Promise<GroupSummary[]> {
+    return request<unknown>('/groups').then((raw) =>
+      Array.isArray(raw)
+        ? raw
+            .map((item) => {
+              const record = toRecord(item)
+              if (!record) return null
+              return {
+                name: toText(record.name) ?? '',
+                count: toNumber(record.count) ?? 0,
+              }
+            })
+            .filter((group): group is GroupSummary => group !== null && group.name !== '')
+        : [],
+    )
+  },
+
+  /** 契约第 10 节：凭证接口绝不返回密钥内容 */
+  credentials(): Promise<Credential[]> {
+    return request<unknown>('/credentials').then((raw) =>
+      Array.isArray(raw) ? raw.map(normalizeCredential) : [],
+    )
+  },
+
+  createCredential(payload: CreateCredentialInput): Promise<Credential> {
+    return request<unknown>('/credentials', { method: 'POST', body: payload }).then(
+      normalizeCredential,
+    )
+  },
+
+  deleteCredential(id: string): Promise<unknown> {
+    return request<unknown>(`/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
 
   enrollTokens(): Promise<EnrollToken[]> {
