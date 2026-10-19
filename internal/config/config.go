@@ -31,6 +31,10 @@ const (
 	EnvCheckConcurrency = "LEADSTACK_CHECK_CONCURRENCY"
 	// EnvCheckIntervalMin 是检测项 interval_s 的防呆下限，支持 Go duration 字符串。
 	EnvCheckIntervalMin = "LEADSTACK_CHECK_INTERVAL_MIN"
+	// EnvAlertEvalInterval 是告警指标评估与服务器状态巡检周期。
+	EnvAlertEvalInterval = "LEADSTACK_ALERT_EVAL_INTERVAL"
+	// EnvAlertRetentionDays 是已解除告警的保留天数。
+	EnvAlertRetentionDays = "LEADSTACK_ALERT_RETENTION_DAYS"
 )
 
 // 默认值。
@@ -51,6 +55,10 @@ const (
 	DefaultCheckConcurrency = 8
 	// DefaultCheckIntervalMin 是检测项间隔的默认下限（契约第 14.1 节：interval_s 最小 10）。
 	DefaultCheckIntervalMin = 10 * time.Second
+	// DefaultAlertEvalInterval 是告警指标评估周期。
+	DefaultAlertEvalInterval = 30 * time.Second
+	// DefaultAlertRetentionDays 是已解除告警的默认保留天数。
+	DefaultAlertRetentionDays = 90
 	// MasterKeyFileName 是主密钥文件名（位于 DataDir 下）。
 	MasterKeyFileName = "master.key"
 	// MasterKeySize 是主密钥字节数（AES-256）。
@@ -86,6 +94,10 @@ type Config struct {
 	CheckConcurrency int
 	// CheckIntervalMin 是检测项 interval_s 的防呆下限。
 	CheckIntervalMin time.Duration
+	// AlertEvalInterval 是告警指标评估与服务器状态巡检周期。
+	AlertEvalInterval time.Duration
+	// AlertRetentionDays 是已解除告警的保留天数。
+	AlertRetentionDays int
 }
 
 // Load 解析配置。version 由调用方（main）传入，args 通常为 os.Args[1:]。
@@ -104,21 +116,25 @@ func Load(version string, args []string) (*Config, error) {
 	sshConcurrency := fs.Int("ssh-concurrency", DefaultSSHConcurrency, "agentless 采集最大并发数")
 	checkConcurrency := fs.Int("check-concurrency", envIntOr(EnvCheckConcurrency, DefaultCheckConcurrency), "检测调度最大并发数（环境变量 "+EnvCheckConcurrency+"）")
 	checkIntervalMin := fs.Duration("check-interval-min", defaultCheckIntervalMin(), "检测项 interval_s 的下限，如 10s（环境变量 "+EnvCheckIntervalMin+"）")
+	alertEvalInterval := fs.Duration("alert-eval-interval", defaultDurationOr(EnvAlertEvalInterval, DefaultAlertEvalInterval), "告警指标评估周期，如 30s（环境变量 "+EnvAlertEvalInterval+"）")
+	alertRetentionDays := fs.Int("alert-retention-days", envIntOr(EnvAlertRetentionDays, DefaultAlertRetentionDays), "已解除告警保留天数（环境变量 "+EnvAlertRetentionDays+"）")
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("解析命令行参数: %w", err)
 	}
 
 	cfg := &Config{
-		Listen:           strings.TrimSpace(*listen),
-		DataDir:          strings.TrimSpace(*dataDir),
-		AdminPassword:    *adminPassword,
-		TokenTTL:         *tokenTTL,
-		ShutdownTimeout:  *shutdownTimeout,
-		Version:          version,
-		SSHInterval:      *sshInterval,
-		SSHConcurrency:   *sshConcurrency,
-		CheckConcurrency: *checkConcurrency,
-		CheckIntervalMin: *checkIntervalMin,
+		Listen:             strings.TrimSpace(*listen),
+		DataDir:            strings.TrimSpace(*dataDir),
+		AdminPassword:      *adminPassword,
+		TokenTTL:           *tokenTTL,
+		ShutdownTimeout:    *shutdownTimeout,
+		Version:            version,
+		SSHInterval:        *sshInterval,
+		SSHConcurrency:     *sshConcurrency,
+		CheckConcurrency:   *checkConcurrency,
+		CheckIntervalMin:   *checkIntervalMin,
+		AlertEvalInterval:  *alertEvalInterval,
+		AlertRetentionDays: *alertRetentionDays,
 	}
 
 	if cfg.Listen == "" {
@@ -145,6 +161,12 @@ func Load(version string, args []string) (*Config, error) {
 	}
 	if cfg.CheckIntervalMin < time.Second || cfg.CheckIntervalMin > 24*time.Hour {
 		return nil, errors.New("配置错误: check-interval-min 必须在 1s-24h 之间")
+	}
+	if cfg.AlertEvalInterval < time.Second || cfg.AlertEvalInterval > 24*time.Hour {
+		return nil, errors.New("配置错误: alert-eval-interval 必须在 1s-24h 之间")
+	}
+	if cfg.AlertRetentionDays < 1 || cfg.AlertRetentionDays > 3650 {
+		return nil, errors.New("配置错误: alert-retention-days 必须在 1-3650 之间")
 	}
 
 	if raw := strings.TrimSpace(*masterKeyHex); raw != "" {
@@ -270,4 +292,19 @@ func envIntOr(key string, fallback int) int {
 		return fallback
 	}
 	return v
+}
+
+// defaultDurationOr 解析 duration 环境变量（支持 Go duration 与纯数字秒），非法或缺失时用 fallback。
+func defaultDurationOr(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	if d, err := time.ParseDuration(raw); err == nil {
+		return d
+	}
+	if secs, err := strconv.Atoi(raw); err == nil {
+		return time.Duration(secs) * time.Second
+	}
+	return fallback
 }

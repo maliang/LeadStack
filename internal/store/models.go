@@ -185,3 +185,92 @@ const (
 
 // DefaultFailThreshold 是连续失败多少次判 down（可由 params.fail_threshold 覆盖）。
 const DefaultFailThreshold = 3
+
+// ------------------------------------------------ M3：告警 ------------------------------------------------
+
+// AlertRule 是一条告警规则（契约第 21 节 alert_rules 表）。
+//
+// check_ids/server_ids/groups/tags/channel_ids 在库里是 JSON 文本，模型里直接暴露为切片。
+type AlertRule struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Enabled      bool     `json:"enabled"`
+	Source       string   `json:"source"`
+	CheckIDs     []string `json:"check_ids"`
+	ServerIDs    []string `json:"server_ids"`
+	Groups       []string `json:"groups"`
+	Tags         []string `json:"tags"`
+	Metric       *string  `json:"metric"`
+	Comparator   *string  `json:"comparator"`
+	Threshold    *float64 `json:"threshold"`
+	ForDurationS int      `json:"for_duration_s"`
+	Severity     string   `json:"severity"`
+	DedupWindowS int      `json:"dedup_window_s"`
+	ChannelIDs   []string `json:"channel_ids"`
+	SilenceUntil *int64   `json:"silence_until"`
+	CreatedAt    int64    `json:"created_at"`
+}
+
+// AlertChannel 是一个通知渠道；ConfigEnc 为 credential.Cipher 加密后的配置 JSON。
+type AlertChannel struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Kind      string  `json:"kind"`
+	ConfigEnc []byte  `json:"-"`
+	Enabled   bool    `json:"enabled"`
+	LastError *string `json:"last_error"`
+	LastOKAt  *int64  `json:"last_ok_at"`
+	CreatedAt int64   `json:"created_at"`
+}
+
+// Alert 是一条告警。
+type Alert struct {
+	ID           string   `json:"id"`
+	RuleID       string   `json:"rule_id"`
+	DedupKey     string   `json:"dedup_key"`
+	ServerID     *string  `json:"server_id"`
+	CheckID      *string  `json:"check_id"`
+	Status       string   `json:"status"`
+	Severity     string   `json:"severity"`
+	Title        string   `json:"title"`
+	Message      *string  `json:"message"`
+	Value        *float64 `json:"value"`
+	StartedAt    int64    `json:"started_at"`
+	UpdatedAt    int64    `json:"updated_at"`
+	ResolvedAt   *int64   `json:"resolved_at"`
+	AckedAt      *int64   `json:"acked_at"`
+	AckedBy      *string  `json:"acked_by"`
+	NotifyCount  int      `json:"notify_count"`
+	LastNotifyAt *int64   `json:"last_notify_at"`
+	SilenceUntil *int64   `json:"silence_until"`
+}
+
+// AlertEvent 是告警的状态变更轨迹与通知记录。
+type AlertEvent struct {
+	ID      int64   `json:"id"`
+	AlertID string  `json:"alert_id"`
+	Kind    string  `json:"kind"`
+	TS      int64   `json:"ts"`
+	Detail  *string `json:"detail"`
+}
+
+// AlertSummary 是告警概览。
+type AlertSummary struct {
+	Firing      int            `json:"firing"`
+	Acked       int            `json:"acked"`
+	Resolved24h int            `json:"resolved_24h"`
+	BySeverity  map[string]int `json:"by_severity"`
+}
+
+// 告警状态与事件类型。
+const (
+	AlertStatusFiring   = "firing"
+	AlertStatusAcked    = "acked"
+	AlertStatusResolved = "resolved"
+
+	AlertEventFiring   = "firing"
+	AlertEventResolved = "resolved"
+	AlertEventAcked    = "acked"
+	AlertEventNotify   = "notify"
+	AlertEventSilenced = "silenced"
+)

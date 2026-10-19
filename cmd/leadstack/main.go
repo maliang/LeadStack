@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/maliang/leadstack/internal/alerting"
 	"github.com/maliang/leadstack/internal/api"
 	"github.com/maliang/leadstack/internal/auth"
 	"github.com/maliang/leadstack/internal/checker"
@@ -24,6 +25,7 @@ import (
 	"github.com/maliang/leadstack/internal/config"
 	"github.com/maliang/leadstack/internal/credential"
 	"github.com/maliang/leadstack/internal/jobs"
+	"github.com/maliang/leadstack/internal/notify"
 	"github.com/maliang/leadstack/internal/store"
 )
 
@@ -133,15 +135,31 @@ func run() error {
 	}
 	routingExec := api.NewRoutingExecutor(st, dispatcher, sshExec, logger)
 
-	// M2：检测调度器（Store 适配器把服务器的 mode 一并带出）。
+	// M3：通知客户端 → 渠道发送器 → 告警引擎 → 事件桥。
+	notifyClient := notify.NewClient(notify.Options{})
+	notifier := api.NewNotifyAdapter(notifyClient)
+	alertStore := api.NewAlertStore(st, logger)
+	alertNotifier := api.NewAlertNotifier(st, cipher, notifier, logger)
+	alertEngine := alerting.New(alerting.Deps{
+		Store: alertStore,
+		Notify: func(ctx context.Context, a alerting.Alert, channels []string, recovered bool) {
+			if alertNotifier == nil {
+				return
+			}
+			alertNotifier.Notify(ctx, a, channels, recovered)
+		},
+		Now: func() int64 { return store.NowMS() },
+	})
+	alertBridge := api.NewAlertEventBridge(st, alertEngine, logger)
+
+	// M2：检测调度器（Store 适配器把服务器的 mode 一并带出）；
+	// OnStateChange 是 M3 的关键接线：检测翻转 → 告警事件。
 	checkStore := api.NewCheckerStore(st, logger)
 	scheduler := checker.NewScheduler(checker.Deps{
-		Store:       checkStore,
-		Exec:        routingExec,
-		Concurrency: cfg.CheckConcurrency,
-		OnStateChange: func(checkID, serverID string, ok bool, since int64) {
-			logger.Info("检测状态变化", "check_id", checkID, "server_id", serverID, "ok", ok, "since", since)
-		},
+		Store:         checkStore,
+		Exec:          routingExec,
+		Concurrency:   cfg.CheckConcurrency,
+		OnStateChange: alertBridge.OnCheckStateChange,
 	})
 
 	srv, err := api.New(api.Options{
@@ -153,6 +171,8 @@ func run() error {
 		CheckRunner: api.NewCheckRunner(scheduler, logger),
 		Jobs:        dispatcher,
 		Hub:         hub,
+		Alerts:      alertEngine,
+		Notifier:    notifier,
 		Logger:      logger,
 		Version:     version,
 	})
@@ -174,6 +194,11 @@ func run() error {
 	checkCtx, cancelChecks := context.WithCancel(ctx)
 	defer cancelChecks()
 	go scheduler.Start(checkCtx)
+
+	// 告警评估循环：服务器上下线巡检 + 指标阈值评估。
+	alertCtx, cancelAlerts := context.WithCancel(ctx)
+	defer cancelAlerts()
+	go alertBridge.Run(alertCtx, cfg.AlertEvalInterval)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
@@ -205,6 +230,7 @@ func run() error {
 	cancelSweep()
 	cancelCollect()
 	cancelChecks()
+	cancelAlerts()
 	// WebSocket 连接已被 hijack，http.Server.Shutdown 不会关闭它们，需要显式处理。
 	srv.Hub().CloseAll()
 

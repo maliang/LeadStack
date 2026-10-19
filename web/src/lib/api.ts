@@ -406,6 +406,137 @@ export interface CheckResultsQuery {
 }
 
 /* ------------------------------------------------------------------ */
+/* M3：告警（契约第 18/20 节）                                          */
+/* ------------------------------------------------------------------ */
+
+export type AlertSeverity = 'critical' | 'warning' | 'info'
+export type AlertSource = 'check' | 'server' | 'metric'
+export type AlertStatus = 'firing' | 'resolved' | 'acked'
+export type AlertComparator = '>' | '>=' | '<' | '<='
+
+export type ChannelKind =
+  | 'webhook'
+  | 'email'
+  | 'dingtalk'
+  | 'wecom'
+  | 'feishu'
+  | 'telegram'
+  | 'slack'
+
+/** 规则（契约 19.1 Rule）。 */
+export interface AlertRule {
+  id: string
+  name: string
+  enabled: boolean
+  source: AlertSource
+  check_ids: string[]
+  server_ids: string[]
+  groups: string[]
+  tags: string[]
+  metric: string | null
+  comparator: AlertComparator | string | null
+  threshold: number | null
+  for_duration_s: number
+  severity: AlertSeverity
+  dedup_window_s: number
+  channel_ids: string[]
+  silence_until: number | null
+  created_at: number | null
+}
+
+export interface AlertRulePayload {
+  name: string
+  enabled: boolean
+  source: AlertSource
+  check_ids?: string[]
+  server_ids?: string[]
+  groups?: string[]
+  tags?: string[]
+  metric?: string
+  comparator?: string
+  threshold?: number
+  for_duration_s: number
+  severity: AlertSeverity
+  dedup_window_s: number
+  channel_ids: string[]
+}
+
+/** 渠道（契约 19.2 Channel）。config 由后端脱敏返回，密钥字段不会是明文。 */
+export interface AlertChannel {
+  id: string
+  name: string
+  kind: ChannelKind | string
+  enabled: boolean
+  config: Record<string, unknown>
+  last_error: string | null
+  last_ok_at: number | null
+  created_at: number | null
+}
+
+export interface AlertChannelPayload {
+  name: string
+  kind: ChannelKind
+  enabled: boolean
+  config: Record<string, unknown>
+}
+
+export interface ChannelTestResult {
+  ok: boolean
+  error: string | null
+}
+
+/** 告警事件轨迹（契约 21：alert_events）。 */
+export interface AlertEvent {
+  id: number | null
+  kind: string
+  ts: number | null
+  detail: string | null
+}
+
+export interface AlertItem {
+  id: string
+  rule_id: string
+  dedup_key: string
+  server_id: string | null
+  check_id: string | null
+  status: AlertStatus
+  severity: AlertSeverity
+  title: string
+  message: string | null
+  value: number | null
+  started_at: number | null
+  updated_at: number | null
+  resolved_at: number | null
+  acked_at: number | null
+  acked_by: string | null
+  notify_count: number
+  last_notify_at: number | null
+  silence_until: number | null
+  /** 列表/详情可能带出规则名与服务器名，缺失时前端用本地列表补 */
+  rule_name: string | null
+  server_name: string | null
+  check_name: string | null
+  events: AlertEvent[]
+}
+
+export interface AlertSummary {
+  firing: number
+  acked: number
+  resolved_24h: number
+  by_severity: { critical: number; warning: number; info: number }
+}
+
+export interface AlertFilters {
+  status?: AlertStatus | ''
+  severity?: AlertSeverity | ''
+  rule_id?: string
+  server_id?: string
+  from?: number
+  to?: number
+  limit?: number
+}
+
+/* ------------------------------------------------------------------ */
 /* 响应归一化：后端并行开发中，字段可能多给/少给，UI 要稳                */
 /* ------------------------------------------------------------------ */
 
@@ -698,6 +829,159 @@ export function normalizeCheckResults(input: unknown): CheckResult[] {
   return extractList(input, ['results', 'items', 'timeline'])
     .map(normalizeCheckResult)
     .filter((item): item is CheckResult => item !== null)
+}
+
+/* ---------------------- M3 告警：归一化 ---------------------- */
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return item
+        const record = toRecord(item)
+        if (!record) return ''
+        return toText(record.id) ?? toText(record.name) ?? ''
+      })
+      .filter((item) => item !== '')
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    try {
+      return toStringArray(JSON.parse(value))
+    } catch {
+      return value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+    }
+  }
+  return []
+}
+
+/**
+ * 后端对渠道密钥类字段做脱敏（如 `***abcd`、`xxxx`）；命中即视为「已配置」，
+ * 编辑时留空表示不修改，绝不把脱敏串当真实值回传。
+ */
+export function isMaskedValue(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (trimmed === '') return false
+  return /(\*{2,}|x{3,}|X{3,}|•{2,}|ｘ{3,})/.test(trimmed) || trimmed === '[redacted]'
+}
+
+export function normalizeAlertRule(input: unknown): AlertRule {
+  const raw = toRecord(input) ?? {}
+  const severity = toText(raw.severity)
+  return {
+    id: String(raw.id ?? ''),
+    name: toText(raw.name) ?? '未命名规则',
+    enabled: toBool(raw.enabled, true),
+    source: (toText(raw.source) as AlertSource) ?? 'check',
+    check_ids: toStringArray(raw.check_ids),
+    server_ids: toStringArray(raw.server_ids),
+    groups: toStringArray(raw.groups),
+    tags: toStringArray(raw.tags),
+    metric: toText(raw.metric),
+    comparator: toText(raw.comparator),
+    threshold: toNumber(raw.threshold),
+    for_duration_s: toNumber(raw.for_duration_s) ?? 0,
+    severity:
+      severity === 'critical' || severity === 'warning' || severity === 'info'
+        ? severity
+        : 'warning',
+    dedup_window_s: toNumber(raw.dedup_window_s) ?? 300,
+    channel_ids: toStringArray(raw.channel_ids),
+    silence_until: toNumber(raw.silence_until),
+    created_at: toNumber(raw.created_at),
+  }
+}
+
+export function normalizeAlertChannel(input: unknown): AlertChannel {
+  const raw = toRecord(input) ?? {}
+  let config: Record<string, unknown> = {}
+  if (typeof raw.config === 'string' && raw.config.trim() !== '') {
+    try {
+      const parsed = JSON.parse(raw.config)
+      const record = toRecord(parsed)
+      if (record) config = record
+    } catch {
+      config = {}
+    }
+  } else {
+    config = toRecord(raw.config) ?? {}
+  }
+  return {
+    id: String(raw.id ?? ''),
+    name: toText(raw.name) ?? '未命名渠道',
+    kind: toText(raw.kind) ?? 'webhook',
+    enabled: toBool(raw.enabled, true),
+    config,
+    last_error: toText(raw.last_error),
+    last_ok_at: toNumber(raw.last_ok_at),
+    created_at: toNumber(raw.created_at),
+  }
+}
+
+export function normalizeAlertEvent(input: unknown): AlertEvent | null {
+  const raw = toRecord(input)
+  if (!raw) return null
+  return {
+    id: toNumber(raw.id),
+    kind: toText(raw.kind) ?? 'event',
+    ts: toNumber(raw.ts),
+    detail: toText(raw.detail ?? raw.message),
+  }
+}
+
+export function normalizeAlert(input: unknown): AlertItem {
+  const raw = toRecord(input) ?? {}
+  const status = toText(raw.status)
+  const severity = toText(raw.severity)
+  const events = extractList(raw.events, ['events', 'items'])
+    .map(normalizeAlertEvent)
+    .filter((event): event is AlertEvent => event !== null)
+    .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0))
+  return {
+    id: String(raw.id ?? ''),
+    rule_id: toText(raw.rule_id) ?? '',
+    dedup_key: toText(raw.dedup_key) ?? '',
+    server_id: toText(raw.server_id),
+    check_id: toText(raw.check_id),
+    status: status === 'firing' || status === 'resolved' || status === 'acked' ? status : 'firing',
+    severity:
+      severity === 'critical' || severity === 'warning' || severity === 'info'
+        ? severity
+        : 'warning',
+    title: toText(raw.title) ?? '未命名告警',
+    message: toText(raw.message),
+    value: toNumber(raw.value),
+    started_at: toNumber(raw.started_at),
+    updated_at: toNumber(raw.updated_at),
+    resolved_at: toNumber(raw.resolved_at),
+    acked_at: toNumber(raw.acked_at),
+    acked_by: toText(raw.acked_by),
+    notify_count: toNumber(raw.notify_count) ?? 0,
+    last_notify_at: toNumber(raw.last_notify_at),
+    silence_until: toNumber(raw.silence_until),
+    rule_name: toText(raw.rule_name),
+    server_name: toText(raw.server_name),
+    check_name: toText(raw.check_name),
+    events,
+  }
+}
+
+export function normalizeAlertSummary(input: unknown): AlertSummary {
+  const raw = toRecord(input) ?? {}
+  const bySeverity = toRecord(raw.by_severity) ?? {}
+  return {
+    firing: toNumber(raw.firing) ?? 0,
+    acked: toNumber(raw.acked) ?? 0,
+    resolved_24h: toNumber(raw.resolved_24h ?? raw.resolved24h) ?? 0,
+    by_severity: {
+      critical: toNumber(bySeverity.critical) ?? 0,
+      warning: toNumber(bySeverity.warning) ?? 0,
+      info: toNumber(bySeverity.info) ?? 0,
+    },
+  }
 }
 
 export function normalizeCredential(input: unknown): Credential {
@@ -1037,6 +1321,110 @@ export const api = {
     return request<unknown>(`/servers/${encodeURIComponent(serverId)}/checks`).then((raw) =>
       extractList(raw, ['checks', 'items']).map(normalizeCheck),
     )
+  },
+
+  /* ---------------------- M3：告警（契约第 20 节） ---------------------- */
+
+  alertRules(): Promise<AlertRule[]> {
+    return request<unknown>('/alert-rules').then((raw) =>
+      extractList(raw, ['rules', 'items']).map(normalizeAlertRule),
+    )
+  },
+
+  createAlertRule(payload: AlertRulePayload): Promise<AlertRule> {
+    return request<unknown>('/alert-rules', { method: 'POST', body: payload }).then(
+      normalizeAlertRule,
+    )
+  },
+
+  updateAlertRule(id: string, payload: Partial<AlertRulePayload>): Promise<AlertRule> {
+    return request<unknown>(`/alert-rules/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: payload,
+    }).then(normalizeAlertRule)
+  },
+
+  deleteAlertRule(id: string): Promise<unknown> {
+    return request<unknown>(`/alert-rules/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  /** POST /alert-rules/{id}/silence —— 临时静默（只写 silence_until） */
+  silenceAlertRule(id: string, durationS: number): Promise<AlertRule> {
+    return request<unknown>(`/alert-rules/${encodeURIComponent(id)}/silence`, {
+      method: 'POST',
+      body: { duration_s: durationS },
+    }).then(normalizeAlertRule)
+  },
+
+  alertChannels(): Promise<AlertChannel[]> {
+    return request<unknown>('/alert-channels').then((raw) =>
+      extractList(raw, ['channels', 'items']).map(normalizeAlertChannel),
+    )
+  },
+
+  createAlertChannel(payload: AlertChannelPayload): Promise<AlertChannel> {
+    return request<unknown>('/alert-channels', { method: 'POST', body: payload }).then(
+      normalizeAlertChannel,
+    )
+  },
+
+  updateAlertChannel(
+    id: string,
+    payload: Partial<AlertChannelPayload>,
+  ): Promise<AlertChannel> {
+    return request<unknown>(`/alert-channels/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: payload,
+    }).then(normalizeAlertChannel)
+  },
+
+  deleteAlertChannel(id: string): Promise<unknown> {
+    return request<unknown>(`/alert-channels/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  /** POST /alert-channels/{id}/test —— 真实发送一条测试消息，返回失败原因 */
+  testAlertChannel(id: string): Promise<ChannelTestResult> {
+    return request<unknown>(`/alert-channels/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+    }).then((raw) => {
+      const record = toRecord(raw)
+      return {
+        ok: toBool(record?.ok, false),
+        error: toText(record?.error ?? record?.message),
+      }
+    })
+  },
+
+  /** GET /alerts?status=&severity=&rule_id=&server_id=&from=&to=&limit= */
+  alerts(filters: AlertFilters = {}): Promise<AlertItem[]> {
+    const params = new URLSearchParams()
+    if (filters.status) params.set('status', filters.status)
+    if (filters.severity) params.set('severity', filters.severity)
+    if (filters.rule_id) params.set('rule_id', filters.rule_id)
+    if (filters.server_id) params.set('server_id', filters.server_id)
+    if (filters.from) params.set('from', String(filters.from))
+    if (filters.to) params.set('to', String(filters.to))
+    if (filters.limit) params.set('limit', String(filters.limit))
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    return request<unknown>(`/alerts${suffix}`).then((raw) =>
+      extractList(raw, ['alerts', 'items']).map(normalizeAlert),
+    )
+  },
+
+  /** GET /alerts/{id} —— 详情 + events 状态轨迹 */
+  alert(id: string): Promise<AlertItem> {
+    return request<unknown>(`/alerts/${encodeURIComponent(id)}`).then(normalizeAlert)
+  },
+
+  /** POST /alerts/{id}/ack —— 人工确认 */
+  ackAlert(id: string): Promise<AlertItem> {
+    return request<unknown>(`/alerts/${encodeURIComponent(id)}/ack`, { method: 'POST' }).then(
+      normalizeAlert,
+    )
+  },
+
+  alertsSummary(): Promise<AlertSummary> {
+    return request<unknown>('/alerts/summary').then(normalizeAlertSummary)
   },
 }
 

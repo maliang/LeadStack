@@ -129,3 +129,17 @@ export function metricLabel(metric: string): string {
       return metric
   }
 }
+
+/** 秒数 → 人话时长：立即 / 45 秒 / 5 分钟 / 2 小时 / 1 天 3 小时。 */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return '—'
+  const total = Math.max(0, Math.floor(seconds))
+  if (total === 0) return '立即'
+  if (total < 60) return `${total} 秒`
+  const minutes = Math.floor(total / 60)
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 === 0 ? `${hours} 小时` : `${hours} 小时 ${minutes % 60} 分钟`
+  const days = Math.floor(hours / 24)
+  return hours % 24 === 0 ? `${days} 天` : `${days} 天 ${hours % 24} 小时`
+}

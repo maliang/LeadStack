@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,10 +19,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
+	"github.com/maliang/leadstack/internal/alerting"
 	"github.com/maliang/leadstack/internal/auth"
 	"github.com/maliang/leadstack/internal/collector"
 	"github.com/maliang/leadstack/internal/config"
 	"github.com/maliang/leadstack/internal/credential"
+	"github.com/maliang/leadstack/internal/notify"
 	"github.com/maliang/leadstack/internal/store"
 	"github.com/maliang/leadstack/pkg/protocol"
 )
@@ -40,6 +43,8 @@ type testEnv struct {
 	ssh    *fakeSSH
 	runner *fakeCheckRunner
 	jobs   *fakeJobRouter
+	alerts *fakeAlertEngine
+	notif  *fakeNotifier
 }
 
 // newTestEnv 启动临时目录 + 临时 SQLite + httptest 服务。
@@ -112,10 +117,13 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	runner := &fakeCheckRunner{result: CheckRunResult{OK: true, LatencyMS: 3, TS: store.NowMS()}}
 	jobRouter := &fakeJobRouter{}
+	alertEngine := &fakeAlertEngine{}
+	notifier := &fakeNotifier{}
+	notifier.autoChannel = true
 
 	a, err := New(Options{
 		Config: cfg, Store: st, Auth: manager, Cipher: cipher, SSH: sshStub,
-		CheckRunner: runner, Jobs: jobRouter,
+		CheckRunner: runner, Jobs: jobRouter, Alerts: alertEngine, Notifier: notifier,
 		Logger: logger, Version: "test",
 	})
 	if err != nil {
@@ -127,7 +135,104 @@ func newTestEnv(t *testing.T) *testEnv {
 	return &testEnv{
 		t: t, st: st, api: a, srv: srv, http: srv.Client(),
 		cipher: cipher, ssh: sshStub, runner: runner, jobs: jobRouter,
+		alerts: alertEngine, notif: notifier,
 	}
+}
+
+// fakeAlertEngine 是 AlertEngine 的测试替身，记录引擎收到的调用。
+type fakeAlertEngine struct {
+	mu        sync.Mutex
+	events    []alerting.Event
+	samples   []alerting.MetricSample
+	evaluates int
+	reloads   int
+	err       error
+}
+
+func (f *fakeAlertEngine) HandleEvent(_ context.Context, ev alerting.Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, ev)
+	return f.err
+}
+
+func (f *fakeAlertEngine) EvaluateMetrics(_ context.Context, samples []alerting.MetricSample) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.evaluates++
+	f.samples = append(f.samples, samples...)
+	return f.err
+}
+
+// evaluateCalls 返回 EvaluateMetrics 被调用的次数。
+func (f *fakeAlertEngine) evaluateCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.evaluates
+}
+
+func (f *fakeAlertEngine) Reload(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reloads++
+	return f.err
+}
+
+func (f *fakeAlertEngine) snapshot() ([]alerting.Event, []alerting.MetricSample, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]alerting.Event(nil), f.events...),
+		append([]alerting.MetricSample(nil), f.samples...), f.reloads
+}
+
+// fakeNotifier 是 Notifier 的测试替身：可按渠道名/ID 指定失败，并记录发送过的消息。
+type fakeNotifier struct {
+	mu          sync.Mutex
+	enabled     bool
+	autoChannel bool
+	failOn      map[string]string // channelID 或 name -> 错误文案
+	sent        []string          // "channelID|title|recovered"
+	validated   []string
+}
+
+func (f *fakeNotifier) Validate(_ context.Context, kind string, config map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.validated = append(f.validated, kind)
+	if kind == "bogus-kind" {
+		return errors.New("不支持的渠道类型")
+	}
+	if _, ok := config["url"]; !ok && kind == "webhook" {
+		return errors.New("webhook 需要 url")
+	}
+	return nil
+}
+
+func (f *fakeNotifier) Send(_ context.Context, ch notify.Channel, msg notify.Message) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, fmt.Sprintf("%s|%s|%t", ch.ID, msg.Title, msg.Recovered))
+	if f.failOn != nil {
+		if reason, ok := f.failOn[ch.ID]; ok {
+			return errors.New(reason)
+		}
+		if reason, ok := f.failOn[ch.Name]; ok {
+			return errors.New(reason)
+		}
+	}
+	return nil
+}
+
+func (f *fakeNotifier) sentCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.sent)
+}
+
+func (f *fakeNotifier) sentTitles() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.sent...)
 }
 
 // fakeCheckRunner 是 CheckRunner 的测试替身。

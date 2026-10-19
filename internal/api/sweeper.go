@@ -126,6 +126,14 @@ func (a *API) runRetention(ctx context.Context) {
 	} else if n > 0 {
 		a.logger.Info("清理历史检测结果完成", "deleted", n)
 	}
+	if days := a.cfg.AlertRetentionDays; days > 0 {
+		cutoff := nowMS - int64(days)*24*3600*1000
+		if n, err := a.st.DeleteResolvedAlertsBefore(ctx, cutoff); err != nil {
+			a.logger.Warn("清理历史告警失败", "err", err)
+		} else if n > 0 {
+			a.logger.Info("清理历史告警完成", "deleted", n, "retention_days", days)
+		}
+	}
 	if n, err := a.st.DeleteExpiredEnrollTokens(ctx, nowMS); err != nil {
 		a.logger.Warn("清理过期接入令牌失败", "err", err)
 	} else if n > 0 {

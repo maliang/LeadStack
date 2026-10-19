@@ -279,4 +279,50 @@ export function ShieldCheckIcon(props: IconProps) {
   )
 }
 
+export function BellIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M18 8a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6" />
+      <path d="M10.3 19a2 2 0 0 0 3.4 0" />
+    </Base>
+  )
+}
+
+export function BellOffIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M8.7 3.9A6 6 0 0 1 18 8c0 2.6.5 4.2 1 5.2M6 8c0 5-2 6-2 6h12" />
+      <path d="M10.3 19a2 2 0 0 0 3.4 0M3 3l18 18" />
+    </Base>
+  )
+}
+
+export function SendIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M21.5 3.5 2.8 10.4a.6.6 0 0 0 .05 1.13l7.2 2.4 2.4 7.2a.6.6 0 0 0 1.13.05Z" />
+      <path d="M21.5 3.5 10.05 13.95" />
+    </Base>
+  )
+}
+
+export function HistoryIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M3.5 12a8.5 8.5 0 1 0 2.5-6" />
+      <path d="M3 4v4h4M12 8v4.5l3 1.8" />
+    </Base>
+  )
+}
+
+export function CheckCircleIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8.5 12.2 2.4 2.4 4.6-4.8" />
+    </Base>
+  )
+}
+
+
 

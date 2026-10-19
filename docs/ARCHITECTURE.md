@@ -561,3 +561,230 @@ CREATE TABLE check_state(
 8. 指标大范围查询：`step=raw` 且跨度 > 6h 时响应 `step` 变为 `1m`。
 9. 未带 token 访问 `/checks` 返回 401。
 10. `scripts/verify_m0.sh` 与 `scripts/verify_m1.sh` 仍全绿（**M2 不得回归**）。
+
+---
+
+# M3 契约（告警）
+
+> M3 补齐「**异常推送到人**」：规则引擎 · 持续时长与去重 · 静默与确认 · 7 类通知渠道 · 告警历史。
+> 触发源有三类：检测项状态翻转、服务器上下线、指标阈值。M2 的 `check_state` 与 `Deps.OnStateChange` 就是天然挂载点。
+
+## 18. 告警模型
+
+| 概念 | 约定 |
+|---|---|
+| `dedup_key` | 同类故障的唯一标识：`check:<checkID>:<serverID>` / `server:<serverID>` / `metric:<ruleID>:<serverID>`。**同一 key 同时只允许一条未解决告警** |
+| `for_duration_s` | 从「首次观测到异常」起计时，持续满足该时长才真正 `firing`；期间恢复则不告警 |
+| 去重窗口 | 告警已 `firing` 时再次触发：**不新建告警**，只累加 `notify_count` 并更新 `updated_at`；超过 `dedup_window_s` 未通知过才重新推送一次 |
+| `silence_until` | 静默期内**仍然建告警与记录事件**，但不发送通知 |
+| `acked` | 人工确认，只改变展示与后续通知策略，**不代表恢复** |
+| 恢复 | 异常解除 → 状态置 `resolved` + 发送一次恢复通知（与故障通知走同一渠道） |
+
+## 19. Go 包 API 契约
+
+### 19.1 `internal/alerting` —— 规则评估与告警状态机（`alertdev` 负责）
+
+**不得 import `internal/store` / `internal/api` / `internal/notify`**（用接口注入，保证可独立单测）。
+
+```go
+type Severity string // "critical" | "warning" | "info"
+type Source string   // "check" | "server" | "metric"
+
+type Rule struct {
+    ID           string
+    Name         string
+    Enabled      bool
+    Source       Source
+    CheckIDs     []string // 适用范围；全部为空 = 匹配所有
+    ServerIDs    []string
+    Groups       []string
+    Tags         []string
+    Metric       string   // source=metric 时使用，如 "cpu.pct"
+    Comparator   string   // ">" ">=" "<" "<="
+    Threshold    float64
+    ForDurationS int
+    Severity     Severity
+    DedupWindowS int
+    ChannelIDs   []string
+    SilenceUntil int64
+}
+
+// Event 是一次观测到的状态变化（由 backend 从检测回调/服务器上下线转成）。
+type Event struct {
+    Source      Source
+    ServerID    string
+    ServerName  string
+    Group       string
+    Tags        []string
+    CheckID     string
+    CheckName   string
+    Active      bool    // true=异常发生, false=恢复
+    Value       float64
+    Message     string
+    TS          int64
+}
+
+// MetricSample 是周期评估的输入（backend 从最新指标快照构造）。
+type MetricSample struct {
+    ServerID   string
+    ServerName string
+    Group      string
+    Tags       []string
+    Metric     string
+    Value      float64
+    TS         int64
+}
+
+type Alert struct {
+    ID, RuleID, DedupKey string
+    ServerID, CheckID    string
+    Status               string // "firing" | "resolved" | "acked"
+    Severity             Severity
+    Title, Message       string
+    Value                float64
+    StartedAt, UpdatedAt int64
+    ResolvedAt, AckedAt  int64
+    NotifyCount          int
+    LastNotifyAt         int64
+    SilenceUntil         int64
+}
+
+// Store 由 backend 实现。
+type Store interface {
+    ListRules(ctx context.Context) ([]Rule, error)
+    FindActiveAlert(ctx context.Context, dedupKey string) (*Alert, error)
+    CreateAlert(ctx context.Context, a Alert) error
+    UpdateAlert(ctx context.Context, a Alert) error
+    ResolveAlert(ctx context.Context, id string, ts int64) error
+    AppendAlertEvent(ctx context.Context, alertID, kind string, ts int64, detail string) error
+}
+
+type Deps struct {
+    Store Store
+    // Notify 由 backend 注入：按渠道发送（内部接 notify.Client）。
+    // channels 为规则配置的渠道 ID；recovered 为 true 时表示恢复通知。
+    Notify func(ctx context.Context, a Alert, channels []string, recovered bool)
+    Now    func() int64 // 可注入便于测试，默认 time.Now().UnixMilli()
+}
+
+type Engine struct{ /* ... */ }
+func New(d Deps) *Engine
+// HandleEvent 处理一次状态翻转：负责 for_duration 判定、去重、建/销告警、触发通知。
+func (e *Engine) HandleEvent(ctx context.Context, ev Event) error
+// EvaluateMetrics 周期评估指标阈值规则（同一去重键同样走 for_duration 与去重）。
+func (e *Engine) EvaluateMetrics(ctx context.Context, samples []MetricSample) error
+// Reload 规则增删改后刷新缓存（由 backend 在 API 写操作后调用）。
+func (e *Engine) Reload(ctx context.Context) error
+```
+
+### 19.2 `internal/notify` —— 通知渠道（`notifydev` 负责）
+
+**不得 import `internal/store` / `internal/api` / `internal/alerting`**。
+
+```go
+type Kind string // webhook | email | dingtalk | wecom | feishu | telegram | slack
+
+type Channel struct {
+    ID      string
+    Name    string
+    Kind    Kind
+    Enabled bool
+    Config  map[string]any
+}
+
+type Severity string // critical | warning | info
+
+type Message struct {
+    Title      string
+    Body       string
+    Severity   Severity
+    ServerName string
+    CheckName  string
+    Value      float64
+    TS         int64
+    Recovered  bool
+    AlertID    string
+    ConsoleURL string
+}
+
+type Client struct{ /* http.Client + SMTP 配置 */ }
+
+func NewClient(opts Options) *Client
+func (c *Client) Validate(ch Channel) error
+func (c *Client) Send(ctx context.Context, ch Channel, msg Message) error
+```
+
+**各 Kind 的 `Config` 字段（冻结）**
+
+| Kind | 必填 | 可选 |
+|---|---|---|
+| `webhook` | `url` | `method`(默认 POST)、`headers`(map)、`template`(`json`/`text`，默认 json)、`timeout_s` |
+| `dingtalk` | `webhook` | `secret`（加签，用 HMAC-SHA256 + base64 + urlencode） |
+| `wecom` | `webhook` | — |
+| `feishu` | `webhook` | `secret`（签名校验） |
+| `slack` | `webhook` | `channel` |
+| `telegram` | `bot_token`、`chat_id` | `parse_mode`、`api_base`（**测试/代理用**，默认 `https://api.telegram.org`） |
+| `email` | `smtp_host`、`from`、`to`(数组) | `smtp_port`(默认 587)、`username`、`password`、`tls`(`starttls`/`ssl`/`none`，默认 starttls) |
+
+发送要求：单渠道超时 10s；HTTP 非 2xx 视为失败并**截断响应体**（保留前 512 字节）进错误信息；**渠道配置里的密钥类字段在日志与错误信息中必须脱敏**（`xxx` 或只留前 4 位）。
+
+## 20. REST 新增端点（前缀 `/api/v1`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET/POST | `/alert-rules` | 规则列表 / 创建（201） |
+| GET/PATCH/DELETE | `/alert-rules/{id}` | 详情 / 修改（改后需 Reload）/ 删除 |
+| POST | `/alert-rules/{id}/silence` | `{duration_s}` 临时静默（写 `silence_until`） |
+| GET/POST | `/alert-channels` | 渠道列表（**配置中的密钥类字段必须脱敏返回**）/ 创建 |
+| PATCH/DELETE | `/alert-channels/{id}` | 修改 / 删除 |
+| POST | `/alert-channels/{id}/test` | 发送一条测试消息 → `{ok,error?}` |
+| GET | `/alerts` | `?status=&severity=&rule_id=&server_id=&from=&to=&limit=` 告警列表 |
+| GET | `/alerts/{id}` | 详情 + `events`（状态变更轨迹与通知记录） |
+| POST | `/alerts/{id}/ack` | 人工确认 → `status=acked`，记 `acked_at` |
+| GET | `/alerts/summary` | `{firing,acked,resolved_24h,by_severity:{critical,warning,info}}` |
+
+**规则 body**：`{name,enabled,source,check_ids?,server_ids?,groups?,tags?,metric?,comparator?,threshold?,for_duration_s,severity,dedup_window_s,channel_ids}`。
+**渠道 body**：`{name,kind,enabled,config:{...}}`；`config` 落库前用 `credential.Cipher` 加密（复用 M1 主密钥）。
+
+## 21. 数据库迁移 `0005_alerts.sql`
+
+```sql
+CREATE TABLE alert_rules(
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+  source TEXT NOT NULL, check_ids TEXT NOT NULL DEFAULT '[]', server_ids TEXT NOT NULL DEFAULT '[]',
+  groups TEXT NOT NULL DEFAULT '[]', tags TEXT NOT NULL DEFAULT '[]',
+  metric TEXT, comparator TEXT, threshold REAL,
+  for_duration_s INTEGER NOT NULL DEFAULT 0, severity TEXT NOT NULL DEFAULT 'warning',
+  dedup_window_s INTEGER NOT NULL DEFAULT 300, channel_ids TEXT NOT NULL DEFAULT '[]',
+  silence_until INTEGER, created_at INTEGER NOT NULL);
+CREATE TABLE alert_channels(
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+  config_enc BLOB NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+  last_error TEXT, last_ok_at INTEGER, created_at INTEGER NOT NULL);
+CREATE TABLE alerts(
+  id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, dedup_key TEXT NOT NULL,
+  server_id TEXT, check_id TEXT, status TEXT NOT NULL, severity TEXT NOT NULL,
+  title TEXT NOT NULL, message TEXT, value REAL,
+  started_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  resolved_at INTEGER, acked_at INTEGER, acked_by TEXT,
+  notify_count INTEGER NOT NULL DEFAULT 0, last_notify_at INTEGER, silence_until INTEGER);
+CREATE INDEX idx_alerts_dedup ON alerts(dedup_key, status);
+CREATE INDEX idx_alerts_started ON alerts(started_at);
+CREATE TABLE alert_events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, alert_id TEXT NOT NULL,
+  kind TEXT NOT NULL, ts INTEGER NOT NULL, detail TEXT);
+```
+
+## 22. M3 验收标准（`scripts/verify_m3.sh` 一键复现）
+
+1. `make build` 成功；`go vet ./...` 与 `go test ./...` 全绿；M0/M1/M2 脚本仍全绿。
+2. 创建 `webhook` 渠道指向**本机 HTTP 接收器**，`POST /alert-channels/{id}/test` → `ok=true` 且接收器**真实收到**一次 POST。
+3. 渠道列表接口**不返回**配置中的密钥明文（以原始 token/secret 片段反向断言）。
+4. 创建 `source=check` 规则（`for_duration_s=0`、severity=critical、绑定上述渠道与目标检测项）→ 制造失败检测项 → 60 秒内 `/alerts` 出现 `firing`，且接收器收到告警通知（标题含规则名/服务器名）。
+5. `POST /alerts/{id}/ack` → `status=acked`；`GET /alerts/{id}` 的 `events` 含 ack 记录。
+6. **恢复通知**：把检测项目标改为可达 → 告警转 `resolved`，接收器收到第二封（恢复）通知。
+7. **去重**：同一故障重复触发**不新增告警记录**（总数不变），`notify_count` 增长受 `dedup_window_s` 约束。
+8. **指标规则**：`source=metric`（如 `cpu.pct > 0`）在周期评估后产生 `firing` 告警。
+9. **静默**：`POST /alert-rules/{id}/silence` 后新触发仍建告警但**接收器不再收到新通知**。
+10. `GET /alerts/summary` 返回 `firing`/`by_severity` 计数；未带 token 访问 `/alert-rules` 返回 401。
+11. `scripts/verify_m0.sh`、`verify_m1.sh`、`verify_m2.sh` 仍全绿（**M3 不得回归**）。

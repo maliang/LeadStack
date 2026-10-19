@@ -10,6 +10,7 @@ import { errorMessage } from '../lib/errors'
 import { cn } from '../lib/cn'
 import { formatLatency, formatRelativeTime } from '../lib/format'
 import { Button, IconButton } from '../components/Button'
+import { EnableSwitch } from '../components/EnableSwitch'
 import { CheckFormDialog } from '../components/CheckFormDialog'
 import { CheckKindBadge, CheckStateBadge, availabilityTone } from '../components/CheckBadges'
 import { ConfirmDialog } from '../components/ConfirmDialog'
@@ -32,39 +33,6 @@ interface RunState {
   loading: boolean
   error: string | null
   response: RunCheckResponse | null
-}
-
-function EnableSwitch({
-  checked,
-  loading,
-  onChange,
-}: {
-  checked: boolean
-  loading: boolean
-  onChange: () => void
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={checked ? '停用该检测项' : '启用该检测项'}
-      disabled={loading}
-      onClick={onChange}
-      className={cn(
-        'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500',
-        checked ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-700',
-        loading && 'opacity-50',
-      )}
-    >
-      <span
-        className={cn(
-          'inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform',
-          checked ? 'translate-x-[19px]' : 'translate-x-[3px]',
-        )}
-      />
-    </button>
-  )
 }
 
 const STATE_FILTERS: { value: CheckState | ''; label: string }[] = [

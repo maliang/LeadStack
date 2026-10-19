@@ -53,6 +53,38 @@ func (a *API) Router() http.Handler {
 
 			r.Get("/groups", a.handleListGroups)
 
+			// ---- M3 告警 ----
+			r.Route("/alert-rules", func(r chi.Router) {
+				r.Get("/", a.handleListAlertRules)
+				r.Post("/", a.handleCreateAlertRule)
+				r.Route("/{ruleID}", func(r chi.Router) {
+					r.Get("/", a.handleGetAlertRule)
+					r.Patch("/", a.handlePatchAlertRule)
+					r.Delete("/", a.handleDeleteAlertRule)
+					r.Post("/silence", a.handleSilenceAlertRule)
+				})
+			})
+
+			r.Route("/alert-channels", func(r chi.Router) {
+				r.Get("/", a.handleListAlertChannels)
+				r.Post("/", a.handleCreateAlertChannel)
+				r.Route("/{channelID}", func(r chi.Router) {
+					r.Patch("/", a.handlePatchAlertChannel)
+					r.Delete("/", a.handleDeleteAlertChannel)
+					r.Post("/test", a.handleTestAlertChannel)
+				})
+			})
+
+			r.Route("/alerts", func(r chi.Router) {
+				// /alerts/summary 必须先于 /alerts/{alertID} 注册。
+				r.Get("/summary", a.handleAlertSummary)
+				r.Get("/", a.handleListAlerts)
+				r.Route("/{alertID}", func(r chi.Router) {
+					r.Get("/", a.handleGetAlert)
+					r.Post("/ack", a.handleAckAlert)
+				})
+			})
+
 			r.Route("/checks", func(r chi.Router) {
 				// /checks/summary 与 /checks/{checkID} 同为静态优先，显式先注册避免歧义。
 				r.Get("/summary", a.handleCheckSummary)

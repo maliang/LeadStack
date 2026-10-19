@@ -76,6 +76,19 @@ export function AppLayout() {
               检测
             </NavLink>
             <NavLink
+              to="/alerts"
+              className={({ isActive }) =>
+                cn(
+                  'rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors sm:px-3',
+                  isActive
+                    ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800',
+                )
+              }
+            >
+              告警
+            </NavLink>
+            <NavLink
               to="/credentials"
               className={({ isActive }) =>
                 cn(

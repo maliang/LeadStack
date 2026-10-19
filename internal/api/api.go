@@ -38,7 +38,11 @@ type Options struct {
 	// Jobs 接收 agent 的 job.* 帧（由 jobs.Dispatcher 实现）；为 nil 时这些帧被忽略。
 	Jobs JobRouter
 	// Hub 可注入活跃连接表；为 nil 时内部新建（调用方可先建 Hub 再构造依赖它的下发器）。
-	Hub       *Hub
+	Hub *Hub
+	// Alerts 是告警引擎端口（*alerting.Engine）；为 nil 时规则/渠道写操作不触发 Reload。
+	Alerts AlertEngine
+	// Notifier 是通知渠道端口（*NotifyAdapter）；为 nil 时渠道配置不做强校验、测试发送返回未启用。
+	Notifier  Notifier
 	Version   string
 	StartedAt time.Time
 }
@@ -52,6 +56,8 @@ type API struct {
 	ssh       SSHService
 	checks    CheckRunner
 	jobs      JobRouter
+	alerts    AlertEngine
+	notifier  Notifier
 	logger    *slog.Logger
 	version   string
 	startedAt time.Time
@@ -94,6 +100,8 @@ func New(opts Options) (*API, error) {
 		ssh:       opts.SSH,
 		checks:    opts.CheckRunner,
 		jobs:      opts.Jobs,
+		alerts:    opts.Alerts,
+		notifier:  opts.Notifier,
 		logger:    logger,
 		version:   version,
 		startedAt: startedAt,
