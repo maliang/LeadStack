@@ -14,6 +14,7 @@ const (
 	TypeHello     = "hello"
 	TypeHeartbeat = "heartbeat"
 	TypeMetrics   = "metrics"
+	TypeHostInfo  = "host_info"
 	TypeJobAck    = "job.ack"
 	TypeJobLog    = "job.log"
 	TypeJobDone   = "job.done"
@@ -99,6 +100,27 @@ type Sample struct {
 // Metrics 是批量指标上报。
 type Metrics struct {
 	Samples []Sample `json:"samples"`
+}
+
+// HostInfo 是 agent 上报的主机静态信息（上线后立即一次，之后每 6 小时一次）。
+// 字段与 internal/hostinfo.Info 一一对应，json tag 必须保持一致。
+type HostInfo struct {
+	Hostname       string   `json:"hostname"`
+	OS             string   `json:"os"`
+	OSVersion      string   `json:"os_version"`
+	Kernel         string   `json:"kernel"`
+	Arch           string   `json:"arch"`
+	CPUModel       string   `json:"cpu_model"`
+	CPUCores       int      `json:"cpu_cores"`
+	MemTotalBytes  uint64   `json:"mem_total_bytes"`
+	DiskTotalBytes uint64   `json:"disk_total_bytes"`
+	DiskUsedBytes  uint64   `json:"disk_used_bytes"`
+	UptimeS        int64    `json:"uptime_s"`
+	Timezone       string   `json:"timezone"`
+	Docker         bool     `json:"docker"`
+	DockerVersion  string   `json:"docker_version,omitempty"`
+	IPAddrs        []string `json:"ip_addrs"`
+	CollectedAt    int64    `json:"collected_at"`
 }
 
 // JobExec 是控制端下发的任务。

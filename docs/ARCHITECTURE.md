@@ -161,3 +161,214 @@ ID 用 UUID v4 字符串；时间戳统一 **Unix 毫秒整数**；迁移用内�
 - 提交前自测：`make build` 通过 + 自己负责的接口能被 `curl` 打通。
 - 遇到契约不明处：**先按本文件实现，把疑问报给 lead**，不要私自改契约。
 - 完成后向 lead 汇报：改了哪些文件、如何验证、遗留问题。
+
+---
+
+# M1 契约（服务器纳管）
+
+> M1 在 M0 基础上补齐：**SSH 凭证管理 · 连通性测试 · 主机信息 · Agentless 采集 · 分组标签与批量操作 · 指标历史与降采样**。
+> 本节所有签名与字段均已冻结，实现方不得自行改名；确有必要请先报告 lead。
+
+## 8. Go 包 API 契约（`sshmgr` 交付，`backend` 消费）
+
+> 这三组包**只依赖标准库 + `golang.org/x/crypto` + `pkg/protocol`**，不得 import `internal/store` 或 `internal/api`（保证可独立单测）。
+
+### 8.1 `internal/credential` —— 密钥托管与加解密
+
+```go
+type Kind string // "password" | "key"
+
+type Secret struct {
+    Kind       Kind   `json:"kind"`
+    Username   string `json:"username"`
+    Password   string `json:"password,omitempty"`
+    PrivateKey []byte `json:"private_key,omitempty"` // PEM 原文
+    Passphrase string `json:"passphrase,omitempty"`
+}
+
+// LoadOrCreateMasterKey 读取 32 字节主密钥；文件不存在则安全随机构造并以 0600 落盘。
+func LoadOrCreateMasterKey(path string) ([]byte, error)
+
+type Cipher struct{ /* ... */ }
+
+func NewCipher(masterKey []byte) (*Cipher, error)
+// Encrypt 输出 nonce || AES-256-GCM(ciphertext)，可直接存 BLOB。
+func (c *Cipher) Encrypt(plain []byte) ([]byte, error)
+func (c *Cipher) Decrypt(blob []byte) ([]byte, error)
+
+func Marshal(s Secret) ([]byte, error)
+func Unmarshal(b []byte) (Secret, error)
+func Validate(s Secret) error
+// Fingerprint 返回 "SHA256:<base64>"，仅对私钥有意义；password 类型返回空串。
+func Fingerprint(privateKeyPEM []byte) (string, error)
+```
+
+### 8.2 `internal/sshx` —— SSH 客户端
+
+```go
+// Runner 是可执行远程命令的最小抽象；hostinfo 只依赖它，便于测试替身。
+type Runner interface {
+    Run(ctx context.Context, cmd string) (stdout, stderr string, exitCode int, err error)
+}
+
+type Auth struct {
+    Username   string
+    Password   string
+    PrivateKey []byte // PEM
+    Passphrase string
+}
+
+type HostKeyPolicy string // "insecure" | "accept-new" | "strict"
+
+type DialOptions struct {
+    Host           string
+    Port           int
+    Auth           Auth
+    Timeout        time.Duration   // 默认 10s
+    HostKeyPolicy  HostKeyPolicy   // 默认 "accept-new"
+    KnownHostsPath string          // accept-new / strict 时使用
+    OnNewHostKey   func(host, fingerprint string) // accept-new 首次见到主机密钥时回调（落库）
+}
+
+type Client struct{ /* ... */ }
+
+func Dial(ctx context.Context, o DialOptions) (*Client, error)
+func (c *Client) Run(ctx context.Context, cmd string) (stdout, stderr string, exitCode int, err error)
+func (c *Client) ServerVersion() string      // 形如 "SSH-2.0-OpenSSH_9.6"
+func (c *Client) HostKeyFingerprint() string // "SHA256:<base64>"
+func (c *Client) Close() error
+```
+
+### 8.3 `internal/hostinfo` —— 主机信息与 Agentless 指标
+
+```go
+type Info struct {
+    Hostname       string   `json:"hostname"`
+    OS             string   `json:"os"`          // linux | darwin | windows
+    OSVersion      string   `json:"os_version"`
+    Kernel         string   `json:"kernel"`
+    Arch           string   `json:"arch"`
+    CPUModel       string   `json:"cpu_model"`
+    CPUCores       int      `json:"cpu_cores"`
+    MemTotalBytes  uint64   `json:"mem_total_bytes"`
+    DiskTotalBytes uint64   `json:"disk_total_bytes"`
+    DiskUsedBytes  uint64   `json:"disk_used_bytes"`
+    UptimeS        int64    `json:"uptime_s"`
+    Timezone       string   `json:"timezone"`
+    Docker         bool     `json:"docker"`
+    DockerVersion  string   `json:"docker_version,omitempty"`
+    IPAddrs        []string `json:"ip_addrs"`
+    CollectedAt    int64    `json:"collected_at"` // Unix 毫秒
+}
+
+func Collect(ctx context.Context, r sshx.Runner) (Info, error)
+
+// Sampler 持有每台服务器的上一份 CPU 计数，用于算区间占用率（无状态则首帧 CPU 为空）。
+type Sampler struct{ /* ... */ }
+func NewSampler() *Sampler
+// Collect 返回 cpu.pct / mem.used_pct / mem.used_bytes / load.1 / disk.used.pct / uptime_s。
+// 单项失败跳过该指标而不是整体报错；serverID 用于隔离各服务器的上一次采样。
+func (s *Sampler) Collect(ctx context.Context, serverID string, r sshx.Runner) ([]protocol.Sample, error)
+```
+
+### 8.4 `internal/devssh` + `cmd/leadstack-devssh` —— 测试专用 SSH 服务
+
+本机没有 sshd、也没有免密 sudo，SSH 路径必须有一个**可控端点**才能验收。
+
+```go
+// package devssh 仅用于开发与测试，不参与发布构建。
+type Config struct {
+    Addr          string // 如 127.0.0.1:0，传 0 由系统分配
+    Username      string // 默认 devuser
+    Password      string // 默认 devpass
+    AuthorizedKey []byte // 允许的客户端公钥（authorized_keys 行）
+    Executor      func(cmd string) (stdout, stderr string, exitCode int) // 默认：本机真实执行 sh -c
+}
+func Start(cfg Config) (*Server, error)
+func (s *Server) Addr() string
+func (s *Server) Close() error
+```
+
+`cmd/leadstack-devssh` 以固定端口与固定账号启动它，启动横幅必须显式打印 `DEV-ONLY` 警告，供 `scripts/verify_m1.sh` 驱动真实 HTTP API。
+
+## 9. 协议扩展（`pkg/protocol`）
+
+新增一种 agent → 控制端消息，其余不变：
+
+| type | payload |
+|---|---|
+| `host_info` | 下方 `HostInfo`，agent 上线后立即上报一次，之后每 6 小时一次 |
+
+```go
+const TypeHostInfo = "host_info"
+
+type HostInfo struct { // 字段与 hostinfo.Info 一一对应，json tag 相同
+    Hostname, OS, OSVersion, Kernel, Arch, CPUModel string
+    CPUCores int
+    MemTotalBytes, DiskTotalBytes, DiskUsedBytes uint64
+    UptimeS int64
+    Timezone string
+    Docker bool
+    DockerVersion string
+    IPAddrs []string
+    CollectedAt int64
+}
+```
+
+## 10. REST 新增端点（前缀 `/api/v1`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/credentials` | 凭证列表，**绝不返回明文或密钥内容**：`{id,name,kind,username,fingerprint,created_at,server_count}` |
+| POST | `/credentials` | 创建凭证 `{name,kind,username,password?,private_key?,passphrase?}` → 201 |
+| DELETE | `/credentials/{id}` | 被服务器引用时返回 409 `conflict` |
+| POST | `/servers/{id}/test-connection` | → `{ok,latency_ms,ssh_banner,host_key_fingerprint,error?}` |
+| POST | `/servers/{id}/refresh-host-info` | 通过 SSH 采集并落库 → `host_info` |
+| POST | `/servers/batch` | `{ids,action,params?}`，action ∈ `test-connection`/`refresh-host-info`/`add-tags`/`set-group`/`delete` → `{results:[{id,ok,error?}],summary:{ok,failed}}` |
+| GET | `/servers/{id}/metrics` | `?from=<ms>&to=<ms>&step=raw\|1m\|1h` → `{series:[{metric,points:[{ts,value}]}],step}` |
+| GET | `/groups` | 由 servers 聚合出的分组名与数量（M1 不建独立表） |
+
+**`POST /servers` 扩展字段**：`credential_id`、`mode`（`agent`/`ssh`）、`group`、`tags`、`host_key_policy`。
+**`GET /servers` 扩展**：支持 `?group=&tag=&status=&mode=` 过滤；每项新增 `mode`、`group`、`credential_id`、`last_error`、`host_info`（无则 `null`）。
+**agentless 行为**：`mode=ssh` 的服务器由控制端按 `LEADSTACK_SSH_INTERVAL`（默认 30s）采集，连续 3 次失败置 `offline` 并写 `last_error`；成功一次即恢复 `online`。
+
+## 11. 数据库迁移
+
+`0002_credentials.sql`
+
+```sql
+CREATE TABLE credentials(
+  id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL,
+  username TEXT NOT NULL, secret_enc BLOB NOT NULL,
+  fingerprint TEXT, created_at INTEGER NOT NULL);
+ALTER TABLE servers ADD COLUMN credential_id TEXT;
+ALTER TABLE servers ADD COLUMN "group" TEXT;
+ALTER TABLE servers ADD COLUMN host_key_policy TEXT NOT NULL DEFAULT 'accept-new';
+ALTER TABLE servers ADD COLUMN last_error TEXT;
+CREATE TABLE server_host_info(
+  server_id TEXT PRIMARY KEY, info_json TEXT NOT NULL, collected_at INTEGER NOT NULL);
+```
+
+`0003_metrics_rollup.sql`
+
+```sql
+CREATE TABLE metrics_rollup(
+  server_id TEXT NOT NULL, metric TEXT NOT NULL, bucket TEXT NOT NULL, ts INTEGER NOT NULL,
+  avg REAL NOT NULL, min REAL NOT NULL, max REAL NOT NULL, cnt INTEGER NOT NULL,
+  PRIMARY KEY(server_id, metric, bucket, ts)) WITHOUT ROWID;
+```
+
+保留策略：原始指标 7 天；`1m` 汇总 30 天；`1h` 汇总 1 年。降采样任务随清扫循环运行，每次最多处理 5000 行。
+
+## 12. M1 验收标准（`scripts/verify_m1.sh` 一键复现）
+
+1. `make build` 成功；`go vet ./...` 与 `go test ./...` 全绿。
+2. 创建 SSH 私钥凭证 → 列表接口响应中**不出现**任何密钥明文（以原始私钥片段做反向断言）。
+3. 启动 `leadstack-devssh` → 添加 `mode=ssh` 服务器 → `test-connection` 返回 `ok=true`、SSH banner、主机密钥指纹。
+4. `refresh-host-info` 返回 hostname/os/kernel/arch/cpu_cores/mem_total_bytes/disk_total_bytes/uptime_s 且全部非空。
+5. 60 秒内出现 agentless 采集的 `cpu.pct`/`mem.used_pct`/`load.1`，状态为 `online`。
+6. `GET /servers/{id}/metrics?step=raw` 返回时间序列；构造历史后 `step=1m` 可返回汇总。
+7. 批量 `add-tags` + `test-connection` 对 2 台机器返回逐台结果与汇总。
+8. `?group=` 过滤生效；agent 模式服务器上报 `host_info` 后详情可见主机信息。
+9. 未带 token 访问 `/credentials` 返回 401；被引用的凭证删除返回 409。
+10. `scripts/verify_m0.sh` 仍全绿（**M1 不得回归 M0**）。
