@@ -392,6 +392,8 @@ CREATE TABLE metrics_rollup(
 
 **Executor 决定目标机执行通道**：agent 模式 → 控制端下发 job（`internal/jobs`）；ssh 模式 → SSH `Run`。两种模式对检测层完全透明。
 
+**M2 已知限制（记录在案）**：`process`/`script` 的命令由**控制端**生成，`process` 分支按控制端 `GOOS` 选择实现（POSIX `ps+awk` / Windows `tasklist`）。因此**跨 OS 纳管**（例如 Linux 控制端纳管 Windows 目标）时 process 检测会走错分支。`Executor` 接口当前不带目标机 OS；M3/M4 若要支持跨 OS 检测，需要在此接口上扩展 OS 字段（属于破坏性变更，届时同步更新本节）。
+
 ## 14. Go 包 API 契约（`checkdev` 交付，`backend`/`agentdev` 消费）
 
 ### 14.1 `internal/checker` —— 探测与调度（`checkdev` 负责）
