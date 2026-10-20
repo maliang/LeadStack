@@ -30,6 +30,11 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量节点 agent，跨平台、开箱
   - **批量推送**：一次发到 N 台机器，并发上限可配；一台失败不影响其它机器
   - **增量日志**：发布详情页按 `after_seq` 增量拉取并追加，实时看进度
   - **重试只跑失败项**、支持取消；有发布记录的应用不允许直接删除（409）
+- **数据备份与恢复**：
+  - 在线备份（不停服），加密归档 `LSBAK1`；包含库、**凭证主密钥**、主机密钥，可选含上传制品
+  - **恢复**：控制台上传（暂存 + 重启生效）或 CLI 离线恢复；恢复前数据自动保留到 `pre-restore` 目录
+  - **定时备份**：可配间隔与保留份数
+  - ⚠️ 解密口令在 `<data_dir>/backup.pass`，**不在归档内**——必须单独保管，丢失后备份永久无法解密
 - **分组标签与批量操作**：按分组/标签/状态/接入方式筛选；批量测连通性、刷新主机信息、加标签、设分组、删除，逐台给出结果
 - **指标与历史**：CPU / 内存 / 磁盘 / 负载 / 网络 / 进程数实时展示 + 历史曲线（raw / 1m / 1h 三档，自动降采样；大范围查询自动降级）
 - agent 掉线 45 秒内自动判定离线；SSH 模式连续 3 次采集失败判离线并记录原因，恢复后自动清除错误
@@ -97,6 +102,11 @@ docs/                   计划书与接口契约
 | `LEADSTACK_DEPLOY_CONCURRENCY` | `4` | 发布并发上限 |
 | `LEADSTACK_ARTIFACT_MAX_MB` | `512` | 上传制品大小上限 |
 | `LEADSTACK_PUBLIC_URL` | 无 | 目标机回连控制端的地址；使用「上传型制品」时必填 |
+| `LEADSTACK_BACKUP_DIR` | `<data_dir>/backups` | 备份归档输出目录 |
+| `LEADSTACK_BACKUP_INTERVAL` | `24h` | 定时备份间隔 |
+| `LEADSTACK_BACKUP_RETENTION` | `7` | 保留份数 |
+| `LEADSTACK_BACKUP_INCLUDE_ARTIFACTS` | `false` | 定时备份是否包含上传制品 |
+| `LEADSTACK_BACKUP_PASSPHRASE` | 无（用 `backup.pass`） | 归档加密口令；设置了就不用文件 |
 
 > ⚠️ `master.key` 丢失将导致已存凭证无法解密，请与数据目录一并备份。
 
@@ -114,9 +124,10 @@ docs/                   计划书与接口契约
 - **M2（监控与检测）已完成** —— [交付报告](docs/M2-REPORT.md)（25/25 项验收，M0/M1 无回归）
 - **M3（告警）已完成** —— [交付报告](docs/M3-REPORT.md)（29/29 项验收，M0–M2 无回归）
 - **M4（批量部署）已完成** —— [交付报告](docs/M4-REPORT.md)（33/33 项验收，M0–M3 无回归）
+- **数据备份与恢复已完成** —— [交付报告](docs/BACKUP-REPORT.md)（35/35 项验收）
 - M5–M6 计划见 [计划书](docs/PLAN.md)
 
-端到端验收可一键复现（共 131 项断言）：
+端到端验收可一键复现（共 166 项断言）：
 
 ```bash
 make build && make devssh
@@ -125,6 +136,7 @@ bash scripts/verify_m1.sh    # 33 项：凭证、SSH 纳管、主机信息、批
 bash scripts/verify_m2.sh    # 25 项：五类检测、两条执行通道、调度、降级
 bash scripts/verify_m3.sh    # 29 项：渠道、firing、去重、确认、恢复、指标规则、静默
 bash scripts/verify_m4.sh    # 33 项：发布、产物落盘校验、失败保护、回滚、批量、重试、注入防护
+bash scripts/verify_backup.sh # 35 项：加密有效性、篡改检测、离线恢复、暂存恢复、定时与保留
 # 或：make test-e2e
 ```
 
