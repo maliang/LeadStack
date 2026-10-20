@@ -425,6 +425,77 @@ fi
 NET_AUDIT="$(api GET '/api/v1/audit-logs?limit=200' "" "$TOKEN")"
 printf '%s' "$NET_AUDIT" | grep -q 'network' && pass "审计记录了网络设置变更" || fail "审计缺少网络设置变更"
 
+# ---------------------------------------------------------------- 15. 监听端口不可自锁
+step "15. 监听端口不可自锁（回退链 + 离线 CLI）"
+# 15.1 占用一个端口 O，把它写进 settings，再以 env 指定空闲端口 F 启动 → 必须仍能启动
+OCC_PORT=$((PORT + 51))
+FREE_PORT2=$((PORT + 52))
+python3 - "$OCC_PORT" > "$BASE_DIR/occ.log" 2>&1 <<'PYOCC' &
+import socket, sys, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(8)
+time.sleep(180)
+PYOCC
+OCC_PID=$!
+for _ in $(seq 1 30); do nc -z 127.0.0.1 "$OCC_PORT" 2>/dev/null && break; sleep 0.2; done
+
+stop_lead
+# 用离线 CLI 把被占端口写进设置（不启动服务）
+CLI_OUT="$BASE_DIR/cli.log"
+./bin/leadstack network --data-dir "$DATA_DIR" --listen "127.0.0.1:${OCC_PORT}" > "$CLI_OUT" 2>&1
+CLI_CODE=$?
+if [ "$CLI_CODE" = "0" ] && grep -q "$OCC_PORT" "$CLI_OUT"; then
+  pass "离线 CLI 可写监听设置（无需服务运行）"
+else
+  fail "离线 CLI 写入失败（exit=${CLI_CODE}）：$(tail -2 "$CLI_OUT" | tr '\n' ' ')"
+fi
+# --show 应能看到 settings 值
+./bin/leadstack network --data-dir "$DATA_DIR" --show > "$BASE_DIR/show.log" 2>&1
+grep -q "$OCC_PORT" "$BASE_DIR/show.log" && pass "离线 CLI --show 回显设置值" || fail "CLI --show 未回显设置值"
+
+# 以 env 指定空闲端口启动：应回退到 F 并成功
+mkdir -p "$DATA_DIR"
+LEADSTACK_LISTEN="127.0.0.1:${FREE_PORT2}" LEADSTACK_DATA_DIR="$DATA_DIR" \
+LEADSTACK_ADMIN_PASSWORD="$ADMIN_PASS" LEADSTACK_TERMINAL_ENABLED=false \
+  ./bin/leadstack > "$BASE_DIR/lead2.log" 2>&1 &
+LEAD_PID=$!
+UP2=0
+for _ in $(seq 1 80); do [ "$(status_of "http://127.0.0.1:${FREE_PORT2}/healthz")" = "200" ] && { UP2=1; break; }; sleep 0.3; done
+if [ "$UP2" = "1" ]; then
+  pass "设置里的端口被占用时仍能启动并回退到 env 端口 ${FREE_PORT2}"
+else
+  fail "回退失败（服务未在 ${FREE_PORT2} 起来）"
+  tail -12 "$BASE_DIR/lead2.log" | sed 's/^/      /'
+fi
+grep -qiE "回退|fallback|WARN" "$BASE_DIR/lead2.log" && pass "启动日志有回退告警" || fail "启动日志缺少回退告警"
+# 回退后的服务监听在 FREE_PORT2，取 token / 查询都要临时指向该端口。
+BASE_SAVED="$BASE"
+BASE="http://127.0.0.1:${FREE_PORT2}"
+TOKEN="$(login admin "$ADMIN_PASS")"
+FALLBACK="$(api GET /api/v1/system/network "" "$TOKEN" | jq -r '.data.fallback_reason // empty' 2>/dev/null)"
+BASE="$BASE_SAVED"
+[ -n "$FALLBACK" ] && pass "接口返回 fallback_reason：${FALLBACK:0:60}" || fail "fallback_reason 为空（未暴露回退原因）"
+
+# 15.2 命令行 --listen 压过 settings 坏值
+stop_lead
+G_PORT=$((PORT + 53))
+LEADSTACK_DATA_DIR="$DATA_DIR" LEADSTACK_ADMIN_PASSWORD="$ADMIN_PASS" \
+  ./bin/leadstack --listen "127.0.0.1:${G_PORT}" > "$BASE_DIR/lead3.log" 2>&1 &
+LEAD_PID=$!
+UP3=0
+for _ in $(seq 1 80); do [ "$(status_of "http://127.0.0.1:${G_PORT}/healthz")" = "200" ] && { UP3=1; break; }; sleep 0.3; done
+[ "$UP3" = "1" ] && pass "显式 --listen 压过 settings 坏值（监听 ${G_PORT}）" || fail "命令行 --listen 未生效"
+
+# 15.3 --reset 清空设置
+stop_lead
+./bin/leadstack network --data-dir "$DATA_DIR" --reset > "$BASE_DIR/reset.log" 2>&1
+if grep -q "$OCC_PORT" "$BASE_DIR/reset.log" 2>/dev/null; then
+  fail "--reset 后仍显示旧设置"
+else
+  pass "离线 CLI --reset 清空设置"
+fi
+kill "$OCC_PID" 2>/dev/null; wait "$OCC_PID" 2>/dev/null
+
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"

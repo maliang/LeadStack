@@ -9,6 +9,7 @@ import { usePrefs } from '../lib/prefs'
 import { Button } from '../components/Button'
 import { AppearanceSettings } from '../components/AppearanceSettings'
 import { NetworkSettingsCard } from '../components/NetworkSettingsCard'
+import { NetworkFallbackBanner } from '../components/NetworkFallbackBanner'
 import { KeyIcon } from '../components/Icons'
 import { PageHeader } from '../components/PageHeader'
 import { useToast } from '../components/Toast'
@@ -58,6 +59,8 @@ export default function SettingsPage() {
   return (
     <div className="space-y-5">
       <PageHeader title={t('nav.settings')} description={t('settings.description')} />
+
+      <NetworkFallbackBanner />
 
       <NetworkSettingsCard />
 

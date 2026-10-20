@@ -1,4 +1,16 @@
 const zhCN: Record<string, string> = {
+  'network.honestNotice': '修改监听地址需重启控制端才生效。若新端口被占用或不可绑定，服务会自动回退到环境变量 / 默认 / 临时端口，并在启动日志中打印实际监听地址——所以即使改错了也不会彻底失联。重启后请以本页「当前生效」或日志为准。',
+  'network.escape.title': '打不开控制台时怎么办？',
+  'network.escape.description': '如果新端口起不来、控制台打不开，不需要重装：用下面的离线命令在服务器上直接修正设置，再用 `--listen` 临时启动进入控制台。',
+  'network.escape.offlineLabel': '离线修改设置（下次启动生效）',
+  'network.escape.temporaryLabel': '临时用指定端口启动（不改配置）',
+  'network.escape.note': '命令在控制端所在机器、与 leadstack 二进制同一目录执行；离线命令需要能访问数据目录（默认 /var/lib/leadstack 或启动时的 --data-dir）。',
+  'network.saveFailedHint': '端口可能已被占用。可以换一个端口再保存，或用 `leadstack --listen 127.0.0.1:9090` 临时启动控制端，进入控制台后再改。',
+  'network.fallback.title': '当前监听地址是启动回退的结果（{active}）',
+  'network.fallback.reason': '回退原因：{reason}',
+  'network.fallback.hint': '请修正监听端口，或检查 LEADSTACK_LISTEN 环境变量；修好后重启控制端生效。',
+  'network.fallback.goSettings': '去设置页修正',
+
   'network.error.publicUrlCannotClear': '如需清空对外地址，请使用「恢复默认」',
   'network.title': '网络与端口',
   'network.description': '控制台监听地址、对外地址与目标机默认 SSH 端口；全部在这里配置，不必再改环境变量。',

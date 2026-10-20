@@ -1,4 +1,16 @@
 const enUS: Record<string, string> = {
+  'network.honestNotice': 'Changing the listen address requires a control-plane restart. If the new port is taken or cannot be bound, the service automatically falls back to the environment value, the default, or a temporary port, and prints the actual address in the startup log — so a bad value will not lock you out. After restarting, trust “Effective” below or the log.',
+  'network.escape.title': 'Cannot open the console?',
+  'network.escape.description': 'If the new port fails to start and the console is unreachable, there is no need to reinstall: fix the setting offline on the server with the command below, then start temporarily with `--listen` to get back in.',
+  'network.escape.offlineLabel': 'Fix settings offline (applies on next start)',
+  'network.escape.temporaryLabel': 'Start temporarily on a given port (config unchanged)',
+  'network.escape.note': 'Run these on the control-plane host, in the same directory as the leadstack binary. The offline command needs access to the data dir (default /var/lib/leadstack, or the --data-dir used at startup).',
+  'network.saveFailedHint': 'The port may already be in use. Choose another port, or start the control plane temporarily with `leadstack --listen 127.0.0.1:9090`, open the console, then change it.',
+  'network.fallback.title': 'The current listen address is a startup fallback ({active})',
+  'network.fallback.reason': 'Fallback reason: {reason}',
+  'network.fallback.hint': 'Fix the listen port or check the LEADSTACK_LISTEN environment variable, then restart the control plane.',
+  'network.fallback.goSettings': 'Fix in settings',
+
   'network.error.publicUrlCannotClear': 'To clear the public URL, use Reset to defaults',
   'network.title': 'Network & ports',
   'network.description': 'Control-plane listen address, public URL and the default SSH port for targets, all configured here without touching environment variables.',

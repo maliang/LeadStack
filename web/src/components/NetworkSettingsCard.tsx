@@ -67,6 +67,7 @@ export function NetworkSettingsCard() {
   const [form, setForm] = useState<FormState>({ listen: '', publicUrl: '', defaultSshPort: '22' })
   const [errors, setErrors] = useState<FieldErrors>({})
   const [saving, setSaving] = useState(false)
+  const [altHint, setAltHint] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
 
@@ -104,6 +105,7 @@ export function NetworkSettingsCard() {
     if (Object.keys(next).length > 0) return
 
     setSaving(true)
+    setAltHint(false)
     try {
       // 只有真正改动监听地址时才提交：未改动时后端会 probe 当前（已占用）端口而报 400
       const listenChangedOnServer = data ? form.listen.trim() !== (data.listen ?? '') : true
@@ -119,8 +121,14 @@ export function NetworkSettingsCard() {
     } catch (caught) {
       const message = errorMessage(caught, t('common.error'))
       const lower = message.toLowerCase()
-      if (lower.includes('listen') || message.includes('监听') || message.includes('绑定')) {
+      if (
+        lower.includes('listen') ||
+        message.includes('监听') ||
+        message.includes('绑定') ||
+        message.includes('占用')
+      ) {
         setErrors({ listen: 'network.error.serverRejected' })
+        setAltHint(true)
       } else if (lower.includes('public_url') || message.includes('对外')) {
         setErrors({ publicUrl: 'network.error.serverRejected' })
       } else if (lower.includes('default_ssh_port') || message.includes('端口')) {
@@ -195,6 +203,10 @@ export function NetworkSettingsCard() {
 
       {data ? (
         <div className="mt-4 space-y-5">
+          <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5 text-xs leading-relaxed text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-100">
+            {t('network.honestNotice')}
+          </div>
+
           {/* 监听地址 */}
           <div>
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -329,6 +341,48 @@ export function NetworkSettingsCard() {
               <span>{t('network.defaultSshPortUsage')}</span>
             </div>
           </div>
+
+          <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-slate-800 dark:bg-slate-950/60">
+            <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-200">
+              {t('network.escape.title')}
+            </summary>
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+              {t('network.escape.description')}
+            </p>
+            <div className="mt-2 space-y-2">
+              <div>
+                <p className="text-[11px] font-medium text-slate-600 dark:text-slate-300">
+                  {t('network.escape.offlineLabel')}
+                </p>
+                <div className="mt-1 flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">
+                  <code className="min-w-0 flex-1 overflow-x-auto font-mono text-[11px] text-slate-700 dark:text-slate-200">
+                    leadstack network --listen 127.0.0.1:9090
+                  </code>
+                  <CopyButton value="leadstack network --listen 127.0.0.1:9090" />
+                </div>
+              </div>
+              <div>
+                <p className="text-[11px] font-medium text-slate-600 dark:text-slate-300">
+                  {t('network.escape.temporaryLabel')}
+                </p>
+                <div className="mt-1 flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">
+                  <code className="min-w-0 flex-1 overflow-x-auto font-mono text-[11px] text-slate-700 dark:text-slate-200">
+                    leadstack --listen 127.0.0.1:9090
+                  </code>
+                  <CopyButton value="leadstack --listen 127.0.0.1:9090" />
+                </div>
+              </div>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
+              {t('network.escape.note')}
+            </p>
+          </details>
+
+          {altHint ? (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+              {t('network.saveFailedHint')}
+            </p>
+          ) : null}
 
           {errors.form ? (
             <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">

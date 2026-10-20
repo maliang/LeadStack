@@ -240,6 +240,8 @@ export interface NetworkConfig {
   public_url_source: NetworkSource
   default_ssh_port: number
   default_ssh_port_source: NetworkSource
+  /** 启动回退原因（空串表示未回退） */
+  fallback_reason: string | null
   restart_required: boolean
 }
 
@@ -1712,6 +1714,7 @@ export function normalizeNetworkConfig(input: unknown): NetworkConfig {
     public_url_source: toText(raw.public_url_source) ?? 'default',
     default_ssh_port: toNumber(raw.default_ssh_port) ?? 22,
     default_ssh_port_source: toText(raw.default_ssh_port_source) ?? 'default',
+    fallback_reason: toText(raw.fallback_reason),
     restart_required: toBool(raw.restart_required),
   }
 }

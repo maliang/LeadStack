@@ -64,6 +64,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "network":
+			if err := runNetworkCommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "leadstack network: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "restore":
 			if err := runRestoreCommand(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "leadstack restore: %v\n", err)
@@ -249,24 +255,60 @@ func run() error {
 		defer deployOrch.Close()
 	}
 
-	// 监听地址：settings > 环境变量 > 默认（契约 §49）。配置存在库里，因此必须在开库之后、建监听之前解析。
-	listenAddr, listenSource, err := api.ResolveNetworkListen(ctx, st, cfg.Listen)
-	if err != nil {
-		return fmt.Errorf("解析监听地址失败: %w", err)
+	// 监听地址：显式 --listen > settings > env > 127.0.0.1:8080 > 127.0.0.1:0（契约 §50 逃生链）。
+	// 任一候选绑定成功即启动；只有全部失败才退出 —— 绝不让配置问题锁死唯一的修复通道。
+	settingsListen, serr := api.ReadSettingsListen(ctx, st)
+	if serr != nil {
+		logger.Warn("读取设置中的监听地址失败，将继续尝试其它候选", "err", serr)
 	}
-	logger.Info("监听地址已确定", "listen", listenAddr, "source", listenSource)
+	explicitListen := ""
+	if cfg.ListenExplicit {
+		explicitListen = cfg.Listen
+	}
+	candidates := api.ListenCandidates(settingsListen, explicitListen, os.Getenv(config.EnvListen))
 
-	// 先绑定端口：绑定失败立刻报错，绝不"起来了但没在听"。
-	listener, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		hint := "请检查端口是否被占用"
-		if listenSource == "settings" {
-			hint += "；当前值来自控制台设置（network.listen），可调用 POST /api/v1/system/network/reset 清除后回落到环境变量/默认"
+	var (
+		listener     net.Listener
+		listenAddr   string
+		listenSource string
+		fallbackNote string
+		firstFailed  string
+		firstErr     error
+	)
+	for i, candidate := range candidates {
+		ln, lerr := net.Listen("tcp", candidate.Value)
+		if lerr == nil {
+			listener = ln
+			listenAddr = candidate.Value
+			listenSource = candidate.Source
+			if i > 0 {
+				fallbackNote = fmt.Sprintf("配置的监听地址 %s（来源 %s）无法绑定：%v；已回退到 %s（来源 %s）",
+					firstFailed, candidates[0].Source, firstErr, candidate.Value, candidate.Source)
+			}
+			break
 		}
-		return fmt.Errorf("无法监听 %s（来源 %s）: %w；%s", listenAddr, listenSource, err, hint)
+		if i == 0 {
+			firstFailed, firstErr = candidate.Value, lerr
+		}
+		logger.Warn("监听候选不可用，尝试下一个",
+			"candidate", candidate.Value, "source", candidate.Source, "err", lerr)
+	}
+	if listener == nil {
+		return fmt.Errorf("所有监听候选均无法绑定（%d 个）：请检查本机网络与端口占用；"+
+			"可用 `leadstack network --listen <地址>` 或 `leadstack --listen <地址>` 指定一个可用地址", len(candidates))
 	}
 	activeListen := listener.Addr().String()
-	logger.Info("HTTP 监听已就绪", "active_listen", activeListen, "web", "http://"+activeListen)
+	if fallbackNote != "" {
+		logger.Warn("监听地址已回退，请尽快修正配置",
+			"reason", fallbackNote, "active_listen", activeListen, "source", listenSource)
+	}
+	logger.Info("HTTP 监听已就绪",
+		"active_listen", activeListen, "listen", listenAddr, "source", listenSource,
+		"web", "http://"+activeListen)
+	if listenSource == "temp" {
+		logger.Warn("已回退到系统临时端口：控制台地址不是预期值，请执行 `leadstack network --listen <地址>` 修正后重启",
+			"active_listen", activeListen)
+	}
 
 	// 备份：备份服务（口令解析与归档格式由 internal/backup 负责）。
 	backupService, err := api.NewBackupService(cfg, logger)
@@ -289,6 +331,8 @@ func run() error {
 		SFTP:             sftpFactory,
 		TermOpener:       termOpener,
 		ActiveListen:     activeListen,
+		ListenOverride:   explicitListen,
+		FallbackReason:   fallbackNote,
 		Alerts:           alertEngine,
 		Notifier:         notifier,
 		Deploy:           deployOrch,
@@ -429,7 +473,7 @@ func isSubcommand(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "backup", "restore":
+	case "backup", "restore", "network":
 		return true
 	default:
 		return false

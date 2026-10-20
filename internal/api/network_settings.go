@@ -21,9 +21,12 @@ const (
 	settingDefaultSSHPort   = "servers.default_ssh_port"
 
 	// 配置来源标识。
+	sourceFlag     = "flag"
 	sourceSettings = "settings"
 	sourceEnv      = "env"
 	sourceDefault  = "default"
+	// sourceTemp 表示最终回退到系统分配的临时端口。
+	sourceTemp = "temp"
 
 	// defaultSSHPort 是未配置时的目标机 SSH 端口。
 	defaultSSHPort = 22
@@ -39,14 +42,22 @@ type networkSettings struct {
 	DefaultSSHPort    int    `json:"default_ssh_port"`
 	DefaultSSHPortSrc string `json:"default_ssh_port_source"`
 	RestartRequired   bool   `json:"restart_required"`
+	// FallbackReason 非空表示启动时回退过（配置的地址绑不上），UI 据此显示警示横幅。
+	FallbackReason string `json:"fallback_reason"`
 }
 
 // ------------------------------------------------ 解析：settings > env > default ------------------------------------------------
 
 // ResolveNetworkListen 解析控制台监听地址及其来源。
 //
-// 优先级：settings.network.listen > 环境变量 LEADSTACK_LISTEN > 兜底值（配置默认）。
-func ResolveNetworkListen(ctx context.Context, st *store.Store, fallback string) (string, string, error) {
+// 优先级（契约 §50）：**显式命令行 --listen（flag）** > settings.network.listen > 环境变量 > 兜底值。
+//
+// 命令行排在最前是「逃生通道」：即使 settings 里存了坏值、甚至服务起不来，
+// 用户加一个 --listen 就能临时启动去修配置。
+func ResolveNetworkListen(ctx context.Context, st *store.Store, explicitFlag, fallback string) (string, string, error) {
+	if strings.TrimSpace(explicitFlag) != "" {
+		return strings.TrimSpace(explicitFlag), sourceFlag, nil
+	}
 	if st != nil {
 		if raw, ok, err := st.GetSetting(ctx, settingNetworkListen); err != nil {
 			return "", "", fmt.Errorf("读取网络设置 %s: %w", settingNetworkListen, err)
@@ -151,7 +162,8 @@ func ValidateListen(addr string, probe bool) error {
 	}
 	ln, lerr := net.Listen("tcp", trimmed)
 	if lerr != nil {
-		return fmt.Errorf("该地址无法绑定（可能已被占用）：%v，请换一个端口", lerr)
+		return fmt.Errorf("该地址无法绑定（可能已被占用）：%v，请换一个端口；"+
+			"若已无法打开控制台，可执行 `leadstack network --listen <新地址>`（离线生效）或重启时加 `--listen <地址>`", lerr)
 	}
 	if cerr := ln.Close(); cerr != nil {
 		return fmt.Errorf("释放试探监听失败：%v", cerr)
@@ -163,7 +175,7 @@ func ValidateListen(addr string, probe bool) error {
 func ValidatePublicURL(raw string) error {
 	value := strings.TrimSpace(raw)
 	if value == "" {
-		return errors.New("public_url 不能为空；如需清空请使用「恢复默认」（POST /api/v1/system/network/reset）")
+		return errors.New("public_url 不能为空；如需清空请使用「恢复默认」（POST /api/v1/system/network/reset，或离线执行 `leadstack network --reset`）")
 	}
 	lower := strings.ToLower(value)
 	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
@@ -184,6 +196,69 @@ func ValidatePublicURL(raw string) error {
 		return errors.New("public_url 不能使用 0.0.0.0 或 ::，目标机无法回连，请填控制台的对外 IP 或域名")
 	}
 	return nil
+}
+
+// listenCandidate 是启动时的一个监听候选。
+type listenCandidate struct {
+	Value  string
+	Source string
+}
+
+// listenCandidates 组装启动绑定回退链（契约 50.1，按优先级排列）：
+//
+//	显式命令行 --listen → settings → env → 127.0.0.1:8080 → 127.0.0.1:0
+//
+// 相邻重复值会被去掉（避免对同一个坏地址重复报错）。
+func listenCandidates(ctx context.Context, st *store.Store,
+	explicitFlag, settingsValue, envValue string) []listenCandidate {
+	out := make([]listenCandidate, 0, 5)
+	appendUnique := func(value, source string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		for _, existing := range out {
+			if existing.Value == value {
+				return
+			}
+		}
+		out = append(out, listenCandidate{Value: value, Source: source})
+	}
+	appendUnique(explicitFlag, sourceFlag)
+	appendUnique(settingsValue, sourceSettings)
+	appendUnique(envValue, sourceEnv)
+	appendUnique("127.0.0.1:8080", sourceDefault)
+	appendUnique("127.0.0.1:0", sourceTemp)
+	_ = ctx
+	_ = st
+	return out
+}
+
+// ReadSettingsListen 读取 settings 里的监听地址（未设置返回空串）。供 cmd 在启动前解析使用。
+func ReadSettingsListen(ctx context.Context, st *store.Store) (string, error) {
+	return readSettingsListen(ctx, st)
+}
+
+// ListenCandidates 导出启动回退链候选（契约 §50.1），供 cmd 逐个尝试绑定。
+//
+// 顺序：显式 --listen（source=flag）→ settings → env → 127.0.0.1:8080 → 127.0.0.1:0（source=temp）。
+func ListenCandidates(settingsValue, explicitFlag, envValue string) []listenCandidate {
+	return listenCandidates(context.Background(), nil, explicitFlag, settingsValue, envValue)
+}
+
+// readSettingsListen 读取 settings 里的监听地址（未设置返回空串）。
+func readSettingsListen(ctx context.Context, st *store.Store) (string, error) {
+	if st == nil {
+		return "", nil
+	}
+	raw, ok, err := st.GetSetting(ctx, settingNetworkListen)
+	if err != nil {
+		return "", fmt.Errorf("读取网络设置 %s: %w", settingNetworkListen, err)
+	}
+	if !ok {
+		return "", nil
+	}
+	return strings.TrimSpace(raw), nil
 }
 
 // validateListenForSave 是「保存 listen」场景的校验：格式始终校验，bind 探测仅在地址变化时执行。
@@ -315,7 +390,7 @@ func (a *API) handleResetNetwork(w http.ResponseWriter, r *http.Request) {
 
 // currentNetworkSettings 组装当前网络设置与来源。
 func (a *API) currentNetworkSettings(ctx context.Context) (networkSettings, error) {
-	listen, listenSource, err := ResolveNetworkListen(ctx, a.st, a.cfg.Listen)
+	listen, listenSource, err := ResolveNetworkListen(ctx, a.st, a.listenOverride, a.cfg.Listen)
 	if err != nil {
 		return networkSettings{}, err
 	}
@@ -340,6 +415,7 @@ func (a *API) currentNetworkSettings(ctx context.Context) (networkSettings, erro
 		DefaultSSHPort:    sshPort,
 		DefaultSSHPortSrc: sshSource,
 		RestartRequired:   !sameListen(listen, active),
+		FallbackReason:    a.fallbackReason,
 	}, nil
 }
 
@@ -353,4 +429,102 @@ func sameListen(a, b string) bool {
 		return v
 	}
 	return normalize(a) == normalize(b)
+}
+
+// SaveNetworkListen 校验并写入监听地址设置（离线 CLI 与 REST 共用）。
+func SaveNetworkListen(ctx context.Context, st *store.Store, value, activeListen string) error {
+	trimmed := strings.TrimSpace(value)
+	if err := validateListenForSave(trimmed, activeListen); err != nil {
+		return err
+	}
+	return st.SetSetting(ctx, settingNetworkListen, trimmed)
+}
+
+// SaveNetworkListenForce 只校验格式后写入监听地址（离线逃生通道用）。
+//
+// 与 REST 的 SaveNetworkListen 的差别：**不做 bind 探测**——
+// 用户在执行 `leadstack network --listen` 时往往正是端口有问题/服务还在跑，
+// 此时拒绝写入等于堵死唯一的修复通道；启动回退链会兜住坏值并在日志说明。
+func SaveNetworkListenForce(ctx context.Context, st *store.Store, value string) error {
+	trimmed := strings.TrimSpace(value)
+	if err := ValidateListen(trimmed, false); err != nil {
+		return err
+	}
+	return st.SetSetting(ctx, settingNetworkListen, trimmed)
+}
+
+// SaveNetworkPublicURL 校验并写入对外地址设置。
+func SaveNetworkPublicURL(ctx context.Context, st *store.Store, value string) error {
+	trimmed := strings.TrimSuffix(strings.TrimSpace(value), "/")
+	if err := ValidatePublicURL(trimmed); err != nil {
+		return err
+	}
+	return st.SetSetting(ctx, settingNetworkPublicURL, trimmed)
+}
+
+// SaveDefaultSSHPort 校验并写入默认 SSH 端口设置。
+func SaveDefaultSSHPort(ctx context.Context, st *store.Store, port int) error {
+	if err := ValidatePort(port); err != nil {
+		return err
+	}
+	return st.SetSetting(ctx, settingDefaultSSHPort, strconv.Itoa(port))
+}
+
+// ResetNetworkSettings 清除全部网络设置（回落 env/默认）。
+func ResetNetworkSettings(ctx context.Context, st *store.Store) error {
+	for _, key := range []string{settingNetworkListen, settingNetworkPublicURL, settingDefaultSSHPort} {
+		if err := st.DeleteSetting(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NetworkSnapshot 返回「settings / env / default」三者的原始取值（离线 CLI --show 用）。
+type NetworkSnapshot struct {
+	SettingsListen      string `json:"settings_listen"`
+	SettingsPublicURL   string `json:"settings_public_url"`
+	SettingsSSHPort     string `json:"settings_default_ssh_port"`
+	EnvListen           string `json:"env_listen"`
+	EnvPublicURL        string `json:"env_public_url"`
+	EnvSSHPort          string `json:"env_default_ssh_port"`
+	DefaultListen       string `json:"default_listen"`
+	DefaultSSHPort      int    `json:"default_ssh_port"`
+	EffectiveListen     string `json:"effective_listen"`
+	EffectiveListenFrom string `json:"effective_listen_source"`
+}
+
+// ReadNetworkSnapshot 读取三者取值（离线 CLI 用，不依赖 API 实例）。
+func ReadNetworkSnapshot(ctx context.Context, st *store.Store) (NetworkSnapshot, error) {
+	snap := NetworkSnapshot{
+		EnvListen:      strings.TrimSpace(os.Getenv(config.EnvListen)),
+		EnvPublicURL:   strings.TrimSpace(os.Getenv(config.EnvPublicURL)),
+		EnvSSHPort:     strings.TrimSpace(os.Getenv(config.EnvDefaultSSHPort)),
+		DefaultListen:  config.DefaultListen,
+		DefaultSSHPort: defaultSSHPort,
+	}
+	if st != nil {
+		if raw, ok, err := st.GetSetting(ctx, settingNetworkListen); err != nil {
+			return snap, err
+		} else if ok {
+			snap.SettingsListen = raw
+		}
+		if raw, ok, err := st.GetSetting(ctx, settingNetworkPublicURL); err != nil {
+			return snap, err
+		} else if ok {
+			snap.SettingsPublicURL = raw
+		}
+		if raw, ok, err := st.GetSetting(ctx, settingDefaultSSHPort); err != nil {
+			return snap, err
+		} else if ok {
+			snap.SettingsSSHPort = raw
+		}
+	}
+	effective, source, err := ResolveNetworkListen(ctx, st, "", config.DefaultListen)
+	if err != nil {
+		return snap, err
+	}
+	snap.EffectiveListen = effective
+	snap.EffectiveListenFrom = source
+	return snap, nil
 }

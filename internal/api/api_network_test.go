@@ -374,13 +374,13 @@ func TestResolveHelpers(t *testing.T) {
 
 	// 无设置 + 无 env → default
 	t.Setenv(config.EnvListen, "")
-	listen, source, err := ResolveNetworkListen(ctx, env.st, "127.0.0.1:1234")
+	listen, source, err := ResolveNetworkListen(ctx, env.st, "", "127.0.0.1:1234")
 	if err != nil || listen != "127.0.0.1:1234" || source != sourceDefault {
 		t.Fatalf("默认解析不正确: %q %q %v", listen, source, err)
 	}
 	// env 优先于 default
 	t.Setenv(config.EnvListen, "127.0.0.1:4321")
-	listen, source, _ = ResolveNetworkListen(ctx, env.st, "127.0.0.1:1234")
+	listen, source, _ = ResolveNetworkListen(ctx, env.st, "", "127.0.0.1:1234")
 	if listen != "127.0.0.1:4321" || source != sourceEnv {
 		t.Fatalf("env 解析不正确: %q %q", listen, source)
 	}
@@ -388,7 +388,7 @@ func TestResolveHelpers(t *testing.T) {
 	if err := env.st.SetSetting(ctx, settingNetworkListen, "127.0.0.1:5555"); err != nil {
 		t.Fatalf("写设置失败: %v", err)
 	}
-	listen, source, _ = ResolveNetworkListen(ctx, env.st, "127.0.0.1:1234")
+	listen, source, _ = ResolveNetworkListen(ctx, env.st, "", "127.0.0.1:1234")
 	if listen != "127.0.0.1:5555" || source != sourceSettings {
 		t.Fatalf("settings 解析不正确: %q %q", listen, source)
 	}
@@ -456,5 +456,86 @@ func TestPublicURLEmptyHintMentionsReset(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "恢复默认") || !strings.Contains(string(raw), "reset") {
 		t.Fatalf("空值提示应引导使用恢复默认: %s", raw)
+	}
+}
+
+// TestListenCandidatesPriority 覆盖启动回退链的顺序与去重（纯函数）。
+func TestListenCandidatesPriority(t *testing.T) {
+	// 全部来源都有：flag > settings > env > default > temp
+	got := ListenCandidates("10.0.0.2:9000", "10.0.0.1:8080", "10.0.0.3:7000")
+	want := []struct{ value, source string }{
+		{"10.0.0.1:8080", sourceFlag},
+		{"10.0.0.2:9000", sourceSettings},
+		{"10.0.0.3:7000", sourceEnv},
+		{"127.0.0.1:8080", sourceDefault},
+		{"127.0.0.1:0", sourceTemp},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("候选数量期望 %d，实际 %d: %+v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i].Value != want[i].value || got[i].Source != want[i].source {
+			t.Fatalf("第 %d 个候选期望 %+v，实际 %+v", i+1, want[i], got[i])
+		}
+	}
+
+	// 只有 settings：settings 排第一，其后是 default/temp
+	got = ListenCandidates("10.0.0.9:9001", "", "")
+	if len(got) != 3 || got[0].Source != sourceSettings || got[1].Source != sourceDefault {
+		t.Fatalf("仅 settings 时候选不正确: %+v", got)
+	}
+
+	// 相邻重复值去重（settings 与 env 相同）
+	got = ListenCandidates("10.0.0.9:9002", "", "10.0.0.9:9002")
+	for _, c := range got[1:] {
+		if c.Value == "10.0.0.9:9002" && c.Source == sourceEnv {
+			t.Fatalf("重复值应被去重: %+v", got)
+		}
+	}
+
+	// 空显式值不产生候选
+	got = ListenCandidates("", "  ", "")
+	if len(got) != 2 || got[0].Source != sourceDefault || got[1].Source != sourceTemp {
+		t.Fatalf("空值不应产生候选: %+v", got)
+	}
+}
+
+// TestResolveNetworkListenPrefersExplicitFlag 覆盖 flag 压过 settings 的优先级。
+func TestResolveNetworkListenPrefersExplicitFlag(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	// settings 存一个"坏值"
+	if err := env.st.SetSetting(ctx, settingNetworkListen, "10.9.9.9:1"); err != nil {
+		t.Fatalf("写设置失败: %v", err)
+	}
+	t.Setenv(config.EnvListen, "10.0.0.3:7000")
+
+	// 显式 flag 最高
+	value, source, err := ResolveNetworkListen(ctx, env.st, "127.0.0.1:7777", "127.0.0.1:8080")
+	if err != nil || value != "127.0.0.1:7777" || source != sourceFlag {
+		t.Fatalf("flag 应压过 settings: %q %q %v", value, source, err)
+	}
+	// 无 flag 时 settings 优先于 env
+	value, source, _ = ResolveNetworkListen(ctx, env.st, "", "127.0.0.1:8080")
+	if value != "10.9.9.9:1" || source != sourceSettings {
+		t.Fatalf("无 flag 时应使用 settings: %q %q", value, source)
+	}
+}
+
+// TestNetworkSnapshotShowsThreeSources 覆盖离线快照的三者取值。
+func TestNetworkSnapshotShowsThreeSources(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	t.Setenv(config.EnvListen, "10.0.0.3:7000")
+	if err := env.st.SetSetting(ctx, settingNetworkListen, "10.0.0.2:9000"); err != nil {
+		t.Fatalf("写设置失败: %v", err)
+	}
+	snap, err := ReadNetworkSnapshot(ctx, env.st)
+	if err != nil {
+		t.Fatalf("读取快照失败: %v", err)
+	}
+	if snap.SettingsListen != "10.0.0.2:9000" || snap.EnvListen != "10.0.0.3:7000" ||
+		snap.DefaultListen == "" || snap.EffectiveListenFrom != sourceSettings {
+		t.Fatalf("快照不正确: %+v", snap)
 	}
 }

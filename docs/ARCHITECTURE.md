@@ -1437,3 +1437,54 @@ POST /system/network/reset -> 清空以上配置，回落 env/默认
 5. `default_ssh_port=2222` 后，`POST /servers` **不传 port** → 该服务器 port 为 2222。
 6. `PATCH /servers/{id}` 改 port 成功，且 `GET` 返回新端口。
 7. 审计中存在 `system.network_update`（或等价 action）。
+
+---
+
+## 50. 监听端口不可自锁（逃生通道）
+
+**问题**：如果把"控制台监听端口"只放在控制台里配置，就存在死锁 —— 默认端口被占用/被封禁时，你打不开控制台去改它；而 `POST /system/network/reset` 同样要求服务已经起来。**这是必须消除的可用性缺陷。**
+
+### 50.1 永不锁死：启动绑定回退链
+
+启动时按优先级依次尝试，**任一成功即启动**，绝不因为"配置的端口绑不上"而退出：
+
+| 顺位 | 来源 | 说明 |
+|---|---|---|
+| 1 | **显式命令行 `--listen`** | 最高优先级，用于紧急覆盖（break-glass），即使 settings 里存了坏值也能起来 |
+| 2 | 控制台设置 `network.listen` | 正常路径 |
+| 3 | 环境变量 `LEADSTACK_LISTEN` | 部署脚本路径 |
+| 4 | 默认 `127.0.0.1:8080` | 内置 |
+| 5 | **`127.0.0.1:0` 临时端口** | 全部失败时的最后兜底（系统分配空闲端口） |
+
+- 每次回退都必须 **WARN 日志** 打印：失败的候选、失败原因、最终实际地址。
+- 临时端口启动时，日志**必须显著打印** `active_listen` 与「请用 leadstack network --listen 修正」的提示。
+- 只有连临时端口都无法绑定（系统网络不可用）才退出。
+- `GET /system/network` 增加 `fallback_reason`（空串表示未回退），UI 据此显示警示横幅。
+
+### 50.2 离线逃生：CLI 子命令 `leadstack network`
+
+**不依赖服务运行**（直接打开数据库读写 settings），用于控制台打不开时修正：
+
+```bash
+leadstack network --show                       # 显示 settings / env / default / 实际生效建议
+leadstack network --listen 0.0.0.0:9090        # 写入设置（下次启动生效）
+leadstack network --public-url http://1.2.3.4:9090
+leadstack network --default-ssh-port 2222
+leadstack network --reset                      # 清除全部网络设置，回落 env/默认
+```
+- 输出必须给出「当前 settings / 环境变量 / 默认值」三者的实际取值，并提示「需要重启控制端生效」。
+- 若数据目录被占用（服务在跑），允许**直接写库**（下次启动生效），但要提示「服务正在运行，需重启生效」。
+
+### 50.3 控制台提示
+
+设置页「网络与端口」必须写明：
+1. 改监听端口后**需重启**才生效；
+2. 若新端口无法绑定，服务会**自动回退**到环境变量/默认/临时端口并在日志打印实际地址；
+3. 万一打不开控制台，用 `leadstack network --listen <新地址>` 修正，或用 `leadstack --listen <地址>` 临时启动。
+
+### 50.4 验收（追加到 `scripts/verify_ops.sh`）
+
+1. **回退链路**：占用端口 O 并写入 settings；以 `LEADSTACK_LISTEN=空闲端口 F` 启动 → 服务**仍能启动**并监听 F，日志含 WARN 与 `source=env`，`/system/network` 的 `fallback_reason` 非空。
+2. **命令行优先**：settings 存坏值（被占用端口）时，用 `--listen 空闲端口 G` 启动 → 监听 G（命令行压过 settings）。
+3. **离线 CLI**：服务停止时 `leadstack network --listen <新值>` 能写入并回显；`--show` 输出三者取值；`--reset` 后设置清空。
+4. 以上任一场景下，控制台 `/healthz` 必须可达（即"人能进去改回来"）。

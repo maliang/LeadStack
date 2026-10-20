@@ -118,6 +118,8 @@ const (
 type Config struct {
 	// Listen 是 HTTP 监听地址，例如 127.0.0.1:8080。
 	Listen string
+	// ListenExplicit 表示本次运行是否通过命令行 --listen 显式指定（逃生通道，优先级最高）。
+	ListenExplicit bool
 	// DataDir 是数据目录，SQLite 文件放在其中。
 	DataDir string
 	// DBPath 是 SQLite 文件的绝对/相对路径（由 DataDir 推导）。
@@ -238,6 +240,12 @@ func Load(version string, args []string) (*Config, error) {
 		FileMaxMB:              *fileMaxMB,
 	}
 
+	// 区分「显式传入 --listen」与「默认/环境变量值」：显式值才拥有最高优先级。
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "listen" {
+			cfg.ListenExplicit = true
+		}
+	})
 	if cfg.Listen == "" {
 		return nil, errors.New("配置错误: 监听地址不能为空")
 	}

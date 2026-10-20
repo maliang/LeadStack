@@ -60,8 +60,12 @@ type Options struct {
 	TermOpener term.Opener
 	// ActiveListen 是当前进程实际监听的地址（由 cmd 在 net.Listen 之后注入）。
 	ActiveListen string
-	Version      string
-	StartedAt    time.Time
+	// ListenOverride 是显式命令行 --listen（逃生通道，优先级最高；仅影响本次运行）。
+	ListenOverride string
+	// FallbackReason 是启动时回退的原因（空表示未回退）。
+	FallbackReason string
+	Version        string
+	StartedAt      time.Time
 }
 
 // API 汇聚处理器的所有依赖。
@@ -84,6 +88,8 @@ type API struct {
 	sftp             SFTPFactory
 	termOpener       term.Opener
 	activeListen     string
+	listenOverride   string
+	fallbackReason   string
 	termTickets      sync.Map // ticket → *terminalTicket
 	agentTerms       sync.Map // sessionID → *agentTermSession
 	// backupWake 用于「设置变更后立即重排定时备份」，容量 1 的非阻塞信号。
@@ -143,6 +149,9 @@ func New(opts Options) (*API, error) {
 		remoteExec:       opts.RemoteExec,
 		sftp:             opts.SFTP,
 		termOpener:       opts.TermOpener,
+		activeListen:     opts.ActiveListen,
+		listenOverride:   opts.ListenOverride,
+		fallbackReason:   opts.FallbackReason,
 		maxSchemaVersion: resolvedMaxSchemaVersion(opts.MaxSchemaVersion),
 		backupWake:       make(chan struct{}, 1),
 		logger:           logger,
