@@ -23,6 +23,7 @@ import { InlineLoading } from '../components/Loading'
 import { ReleaseWizard } from '../components/ReleaseWizard'
 import { useToast } from '../components/Toast'
 
+import { t } from '../i18n'
 interface DeployedRow {
   serverId: string
   version: string
@@ -102,19 +103,19 @@ export default function AppDetailPage() {
     try {
       if (actionKind === 'retry') {
         await api.retryRelease(actionRelease.id)
-        toast('已重试失败的服务器', 'success')
+        toast(t('s.0766'), 'success')
       } else if (actionKind === 'rollback') {
         await api.rollbackRelease(actionRelease.id)
-        toast('已发起回滚', 'success')
+        toast(t('s.0767'), 'success')
       } else {
         await api.cancelRelease(actionRelease.id)
-        toast('已取消未完成的 run', 'success')
+        toast(t('s.0768'), 'success')
       }
       setActionRelease(null)
       setActionKind(null)
       void releasesQuery.refresh()
     } catch (caught) {
-      setActionError(errorMessage(caught, '操作失败'))
+      setActionError(errorMessage(caught, t('s.0769')))
     } finally {
       setActionLoading(false)
     }
@@ -123,7 +124,7 @@ export default function AppDetailPage() {
   if (appQuery.loading && !app) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <InlineLoading label="正在加载应用详情…" />
+        <InlineLoading label={t('s.0770')} />
       </div>
     )
   }
@@ -131,13 +132,13 @@ export default function AppDetailPage() {
   if (!app) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <p className="text-sm font-medium text-slate-900 dark:text-slate-100">应用不存在或已被删除</p>
+        <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{t('s.0771')}</p>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          {appQuery.error ?? '请返回应用列表检查。'}
+          {appQuery.error ?? t('s.0772')}
         </p>
         <Link to="/apps" className="mt-4 inline-block">
           <Button variant="secondary" icon={<ArrowLeftIcon className="h-4 w-4" />}>
-            返回应用列表
+            {t('s.0773')}
           </Button>
         </Link>
       </div>
@@ -152,7 +153,7 @@ export default function AppDetailPage() {
           className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 transition-colors hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400"
         >
           <ArrowLeftIcon className="h-3.5 w-3.5" />
-          返回应用列表
+          {t('s.0773')}
         </Link>
 
         <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
@@ -178,7 +179,7 @@ export default function AppDetailPage() {
               onClick={() => setEditOpen(true)}
               icon={<PencilIcon className="h-4 w-4" />}
             >
-              编辑
+              {t('s.0774')}
             </Button>
             <Button
               variant="secondary"
@@ -186,10 +187,10 @@ export default function AppDetailPage() {
               loading={releasesQuery.loading}
               icon={<RefreshIcon className="h-4 w-4" />}
             >
-              刷新
+              {t('s.0689')}
             </Button>
             <Button onClick={() => setWizardOpen(true)} icon={<PlayIcon className="h-4 w-4" />}>
-              发起发布
+              {t('s.0459')}
             </Button>
           </div>
         </div>
@@ -197,31 +198,31 @@ export default function AppDetailPage() {
 
       {releasesQuery.error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-          加载发布历史失败：{releasesQuery.error}
+          {t('s.0775')}{releasesQuery.error}
         </div>
       ) : null}
 
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">发布历史</h2>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0776')}</h2>
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
               {releases.length}
             </span>
           </div>
           <p className="text-xs text-slate-400 dark:text-slate-500">
-            回滚 = 把 current 指回上一个成功版本（秒级，不需重新下载）
+            {t('s.0777')}
           </p>
         </div>
 
         {releasesQuery.loading && releasesQuery.data === null ? (
-          <InlineLoading label="正在加载发布记录…" />
+          <InlineLoading label={t('s.0778')} />
         ) : releases.length === 0 ? (
           <EmptyState
             icon={<FolderIcon className="h-6 w-6" />}
-            title="这个应用还没有发布记录"
-            description="点击右上角「发起发布」，选择模板与目标服务器即可开始第一次发布"
-            actionLabel="发起发布"
+            title={t('s.0779')}
+            description={t('s.0780')}
+            actionLabel={t('s.0459')}
             onAction={() => setWizardOpen(true)}
           />
         ) : (
@@ -229,12 +230,12 @@ export default function AppDetailPage() {
             <table className="w-full min-w-[1000px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs font-medium whitespace-nowrap text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                  <th scope="col" className="px-4 py-2.5 font-medium">版本</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">状态</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">进度</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">创建时间</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">耗时</th>
-                  <th scope="col" className="px-4 py-2.5 text-right font-medium">操作</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0484')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0533')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0781')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0271')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0782')}</th>
+                  <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('s.0539')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -261,14 +262,14 @@ export default function AppDetailPage() {
                         <ReleaseStatusBadge status={release.status} />
                       </td>
                       <td className="px-4 py-3 align-top text-xs text-slate-600 dark:text-slate-300">
-                        <span className="text-emerald-600 dark:text-emerald-400">成功 {stats.success}</span>
+                        <span className="text-emerald-600 dark:text-emerald-400">{t('s.0300')} {stats.success}</span>
                         {' · '}
                         <span className={stats.failed > 0 ? 'text-rose-600 dark:text-rose-400' : ''}>
-                          失败 {stats.failed}
+                          {t('s.0301')} {stats.failed}
                         </span>
                         {' · '}
-                        <span className="text-blue-600 dark:text-blue-400">进行中 {stats.active}</span>
-                        <span className="text-slate-400 dark:text-slate-500"> / 共 {stats.total}</span>
+                        <span className="text-blue-600 dark:text-blue-400">{t('s.0415')} {stats.active}</span>
+                        <span className="text-slate-400 dark:text-slate-500"> {t('s.0783')} {stats.total}</span>
                       </td>
                       <td className="px-4 py-3 align-top text-xs text-slate-500 dark:text-slate-400">
                         {formatDateTime(release.created_at)}
@@ -277,7 +278,7 @@ export default function AppDetailPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 align-top text-xs tabular-nums text-slate-600 dark:text-slate-300">
-                        {duration === null ? '—' : `${duration} 秒`}
+                        {duration === null ? '—' : t('s.0156', { '0': duration })}
                       </td>
                       <td className="px-4 py-3 align-top">
                         <div className="flex flex-wrap items-center justify-end gap-1">
@@ -286,7 +287,7 @@ export default function AppDetailPage() {
                             variant="secondary"
                             onClick={() => navigate(`/releases/${release.id}`)}
                           >
-                            详情与日志
+                            {t('s.0784')}
                           </Button>
                           {stats.failed > 0 ? (
                             <Button
@@ -299,7 +300,7 @@ export default function AppDetailPage() {
                               }}
                               icon={<RotateCcwIcon className="h-3.5 w-3.5" />}
                             >
-                              重试失败
+                              {t('s.0785')}
                             </Button>
                           ) : null}
                           {stats.success > 0 ? (
@@ -312,7 +313,7 @@ export default function AppDetailPage() {
                                 setActionKind('rollback')
                               }}
                             >
-                              回滚
+                              {t('s.0786')}
                             </Button>
                           ) : null}
                           {stats.active > 0 ? (
@@ -325,7 +326,7 @@ export default function AppDetailPage() {
                                 setActionKind('cancel')
                               }}
                             >
-                              取消
+                              {t('s.0024')}
                             </Button>
                           ) : null}
                         </div>
@@ -342,25 +343,25 @@ export default function AppDetailPage() {
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-            当前部署到哪些服务器
+            {t('s.0787')}
           </h2>
           <p className="text-xs text-slate-400 dark:text-slate-500">
-            按每台机器最近一次成功的 run 折算
+            {t('s.0788')}
           </p>
         </div>
         {deployedRows.length === 0 ? (
           <p className="px-4 py-6 text-center text-xs text-slate-400 dark:text-slate-500">
-            还没有任何服务器成功部署过这个应用
+            {t('s.0789')}
           </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs font-medium whitespace-nowrap text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                  <th scope="col" className="px-4 py-2.5 font-medium">服务器</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">当前版本</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">部署时间</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">来源发布</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0087')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0790')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0791')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0792')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -380,7 +381,7 @@ export default function AppDetailPage() {
                         to={`/releases/${encodeURIComponent(row.releaseId)}`}
                         className="text-xs text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
                       >
-                        查看发布
+                        {t('s.0793')}
                       </Link>
                     </td>
                   </tr>
@@ -413,15 +414,15 @@ export default function AppDetailPage() {
         open={actionKind !== null}
         title={
           actionKind === 'retry'
-            ? '重试失败的服务器'
+            ? t('s.0794')
             : actionKind === 'rollback'
-              ? '回滚这次发布'
-              : '取消未完成的 run'
+              ? t('s.0795')
+              : t('s.0796')
         }
         description={
-          actionRelease ? `发布：v${actionRelease.version}` : undefined
+          actionRelease ? t('s.0797', { '0': actionRelease.version }) : undefined
         }
-        confirmLabel={actionKind === 'cancel' ? '确认取消' : '确认执行'}
+        confirmLabel={actionKind === 'cancel' ? t('s.0798') : t('s.0799')}
         tone={actionKind === 'cancel' ? 'danger' : 'primary'}
         loading={actionLoading}
         error={actionError}
@@ -433,19 +434,19 @@ export default function AppDetailPage() {
         onConfirm={() => void handleAction()}
       >
         {actionKind === 'retry' ? (
-          <p>只会重跑状态为 failed 的服务器，成功的机器不会被重复执行。</p>
+          <p>{t('s.0800')}</p>
         ) : actionKind === 'rollback' ? (
           <p>
-            将把各服务器的 current 指回上一个成功版本并重启服务。回滚是秒级的，不会重新下载制品。
+            {t('s.0801')}
           </p>
         ) : (
-          <p>会终止仍在 pending / running 的 run，已经成功的机器不受影响。</p>
+          <p>{t('s.0802')}</p>
         )}
       </ConfirmDialog>
 
       <p className="flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500">
         <AlertTriangleIcon className="h-3.5 w-3.5" />
-        失败时控制端会按逆序执行回滚步骤；日志可在发布详情页实时查看。
+        {t('s.0803')}
       </p>
     </div>
   )

@@ -638,6 +638,17 @@ func (a *API) handleListReleases(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = v
 	}
+	params, perr := parsePage(r)
+	if perr != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, perr.Error())
+		return
+	}
+	if params.Paged {
+		limit = params.fetchLimit(releaseListDefault)
+		if limit > releaseListMax {
+			limit = releaseListMax
+		}
+	}
 	releases, err := a.st.ListReleases(r.Context(), store.ReleaseFilter{
 		AppID:  strings.TrimSpace(r.URL.Query().Get("app_id")),
 		Status: strings.TrimSpace(r.URL.Query().Get("status")),
@@ -650,7 +661,11 @@ func (a *API) handleListReleases(w http.ResponseWriter, r *http.Request) {
 	if releases == nil {
 		releases = []store.Release{}
 	}
-	writeData(w, http.StatusOK, releases)
+	start, end, meta := params.window(len(releases))
+	if !params.Paged {
+		start, end = 0, len(releases)
+	}
+	writePagedList(w, params, releases[start:end], meta)
 }
 
 // handleCreateRelease 处理 POST /api/v1/releases：落库后立即返回，执行在后台。

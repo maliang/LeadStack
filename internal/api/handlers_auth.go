@@ -17,9 +17,12 @@ type loginRequest struct {
 
 // userPayload 是对外暴露的用户信息（不含密码哈希）。
 type userPayload struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
+	ID        string `json:"id"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	Disabled  bool   `json:"disabled,omitempty"`
+	CreatedAt int64  `json:"created_at,omitempty"`
+	IsSelf    bool   `json:"is_self,omitempty"`
 }
 
 // loginResponse 是登录成功响应。
@@ -53,6 +56,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 			// 不区分“用户不存在”与“密码错误”，并补齐哈希耗时的差值，避免用户名枚举。
 			auth.WastePasswordTime(req.Password)
 			a.logger.Warn("登录失败", "username", req.Username, "remote", remoteHost(r), "reason", "用户不存在")
+			a.auditLogin(r, req.Username, false, "用户不存在")
 			writeError(w, http.StatusUnauthorized, codeUnauthorized, "用户名或密码错误")
 			return
 		}
@@ -61,6 +65,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !auth.VerifyPassword(user.PasswordHash, req.Password) {
 		a.logger.Warn("登录失败", "username", req.Username, "remote", remoteHost(r), "reason", "密码错误")
+		a.auditLogin(r, req.Username, false, "密码错误")
 		writeError(w, http.StatusUnauthorized, codeUnauthorized, "用户名或密码错误")
 		return
 	}
@@ -72,6 +77,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.logger.Info("登录成功", "username", user.Username, "remote", remoteHost(r))
+	a.auditLogin(r, user.Username, true, "")
 	writeData(w, http.StatusOK, loginResponse{
 		Token:     token,
 		ExpiresAt: expiresAt.UnixMilli(),
@@ -81,6 +87,10 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // handleMe 处理 GET /api/v1/auth/me。
 func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
+	if actor, ok := actorFromRequest(r); ok {
+		writeData(w, http.StatusOK, userPayload{ID: actor.ID, Username: actor.Username, Role: actor.Role})
+		return
+	}
 	claims, ok := auth.ClaimsFromRequest(r)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, codeUnauthorized, "缺少有效的登录凭证")

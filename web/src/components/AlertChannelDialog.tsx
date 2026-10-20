@@ -13,6 +13,7 @@ import { ChannelKindBadge } from './AlertBadges'
 import { Modal } from './Modal'
 import { useToast } from './Toast'
 
+import { t } from '../i18n'
 const inputClass =
   'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100'
 
@@ -35,12 +36,12 @@ interface FieldSpec {
 
 const KINDS: { value: ChannelKind; label: string }[] = [
   { value: 'webhook', label: 'Webhook' },
-  { value: 'dingtalk', label: '钉钉' },
-  { value: 'wecom', label: '企业微信' },
-  { value: 'feishu', label: '飞书' },
+  { value: 'dingtalk', label: t('s.0092') },
+  { value: 'wecom', label: t('s.0095') },
+  { value: 'feishu', label: t('s.0094') },
   { value: 'slack', label: 'Slack' },
   { value: 'telegram', label: 'Telegram' },
-  { value: 'email', label: '邮件' },
+  { value: 'email', label: t('s.0091') },
 ]
 
 const KIND_FIELDS: Record<ChannelKind, FieldSpec[]> = {
@@ -48,7 +49,7 @@ const KIND_FIELDS: Record<ChannelKind, FieldSpec[]> = {
     { key: 'url', label: 'Webhook URL', placeholder: 'https://example.com/hook', secret: true, required: true },
     {
       key: 'method',
-      label: 'HTTP 方法',
+      label: t('s.0096'),
       type: 'select',
       options: [
         { value: 'POST', label: 'POST' },
@@ -58,50 +59,50 @@ const KIND_FIELDS: Record<ChannelKind, FieldSpec[]> = {
     },
     {
       key: 'template',
-      label: '消息模板',
+      label: t('s.0097'),
       type: 'select',
       options: [
-        { value: 'json', label: 'json（发送结构化 JSON）' },
-        { value: 'text', label: 'text（发送纯文本）' },
+        { value: 'json', label: t('s.0098') },
+        { value: 'text', label: t('s.0099') },
       ],
       default: 'json',
     },
-    { key: 'timeout_s', label: '超时（秒）', type: 'number', placeholder: '10' },
+    { key: 'timeout_s', label: t('s.0100'), type: 'number', placeholder: '10' },
   ],
   dingtalk: [
-    { key: 'webhook', label: '机器人 Webhook', placeholder: 'https://oapi.dingtalk.com/robot/send?access_token=...', secret: true, required: true },
-    { key: 'secret', label: '加签 Secret', secret: true, hint: '机器人开启加签时必填；留空表示不修改' },
+    { key: 'webhook', label: t('s.0101'), placeholder: 'https://oapi.dingtalk.com/robot/send?access_token=...', secret: true, required: true },
+    { key: 'secret', label: t('s.0102'), secret: true, hint: t('s.0103') },
   ],
   wecom: [
-    { key: 'webhook', label: '机器人 Webhook', placeholder: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...', secret: true, required: true },
+    { key: 'webhook', label: t('s.0101'), placeholder: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...', secret: true, required: true },
   ],
   feishu: [
-    { key: 'webhook', label: '机器人 Webhook', placeholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/...', secret: true, required: true },
-    { key: 'secret', label: '签名 Secret', secret: true, hint: '开启签名校验时必填；留空表示不修改' },
+    { key: 'webhook', label: t('s.0101'), placeholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/...', secret: true, required: true },
+    { key: 'secret', label: t('s.0104'), secret: true, hint: t('s.0105') },
   ],
   slack: [
     { key: 'webhook', label: 'Incoming Webhook URL', placeholder: 'https://hooks.slack.com/services/...', secret: true, required: true },
-    { key: 'channel', label: '频道（可选）', placeholder: '#alerts' },
+    { key: 'channel', label: t('s.0106'), placeholder: '#alerts' },
   ],
   telegram: [
     { key: 'bot_token', label: 'Bot Token', placeholder: '123456:ABC-DEF...', secret: true, required: true },
     { key: 'chat_id', label: 'Chat ID', placeholder: '-1001234567890', required: true },
-    { key: 'parse_mode', label: 'Parse Mode（可选）', placeholder: 'Markdown' },
-    { key: 'api_base', label: 'API Base（可选）', placeholder: 'https://api.telegram.org', hint: '测试/代理环境可改' },
+    { key: 'parse_mode', label: t('s.0107'), placeholder: 'Markdown' },
+    { key: 'api_base', label: t('s.0108'), placeholder: 'https://api.telegram.org', hint: t('s.0109') },
   ],
   email: [
-    { key: 'smtp_host', label: 'SMTP 主机', placeholder: 'smtp.example.com', required: true },
-    { key: 'smtp_port', label: 'SMTP 端口', type: 'number', placeholder: '587' },
-    { key: 'username', label: '用户名', placeholder: 'alerts@example.com' },
-    { key: 'password', label: '密码 / 授权码', secret: true, hint: '留空表示不修改' },
-    { key: 'from', label: '发件人', placeholder: 'alerts@example.com', required: true },
-    { key: 'to', label: '收件人', placeholder: 'ops@example.com, dev@example.com', hint: '多个收件人用英文逗号分隔', list: true, required: true },
+    { key: 'smtp_host', label: t('s.0110'), placeholder: 'smtp.example.com', required: true },
+    { key: 'smtp_port', label: t('s.0111'), type: 'number', placeholder: '587' },
+    { key: 'username', label: t('s.0112'), placeholder: 'alerts@example.com' },
+    { key: 'password', label: t('s.0113'), secret: true, hint: t('s.0114') },
+    { key: 'from', label: t('s.0115'), placeholder: 'alerts@example.com', required: true },
+    { key: 'to', label: t('s.0116'), placeholder: 'ops@example.com, dev@example.com', hint: t('s.0117'), list: true, required: true },
     {
       key: 'tls',
-      label: '加密方式',
+      label: t('s.0118'),
       type: 'select',
       options: [
-        { value: 'starttls', label: 'starttls（默认）' },
+        { value: 'starttls', label: t('s.0119') },
         { value: 'ssl', label: 'ssl' },
         { value: 'none', label: 'none' },
       ],
@@ -202,12 +203,12 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
   }
 
   const validate = (): string | null => {
-    if (!name.trim()) return '请填写渠道名称'
+    if (!name.trim()) return t('s.0120')
     for (const field of fields) {
       if (!field.required) continue
       const value = (values[field.key] ?? '').trim()
       const alreadyConfigured = configuredSecrets.has(field.key)
-      if (value === '' && !alreadyConfigured) return `请填写${field.label}`
+      if (value === '' && !alreadyConfigured) return t('s.0121', { '0': field.label })
     }
     return null
   }
@@ -230,15 +231,15 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
     try {
       if (editing && channel) {
         await api.updateAlertChannel(channel.id, payload)
-        toast(`渠道「${name.trim()}」已更新`, 'success')
+        toast(t('s.0122', { '0': name.trim() }), 'success')
       } else {
         await api.createAlertChannel(payload)
-        toast(`渠道「${name.trim()}」已创建`, 'success')
+        toast(t('s.0123', { '0': name.trim() }), 'success')
       }
       onSaved()
       onClose()
     } catch (caught) {
-      setError(errorMessage(caught, '保存渠道失败'))
+      setError(errorMessage(caught, t('s.0124')))
     } finally {
       setSaving(false)
     }
@@ -248,16 +249,16 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
     <Modal
       open={open}
       onClose={onClose}
-      title={editing ? '编辑通知渠道' : '新建通知渠道'}
-      description="告警与恢复通知都会发送到启用的渠道；建议保存后先「测试发送」确认可用。"
+      title={editing ? t('s.0125') : t('s.0126')}
+      description={t('s.0127')}
       size="lg"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>
-            取消
+            {t('s.0024')}
           </Button>
           <Button type="submit" form="alert-channel-form" loading={saving}>
-            {editing ? '保存修改' : '创建渠道'}
+            {editing ? t('s.0128') : t('s.0129')}
           </Button>
         </>
       }
@@ -266,14 +267,14 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <label htmlFor="channel-name" className={labelClass}>
-              渠道名称
+              {t('s.0130')}
             </label>
             <input
               id="channel-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               maxLength={64}
-              placeholder="例如：运维钉钉群"
+              placeholder={t('s.0131')}
               className={inputClass + ' mt-1.5'}
             />
           </div>
@@ -284,12 +285,12 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
               onChange={(event) => setEnabled(event.target.checked)}
               className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800"
             />
-            启用该渠道
+            {t('s.0132')}
           </label>
         </div>
 
         <div>
-          <span className={labelClass}>渠道类型</span>
+          <span className={labelClass}>{t('s.0133')}</span>
           <div className="mt-1.5 flex flex-wrap gap-2">
             {KINDS.map((option) => (
               <button
@@ -312,7 +313,7 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
             ))}
           </div>
           <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-            {editing ? '切换类型会清空已填写字段，请谨慎操作。' : '先选类型，再填写该类型需要的参数。'}
+            {editing ? t('s.0134') : t('s.0135')}
           </p>
         </div>
 
@@ -355,7 +356,7 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
                         setValues((current) => ({ ...current, [field.key]: event.target.value }))
                       }
                       placeholder={
-                        maskedConfigured ? '已配置（留空表示不修改）' : (field.placeholder ?? '')
+                        maskedConfigured ? t('s.0136') : (field.placeholder ?? '')
                       }
                       className={inputClass + ' pr-14'}
                     />
@@ -372,7 +373,7 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
                       }
                       className="absolute inset-y-0 right-0 px-3 text-xs font-medium text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                     >
-                      {revealed.has(field.key) ? '隐藏' : '显示'}
+                      {revealed.has(field.key) ? t('s.0137') : t('s.0138')}
                     </button>
                   </div>
                 ) : (
@@ -390,7 +391,7 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
 
                 {maskedConfigured ? (
                   <p className="mt-1 text-xs text-emerald-600 dark:text-emerald-400">
-                    已配置密钥（后端脱敏返回，界面不回显）；留空表示不修改。
+                    {t('s.0139')}
                   </p>
                 ) : field.hint ? (
                   <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{field.hint}</p>
@@ -401,7 +402,7 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
         </div>
 
         <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
-          密钥安全：密钥类字段不会回显明文；留空＝保持原值，填写＝覆盖为新值。界面上任何位置都不会展示完整密钥。
+          {t('s.0140')}
         </p>
 
         {editing && channel ? (
@@ -413,7 +414,7 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
           />
         ) : (
           <p className="text-xs text-slate-400 dark:text-slate-500">
-            保存后可在列表或此处点击「测试发送」验证渠道是否真的可用。
+            {t('s.0141')}
           </p>
         )}
 
@@ -425,7 +426,7 @@ export function AlertChannelDialog({ open, channel, onClose, onSaved }: AlertCha
 
         {editing && channel ? (
           <p className="text-xs text-slate-400 dark:text-slate-500">
-            当前渠道类型：<ChannelKindBadge kind={kind} />
+            {t('s.0142')}<ChannelKindBadge kind={kind} />
           </p>
         ) : null}
       </form>

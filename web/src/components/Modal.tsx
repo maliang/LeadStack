@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { cn } from '../lib/cn'
 import { CloseIcon } from './Icons'
 import { IconButton } from './Button'
+import { t } from '../i18n'
 
 interface ModalProps {
   open: boolean
@@ -56,7 +57,7 @@ export function Modal({ open, title, description, onClose, children, footer, siz
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{description}</p>
             ) : null}
           </div>
-          <IconButton label="关闭" onClick={onClose} className="-mr-1 -mt-1">
+          <IconButton label={t('s.0264')} onClick={onClose} className="-mr-1 -mt-1">
             <CloseIcon className="h-5 w-5" />
           </IconButton>
         </div>

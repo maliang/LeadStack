@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Button } from './Button'
 import { Modal } from './Modal'
+import { t } from '../i18n'
 
 interface ConfirmDialogProps {
   open: boolean
@@ -22,8 +23,8 @@ export function ConfirmDialog({
   title,
   description,
   children,
-  confirmLabel = '确认',
-  cancelLabel = '取消',
+  confirmLabel = t('s.0387'),
+  cancelLabel = t('s.0024'),
   tone = 'primary',
   loading = false,
   error,

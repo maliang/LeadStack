@@ -5,6 +5,7 @@ import { errorMessage } from '../lib/errors'
 import { Button } from '../components/Button'
 import { PageLoading } from '../components/Loading'
 import { ThemeToggle } from '../components/ThemeToggle'
+import { t } from '../i18n'
 
 export default function LoginPage() {
   const { status, login } = useAuth()
@@ -15,13 +16,13 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  if (status === 'loading') return <PageLoading label="正在校验登录状态…" />
+  if (status === 'loading') return <PageLoading label={t('s.0487')} />
   if (status === 'authenticated') return <Navigate to="/" replace />
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!username.trim() || !password) {
-      setError('请输入用户名和密码')
+      setError(t('s.1036'))
       return
     }
     setSubmitting(true)
@@ -30,7 +31,7 @@ export default function LoginPage() {
       await login(username.trim(), password)
       navigate('/', { replace: true })
     } catch (caught) {
-      setError(errorMessage(caught, '登录失败，请检查用户名和密码'))
+      setError(errorMessage(caught, t('s.1037')))
     } finally {
       setSubmitting(false)
     }
@@ -58,15 +59,15 @@ export default function LoginPage() {
           </span>
           <h1 className="mt-4 flex items-baseline gap-1.5 text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
             LeadStack
-            <span className="text-sm font-medium text-slate-400 dark:text-slate-500">领栈</span>
+            <span className="text-sm font-medium text-slate-400 dark:text-slate-500">{t('s.0253')}</span>
           </h1>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">多服务器部署与检测平台</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{t('s.1038')}</p>
         </div>
 
         <div className="mt-6 rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-900/5 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 dark:shadow-black/30">
-          <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">登录控制台</h2>
+          <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">{t('s.1039')}</h2>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            使用管理员账号登录以管理你的服务器
+            {t('s.1040')}
           </p>
 
           <form onSubmit={handleSubmit} className="mt-5 space-y-4">
@@ -75,7 +76,7 @@ export default function LoginPage() {
                 htmlFor="username"
                 className="block text-sm font-medium text-slate-700 dark:text-slate-200"
               >
-                用户名
+                {t('s.0112')}
               </label>
               <input
                 id="username"
@@ -94,7 +95,7 @@ export default function LoginPage() {
                 htmlFor="password"
                 className="block text-sm font-medium text-slate-700 dark:text-slate-200"
               >
-                密码
+                {t('s.0073')}
               </label>
               <div className="relative mt-1.5">
                 <input
@@ -104,7 +105,7 @@ export default function LoginPage() {
                   autoComplete="current-password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
-                  placeholder="请输入密码"
+                  placeholder={t('s.1041')}
                   className="w-full rounded-md border border-slate-300 bg-white py-2 pl-3 pr-16 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:border-indigo-400"
                 />
                 <button
@@ -113,7 +114,7 @@ export default function LoginPage() {
                   className="absolute inset-y-0 right-0 rounded-r-md px-3 text-xs font-medium text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                   tabIndex={-1}
                 >
-                  {showPassword ? '隐藏' : '显示'}
+                  {showPassword ? t('s.0137') : t('s.0138')}
                 </button>
               </div>
             </div>
@@ -128,13 +129,13 @@ export default function LoginPage() {
             ) : null}
 
             <Button type="submit" loading={submitting} className="w-full">
-              登录
+              {t('s.1042')}
             </Button>
           </form>
         </div>
 
         <p className="mt-4 text-center text-xs leading-relaxed text-slate-400 dark:text-slate-500">
-          首次启动时，控制端日志会打印初始管理员账号与密码。
+          {t('s.1043')}
         </p>
       </div>
     </div>

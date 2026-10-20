@@ -4,7 +4,7 @@
 #   make build-go   只构建两个 Go 二进制（跳过前端，前端未就绪时也能用）
 #   make cross      交叉编译 5 个目标到 dist/
 #   make devssh     DEV-ONLY 测试 SSH 服务（仅本地验收用，**绝不进发布产物**）
-#   make test-e2e   按序跑 scripts/verify_m0..m4.sh 与 verify_backup.sh（缺失的自动跳过）
+#   make test-e2e   按序跑 scripts/verify_m0..m4.sh、verify_backup.sh、verify_ops.sh（缺失自动跳过）
 #   make fmt-check  gofmt 闸门：有未格式化文件即失败
 #   make test-race  go test -race（internal/api、internal/store 并发状态机）
 #   make help       查看全部目标
@@ -54,7 +54,7 @@ RACE_PKGS ?= ./internal/api/... ./internal/store/...
 
 .PHONY: help all build build-go web web-install web-embed webui-placeholder \
         webui-install-script cross run run-agent dev web-dev devssh test-e2e e2e \
-        test test-race vet fmt fmt-check tidy clean docker
+        test test-race vet fmt fmt-check tidy clean docker release-snapshot docker-check
 
 help: ## 显示本帮助
 	@printf 'LeadStack 构建入口（module: %s）\n\n' '$(MODULE)'
@@ -200,12 +200,12 @@ devssh: ## 构建 DEV-ONLY 测试 SSH 服务到 bin/leadstack-devssh（不参与
 	CGO_ENABLED=0 $(GO) build $(GOFLAGS_BUILD) -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/leadstack-devssh $(CMD_DEVSSH)
 
 # 验收脚本清单（按序执行；由 lead 维护，缺失时自动跳过，落地后无需改 Makefile）
-E2E_SCRIPTS := verify_m0 verify_m1 verify_m2 verify_m3 verify_m4 verify_backup
+E2E_SCRIPTS := verify_m0 verify_m1 verify_m2 verify_m3 verify_m4 verify_backup verify_ops
 
 # 依次跑 M0/M1/M2 验收脚本；输出（含脚本内部打印的控制端/agent 日志尾部）tee 到 $(E2E_LOG_DIR)/，
 # CI 失败时把该目录作为 artifact 上传。某个脚本缺失时打印提示并跳过（不算失败）；
 # 任一已存在的脚本失败 → 立即停止（不再跑后续脚本）并让 make 失败。
-test-e2e: ## 端到端验收：按序 verify_m0 → m1 → m2 → m3 → m4 → backup（前置：make build && make devssh）
+test-e2e: ## 端到端验收：按序 verify_m0..m4 → backup → ops（前置：make build && make devssh）
 	@mkdir -p $(E2E_LOG_DIR)
 	@printf '>> 前置产物：bin/leadstack、bin/leadstack-agent（make build）+ bin/leadstack-devssh（make devssh）\n'
 	@set -eu; scripts='$(E2E_SCRIPTS)'; total=0; i=0; \
@@ -247,6 +247,71 @@ cross: webui-placeholder ## 交叉编译 5 个目标到 dist/（只出发布白�
 
 docker: ## 构建控制端容器镜像（需要本地 docker）
 	docker build -t leadstack:$(VERSION) .
+
+# ---------------------------------------------------------------------------
+# 发布工程验证（需要本机安装 goreleaser / docker；CI 用 GitHub Actions 兜底）
+# ---------------------------------------------------------------------------
+GORELEASER ?= $(shell command -v goreleaser 2>/dev/null || echo goreleaser)
+DOCKER     ?= $(shell command -v docker 2>/dev/null || echo docker)
+
+# 前端正在重构、不便重新构建时可用现有 internal/webui/dist：
+#   make release-snapshot BUILD_SKIP_WEB=1
+BUILD_SKIP_WEB ?= 0
+ifeq ($(BUILD_SKIP_WEB),1)
+RELEASE_SNAPSHOT_DEPS :=
+RELEASE_SNAPSHOT_SKIP := --skip=before
+else
+RELEASE_SNAPSHOT_DEPS := web-embed
+RELEASE_SNAPSHOT_SKIP :=
+endif
+release-snapshot: $(RELEASE_SNAPSHOT_DEPS) ## goreleaser 快照构建：5 平台 × 2 二进制（产物在 dist/）
+	@printf '>> goreleaser release --snapshot --clean %s（VERSION=%s）\n' '$(RELEASE_SNAPSHOT_SKIP)' '$(VERSION)'
+	$(GORELEASER) release --snapshot --clean $(RELEASE_SNAPSHOT_SKIP)
+	@printf '>> 产物清单：\n'
+	@find $(DIST_DIR) -type f -name 'leadstack*' ! -name '*.tar.gz' ! -name '*.zip' -print 2>/dev/null | sort
+	@printf '>> checksums：\n'
+	@sed -n '1,20p' $(DIST_DIR)/checksums.txt 2>/dev/null || true
+
+# 复用已有镜像可跳过构建（前端正在重构、不便于重新构建时用）：
+#   make docker-check DOCKER_CHECK_SKIP_BUILD=1
+DOCKER_CHECK_SKIP_BUILD ?= 0
+docker-check: ## 容器冒烟：build → run → /healthz 200 → 容器内 backup 生成+校验 → 清理
+	@if [ "$(DOCKER_CHECK_SKIP_BUILD)" = "1" ]; then \
+		printf '>> 跳过构建，复用已有 leadstack:dev 镜像\n'; \
+	else \
+		printf '>> docker build -t leadstack:dev .\n'; \
+		$(DOCKER) build -t leadstack:dev . || exit 1; \
+	fi
+	@$(DOCKER) rm -f leadstack-smoke >/dev/null 2>&1 || true
+	@$(DOCKER) volume rm leadstack-smoke-data >/dev/null 2>&1 || true
+	@printf '>> docker run -d -p 18080:8080 -v leadstack-smoke-data:/data\n'
+	$(DOCKER) run -d --name leadstack-smoke -p 18080:8080 -v leadstack-smoke-data:/data leadstack:dev
+	@ok=0; for i in $$(seq 1 60); do \
+		code=$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/healthz 2>/dev/null || true); \
+		if [ "$$code" = "200" ]; then ok=1; break; fi; \
+		sleep 0.5; \
+	done; \
+	if [ "$$ok" != "1" ]; then \
+		printf '>> 容器 /healthz 未返回 200，容器日志：\n' >&2; \
+		$(DOCKER) logs leadstack-smoke >&2 2>&1 || true; \
+		$(DOCKER) rm -f leadstack-smoke >/dev/null 2>&1 || true; \
+		exit 1; \
+	fi; \
+	printf '>> 容器 /healthz → 200\n'
+	@printf '>> 容器内 backup CLI 验证（帮助 + 真实生成归档）：\n'
+	@$(DOCKER) exec leadstack-smoke sh -c ' \
+		set -e; \
+		/usr/local/bin/leadstack backup --help >/tmp/bk.out 2>&1 || true; \
+		if grep -qi "Usage of backup" /tmp/bk.out; then echo "   [ok] backup 子命令可用"; else echo "   [!!] backup 子命令不可用"; head -3 /tmp/bk.out; exit 1; fi; \
+		mkdir -p /data/backups; \
+		/usr/local/bin/leadstack backup --data-dir /data --out /data/backups/smoke.lsbak >/tmp/bk-run.out 2>&1 || { cat /tmp/bk-run.out; exit 1; }; \
+		head -c 7 /data/backups/smoke.lsbak | od -c | head -1; \
+		if [ "$$(head -c 7 /data/backups/smoke.lsbak)" = "LSBAK1" ]; then echo "   [ok] 归档 magic=LSBAK1"; else echo "   [!!] 归档 magic 不正确"; exit 1; fi; \
+		/usr/local/bin/leadstack backup verify --file /data/backups/smoke.lsbak >/tmp/bk-verify.out 2>&1 && echo "   [ok] backup verify 通过" || { cat /tmp/bk-verify.out; exit 1; } \
+	' || { printf '>> 容器内 backup 验证失败\n' >&2; $(DOCKER) logs leadstack-smoke >&2 2>&1 | tail -5; $(DOCKER) rm -f leadstack-smoke >/dev/null 2>&1; $(DOCKER) volume rm leadstack-smoke-data >/dev/null 2>&1; exit 1; }
+	@$(DOCKER) rm -f leadstack-smoke >/dev/null 2>&1 || true
+	@$(DOCKER) volume rm leadstack-smoke-data >/dev/null 2>&1 || true
+	@printf '>> docker-check 完成（容器与卷已清理）\n'
 
 clean: ## 清理构建产物（bin/ dist/ web/dist/ internal/webui/dist/）
 	rm -rf $(BIN_DIR) $(DIST_DIR) $(WEB_DIR)/dist $(WEBUI_DIST)

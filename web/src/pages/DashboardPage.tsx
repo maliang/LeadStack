@@ -27,6 +27,7 @@ import {
   RefreshIcon,
   ServerIcon,
   ShieldCheckIcon,
+
 } from '../components/Icons'
 import { InlineLoading } from '../components/Loading'
 import { ServerFiltersBar } from '../components/ServerFiltersBar'
@@ -37,6 +38,7 @@ import { StatCard } from '../components/StatCard'
 import { TagsDialog } from '../components/TagsDialog'
 import { useToast } from '../components/Toast'
 
+import { t } from '../i18n'
 interface BatchState {
   open: boolean
   title: string
@@ -80,7 +82,7 @@ export default function DashboardPage() {
   const onlineCount = info?.online_count ?? servers.filter((s) => s.status === 'online').length
   const offlineCount = Math.max(totalCount - onlineCount, 0)
   const onlineRate =
-    totalCount > 0 ? `${Math.round((onlineCount / totalCount) * 100)}%` : '暂无服务器'
+    totalCount > 0 ? `${Math.round((onlineCount / totalCount) * 100)}%` : t('s.0991')
   const hasFilters = Boolean(filters.group || filters.tag || filters.status || filters.mode)
 
   const checkSummary = checksSummaryQuery.data
@@ -163,7 +165,7 @@ export default function DashboardPage() {
     } catch (caught) {
       setBatch((current) =>
         current
-          ? { ...current, loading: false, error: errorMessage(caught, '批量操作失败') }
+          ? { ...current, loading: false, error: errorMessage(caught, t('s.0992')) }
           : current,
       )
     } finally {
@@ -178,11 +180,11 @@ export default function DashboardPage() {
     setTagError(null)
     try {
       await api.updateServer(tagEditing.id, { tags })
-      toast(`「${tagEditing.name}」的标签已更新`, 'success')
+      toast(t('s.0993', { '0': tagEditing.name }), 'success')
       setTagEditing(null)
       handleChanged()
     } catch (caught) {
-      setTagError(errorMessage(caught, '标签保存失败'))
+      setTagError(errorMessage(caught, t('s.0994')))
     } finally {
       setTagSaving(false)
     }
@@ -193,11 +195,11 @@ export default function DashboardPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-            总览
+            {t('s.0995')}
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            所有服务器的实时状态，每 10 秒自动刷新
-            {info ? ` · 控制端 v${info.version}` : ''}
+            {t('s.0996')}
+            {info ? t('s.0997', { '0': info.version }) : ''}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -207,10 +209,10 @@ export default function DashboardPage() {
             loading={refreshing}
             icon={<RefreshIcon className="h-4 w-4" />}
           >
-            刷新
+            {t('s.0689')}
           </Button>
           <Button onClick={() => setWizardOpen(true)} icon={<PlusIcon className="h-4 w-4" />}>
-            添加服务器
+            {t('s.0029')}
           </Button>
         </div>
       </div>
@@ -218,11 +220,11 @@ export default function DashboardPage() {
       {serversQuery.error ? (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
           <span>
-            加载服务器列表失败：{serversQuery.error}
-            {servers.length > 0 ? '（下方为上次成功获取的数据）' : ''}
+            {t('s.0998')}{serversQuery.error}
+            {servers.length > 0 ? t('s.0999') : ''}
           </span>
           <Button size="sm" variant="secondary" onClick={refreshAll}>
-            重试
+            {t('s.0053')}
           </Button>
         </div>
       ) : null}
@@ -231,14 +233,14 @@ export default function DashboardPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-400 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-500/50 dark:bg-rose-500/15 dark:text-rose-100">
           <span className="inline-flex items-center gap-2 font-medium">
             <BellIcon className="h-4 w-4" />
-            告警：当前有 {alertCounts.firing} 条告警进行中（firing）
-            {alertCounts.critical > 0 ? `，其中严重 ${alertCounts.critical} 条` : ''}
+            {t('s.1000')} {alertCounts.firing} {t('s.1001')}
+            {alertCounts.critical > 0 ? t('s.1002', { '0': alertCounts.critical }) : ''}
           </span>
           <Link
             to="/alerts"
             className="inline-flex items-center gap-1 text-xs font-medium underline-offset-2 hover:underline"
           >
-            查看告警页
+            {t('s.1003')}
             <ChevronRightIcon className="h-3.5 w-3.5" />
           </Link>
         </div>
@@ -248,13 +250,13 @@ export default function DashboardPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-200">
           <span className="inline-flex items-center gap-2 font-medium">
             <AlertTriangleIcon className="h-4 w-4" />
-            检测告警：有 {checkCounts.down} 个检测项处于 down 状态，请及时排查
+            {t('s.1004')} {checkCounts.down} {t('s.1005')}
           </span>
           <Link
             to="/checks"
             className="inline-flex items-center gap-1 text-xs font-medium underline-offset-2 hover:underline"
           >
-            查看检测页
+            {t('s.1006')}
             <ChevronRightIcon className="h-3.5 w-3.5" />
           </Link>
         </div>
@@ -262,25 +264,25 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard
-          label="服务器总数"
+          label={t('s.1007')}
           value={totalCount}
-          hint={info ? `控制端已运行 ${formatUptime(info.uptime_s)}` : '控制端信息加载中'}
+          hint={info ? t('s.1008', { '0': formatUptime(info.uptime_s) }) : t('s.1009')}
           icon={<ServerIcon className="h-5 w-5" />}
           loading={serversQuery.loading && serversQuery.data === null}
         />
         <StatCard
-          label="在线"
+          label={t('s.0521')}
           value={onlineCount}
           tone="success"
-          hint={`在线率 ${onlineRate}`}
+          hint={t('s.1010', { '0': onlineRate })}
           icon={<PulseIcon className="h-5 w-5" />}
           loading={serversQuery.loading && serversQuery.data === null}
         />
         <StatCard
-          label="离线"
+          label={t('s.0522')}
           value={offlineCount}
           tone="danger"
-          hint="含 SSH 连续采集失败与心跳超时"
+          hint={t('s.1011')}
           icon={<OfflineIcon className="h-5 w-5" />}
           loading={serversQuery.loading && serversQuery.data === null}
         />
@@ -293,9 +295,9 @@ export default function DashboardPage() {
               <ShieldCheckIcon className="h-4.5 w-4.5" />
             </span>
             <div>
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">检测概览</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.1012')}</h2>
               <p className="text-xs text-slate-400 dark:text-slate-500">
-                端口 / HTTP / Ping / 进程 / 脚本检测的当前状态
+                {t('s.1013')}
               </p>
             </div>
           </div>
@@ -303,7 +305,7 @@ export default function DashboardPage() {
             to="/checks"
             className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
           >
-            去检测页
+            {t('s.1014')}
             <ChevronRightIcon className="h-3.5 w-3.5" />
           </Link>
         </div>
@@ -311,22 +313,22 @@ export default function DashboardPage() {
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           {[
             {
-              label: '检测项总数',
+              label: t('s.0943'),
               value: checkCounts.total,
               className: 'text-slate-900 dark:text-slate-100',
             },
             {
-              label: '正常 (up)',
+              label: t('s.0944'),
               value: checkCounts.up,
               className: 'text-emerald-600 dark:text-emerald-300',
             },
             {
-              label: '异常 (down)',
+              label: t('s.0945'),
               value: checkCounts.down,
               className: 'text-rose-600 dark:text-rose-300',
             },
             {
-              label: '未知 (unknown)',
+              label: t('s.0946'),
               value: checkCounts.unknown,
               className: 'text-slate-500 dark:text-slate-400',
             },
@@ -354,9 +356,9 @@ export default function DashboardPage() {
               <BellIcon className="h-4.5 w-4.5" />
             </span>
             <div>
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">告警概览</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.1015')}</h2>
               <p className="text-xs text-slate-400 dark:text-slate-500">
-                规则触发后的当前状态与 24 小时恢复情况
+                {t('s.1016')}
               </p>
             </div>
           </div>
@@ -364,7 +366,7 @@ export default function DashboardPage() {
             to="/alerts"
             className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
           >
-            去告警页
+            {t('s.1017')}
             <ChevronRightIcon className="h-3.5 w-3.5" />
           </Link>
         </div>
@@ -372,22 +374,22 @@ export default function DashboardPage() {
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           {[
             {
-              label: '进行中 (firing)',
+              label: t('s.0698'),
               value: alertCounts.firing,
               className: 'text-rose-600 dark:text-rose-300',
             },
             {
-              label: '已确认 (acked)',
+              label: t('s.0699'),
               value: alertCounts.acked,
               className: 'text-blue-600 dark:text-blue-300',
             },
             {
-              label: '24h 已恢复',
+              label: t('s.0700'),
               value: alertCounts.resolved24h,
               className: 'text-emerald-600 dark:text-emerald-300',
             },
             {
-              label: '严重/警告/提示',
+              label: t('s.1018'),
               value: `${alertCounts.critical}/${alertCounts.warning}/${alertCounts.info}`,
               className: 'text-slate-700 dark:text-slate-200',
             },
@@ -415,9 +417,9 @@ export default function DashboardPage() {
               <FolderIcon className="h-4.5 w-4.5" />
             </span>
             <div>
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">最近发布</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0815')}</h2>
               <p className="text-xs text-slate-400 dark:text-slate-500">
-                最近 5 次批量部署的状态与版本，点击进入发布详情看实时日志
+                {t('s.1019')}
               </p>
             </div>
           </div>
@@ -425,7 +427,7 @@ export default function DashboardPage() {
             to="/apps"
             className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
           >
-            去应用与发布
+            {t('s.1020')}
             <ChevronRightIcon className="h-3.5 w-3.5" />
           </Link>
         </div>
@@ -433,7 +435,7 @@ export default function DashboardPage() {
         <div className="mt-3 space-y-1.5">
           {(releasesQuery.data ?? []).length === 0 ? (
             <p className="rounded-lg bg-slate-50 px-3 py-3 text-xs text-slate-400 dark:bg-slate-950/60 dark:text-slate-500">
-              还没有发布记录：到「应用」页创建应用与模板后即可发起批量部署
+              {t('s.1021')}
             </p>
           ) : (
             (releasesQuery.data ?? []).slice(0, 5).map((release) => {
@@ -451,13 +453,135 @@ export default function DashboardPage() {
                 >
                   <ReleaseStatusBadge status={release.status} />
                   <span className="text-sm text-slate-800 dark:text-slate-100">
-                    {release.app_name ?? '应用'}
+                    {release.app_name ?? t('s.0461')}
                   </span>
                   <span className="font-mono text-xs text-slate-500 dark:text-slate-400">
                     v{release.version}
                   </span>
                   <span className="text-xs text-slate-500 dark:text-slate-400">
-                    成功 {success} · 失败 {failed} · 进行中 {active}
+                    {t('s.0300')} {success} {t('s.1022')} {failed} {t('s.1023')} {active}
+                  </span>
+                  <span className="ml-auto text-[11px] text-slate-400 dark:text-slate-500">
+                    {formatRelativeTime(release.created_at, now)}
+                  </span>
+                </Link>
+              )
+            })
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-300">
+              <BellIcon className="h-4.5 w-4.5" />
+            </span>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.1015')}</h2>
+              <p className="text-xs text-slate-400 dark:text-slate-500">
+                {t('s.1016')}
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/alerts"
+            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+          >
+            {t('s.1017')}
+            <ChevronRightIcon className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {[
+            {
+              label: t('s.0698'),
+              value: alertCounts.firing,
+              className: 'text-rose-600 dark:text-rose-300',
+            },
+            {
+              label: t('s.0699'),
+              value: alertCounts.acked,
+              className: 'text-blue-600 dark:text-blue-300',
+            },
+            {
+              label: t('s.0700'),
+              value: alertCounts.resolved24h,
+              className: 'text-emerald-600 dark:text-emerald-300',
+            },
+            {
+              label: t('s.1018'),
+              value: `${alertCounts.critical}/${alertCounts.warning}/${alertCounts.info}`,
+              className: 'text-slate-700 dark:text-slate-200',
+            },
+          ].map((item) => (
+            <Link
+              key={item.label}
+              to="/alerts"
+              className="rounded-lg bg-slate-50 px-3 py-2.5 transition-colors hover:bg-slate-100 dark:bg-slate-950/60 dark:hover:bg-slate-900"
+            >
+              <span className="block text-[11px] text-slate-500 dark:text-slate-400">
+                {item.label}
+              </span>
+              <span className={`mt-0.5 block text-lg font-semibold tabular-nums ${item.className}`}>
+                {item.value}
+              </span>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300">
+              <FolderIcon className="h-4.5 w-4.5" />
+            </span>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0815')}</h2>
+              <p className="text-xs text-slate-400 dark:text-slate-500">
+                {t('s.1019')}
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/apps"
+            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+          >
+            {t('s.1020')}
+            <ChevronRightIcon className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+
+        <div className="mt-3 space-y-1.5">
+          {(releasesQuery.data ?? []).length === 0 ? (
+            <p className="rounded-lg bg-slate-50 px-3 py-3 text-xs text-slate-400 dark:bg-slate-950/60 dark:text-slate-500">
+              {t('s.1021')}
+            </p>
+          ) : (
+            (releasesQuery.data ?? []).slice(0, 5).map((release) => {
+              const runs = recentRuns[release.id] ?? release.runs
+              const success = runs.filter((run) => run.status === 'success').length
+              const failed = runs.filter((run) => run.status === 'failed').length
+              const active = runs.filter(
+                (run) => run.status === 'running' || run.status === 'pending',
+              ).length
+              return (
+                <Link
+                  key={release.id}
+                  to={`/releases/${encodeURIComponent(release.id)}`}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-slate-50 px-3 py-2 transition-colors hover:bg-slate-100 dark:bg-slate-950/60 dark:hover:bg-slate-900"
+                >
+                  <ReleaseStatusBadge status={release.status} />
+                  <span className="text-sm text-slate-800 dark:text-slate-100">
+                    {release.app_name ?? t('s.0461')}
+                  </span>
+                  <span className="font-mono text-xs text-slate-500 dark:text-slate-400">
+                    v{release.version}
+                  </span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                    {t('s.0300')} {success} {t('s.1022')} {failed} {t('s.1023')} {active}
                   </span>
                   <span className="ml-auto text-[11px] text-slate-400 dark:text-slate-500">
                     {formatRelativeTime(release.created_at, now)}
@@ -473,10 +597,10 @@ export default function DashboardPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">服务器</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0087')}</h2>
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                 {servers.length}
-                {hasFilters ? ' / 已筛选' : ''}
+                {hasFilters ? t('s.1024') : ''}
               </span>
             </div>
             <ServerFiltersBar
@@ -488,8 +612,8 @@ export default function DashboardPage() {
           </div>
           <p className="text-xs text-slate-400 dark:text-slate-500">
             {serversQuery.updatedAt
-              ? `更新于 ${formatClockTime(serversQuery.updatedAt)}`
-              : '加载中…'}
+              ? t('s.0949', { '0': formatClockTime(serversQuery.updatedAt) })
+              : t('s.0425')}
           </p>
         </div>
 
@@ -498,36 +622,36 @@ export default function DashboardPage() {
           pending={batch?.loading ?? false}
           groupOptions={groupOptions}
           onClear={() => setSelected(new Set())}
-          onTest={() => void runBatch('测试连通性', 'test-connection')}
-          onRefreshInfo={() => void runBatch('刷新主机信息', 'refresh-host-info')}
+          onTest={() => void runBatch(t('s.0281'), 'test-connection')}
+          onRefreshInfo={() => void runBatch(t('s.0282'), 'refresh-host-info')}
           onAddTags={(tags) => {
             if (tags.length === 0) {
-              toast('请先输入至少一个标签', 'error')
+              toast(t('s.1025'), 'error')
               return
             }
-            void runBatch('添加标签', 'add-tags', { tags })
+            void runBatch(t('s.0547'), 'add-tags', { tags })
           }}
-          onSetGroup={(group) => void runBatch('设置分组', 'set-group', { group })}
-          onDelete={() => void runBatch('删除服务器', 'delete')}
+          onSetGroup={(group) => void runBatch(t('s.1026'), 'set-group', { group })}
+          onDelete={() => void runBatch(t('s.0513'), 'delete')}
         />
 
         {serversQuery.loading && serversQuery.data === null ? (
-          <InlineLoading label="正在加载服务器列表…" />
+          <InlineLoading label={t('s.1027')} />
         ) : servers.length === 0 ? (
           hasFilters ? (
             <EmptyState
               icon={<ServerIcon className="h-6 w-6" />}
-              title="没有匹配的服务器"
-              description="当前筛选条件下没有服务器，试试清除筛选或更换条件"
-              actionLabel="清除筛选"
+              title={t('s.1028')}
+              description={t('s.1029')}
+              actionLabel={t('s.0525')}
               onAction={() => setFilters({})}
             />
           ) : (
             <EmptyState
               icon={<ServerIcon className="h-6 w-6" />}
-              title="还没有服务器"
-              description="还没有服务器，点击右上角添加第一台机器"
-              actionLabel="添加第一台服务器"
+              title={t('s.1030')}
+              description={t('s.1031')}
+              actionLabel={t('s.1032')}
               onAction={() => setWizardOpen(true)}
             />
           )
@@ -558,7 +682,7 @@ export default function DashboardPage() {
       </section>
 
       <p className="text-xs text-slate-400 dark:text-slate-500">
-        状态判定：agent 心跳 45 秒超时判离线；SSH 模式连续 3 次采集失败判离线。鼠标悬停名称后的警示图标可查看最后错误。
+        {t('s.1033')}
       </p>
 
       <AddServerWizard
@@ -578,8 +702,8 @@ export default function DashboardPage() {
       />
       <TagsDialog
         open={tagEditing !== null}
-        title="编辑标签"
-        description={tagEditing ? `服务器：${tagEditing.name}` : undefined}
+        title={t('s.0544')}
+        description={tagEditing ? t('s.1034', { '0': tagEditing.name }) : undefined}
         initialTags={tagEditing?.tags ?? []}
         loading={tagSaving}
         error={tagError}

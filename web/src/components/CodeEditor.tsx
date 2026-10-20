@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '../lib/cn'
+import { t } from '../i18n'
 
 interface CodeEditorProps {
   value: string
@@ -23,7 +24,7 @@ export function CodeEditor({
   rows = 14,
   placeholder,
   readOnly = false,
-  ariaLabel = '代码编辑器',
+  ariaLabel = t('s.0386'),
 }: CodeEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const gutterRef = useRef<HTMLDivElement | null>(null)

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +20,7 @@ import (
 	"github.com/maliang/leadstack/internal/config"
 	"github.com/maliang/leadstack/internal/credential"
 	"github.com/maliang/leadstack/internal/store"
+	"github.com/maliang/leadstack/internal/term"
 	"github.com/maliang/leadstack/internal/webui"
 	"github.com/maliang/leadstack/pkg/protocol"
 )
@@ -50,8 +52,14 @@ type Options struct {
 	// MaxSchemaVersion 是当前程序支持的最高迁移版本，用于拒绝「来自更新版本」的备份；
 	// 为 0 时取 defaultMaxSchemaVersion。
 	MaxSchemaVersion int
-	Version          string
-	StartedAt        time.Time
+	// RemoteExec 是运维命令执行通道（日志/进程/端口/定时任务/agent 文件用）。
+	RemoteExec RemoteExecutor
+	// SFTP 是 ssh 模式的文件通道；为 nil 时文件接口对 ssh 服务器不可用。
+	SFTP SFTPFactory
+	// TermOpener 是 ssh 终端通道（internal/term 的 SSHOpener）。
+	TermOpener term.Opener
+	Version    string
+	StartedAt  time.Time
 }
 
 // API 汇聚处理器的所有依赖。
@@ -70,6 +78,11 @@ type API struct {
 	logTap           *agentLogTap
 	backups          BackupService
 	maxSchemaVersion int
+	remoteExec       RemoteExecutor
+	sftp             SFTPFactory
+	termOpener       term.Opener
+	termTickets      sync.Map // ticket → *terminalTicket
+	agentTerms       sync.Map // sessionID → *agentTermSession
 	// backupWake 用于「设置变更后立即重排定时备份」，容量 1 的非阻塞信号。
 	backupWake chan struct{}
 	logger     *slog.Logger
@@ -124,6 +137,9 @@ func New(opts Options) (*API, error) {
 		artifacts:        artifacts,
 		logTap:           newAgentLogTap(opts.Store, logger),
 		backups:          opts.Backups,
+		remoteExec:       opts.RemoteExec,
+		sftp:             opts.SFTP,
+		termOpener:       opts.TermOpener,
 		maxSchemaVersion: resolvedMaxSchemaVersion(opts.MaxSchemaVersion),
 		backupWake:       make(chan struct{}, 1),
 		logger:           logger,

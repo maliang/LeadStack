@@ -3,6 +3,7 @@ package notify
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 )
@@ -133,4 +134,13 @@ func renderJSON(msg Message) ([]byte, error) {
 		return nil, fmt.Errorf("notify: 序列化 webhook 请求体失败: %w", err)
 	}
 	return b, nil
+}
+
+// renderHTML 把消息渲染为 HTML（邮件 multipart/alternative 的 HTML 部分）。
+// 内容全部转义后按行转 <br>，避免注入。
+func renderHTML(msg Message) string {
+	esc := html.EscapeString(renderText(msg))
+	esc = strings.ReplaceAll(esc, "\n", "<br>\n")
+	return "<!DOCTYPE html>\n<html><body style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#1f2328\">\n<div>" +
+		esc + "</div>\n</body></html>"
 }

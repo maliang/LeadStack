@@ -1,18 +1,19 @@
+import { t } from '../i18n'
 /** 时间、百分比、系统信息等展示格式化。 */
 
 /** 相对时间：刚刚 / 12 秒前 / 3 分钟前 / 2 小时前 / 3 天前。 */
 export function formatRelativeTime(ts: number | null | undefined, now: number = Date.now()): string {
-  if (!ts) return '从未'
+  if (!ts) return t('s.0626')
   const diff = now - ts
-  if (diff < 5_000) return '刚刚'
+  if (diff < 5_000) return t('s.0627')
   const seconds = Math.floor(diff / 1_000)
-  if (seconds < 60) return `${seconds} 秒前`
+  if (seconds < 60) return t('s.0628', { '0': seconds })
   const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes} 分钟前`
+  if (minutes < 60) return t('s.0629', { '0': minutes })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} 小时前`
+  if (hours < 24) return t('s.0630', { '0': hours })
   const days = Math.floor(hours / 24)
-  if (days < 30) return `${days} 天前`
+  if (days < 30) return t('s.0631', { '0': days })
   return formatDate(ts)
 }
 
@@ -53,10 +54,10 @@ export function formatUptime(seconds: number | null | undefined): string {
   const hours = Math.floor((total % 86_400) / 3_600)
   const minutes = Math.floor((total % 3_600) / 60)
   const secs = total % 60
-  if (days > 0) return `${days} 天 ${hours} 小时`
-  if (hours > 0) return `${hours} 小时 ${minutes} 分钟`
-  if (minutes > 0) return `${minutes} 分 ${secs} 秒`
-  return `${secs} 秒`
+  if (days > 0) return t('s.0153', { '0': days, '1': hours })
+  if (hours > 0) return t('s.0154', { '0': hours, '1': minutes })
+  if (minutes > 0) return t('s.0632', { '0': minutes, '1': secs })
+  return t('s.0156', { '0': secs })
 }
 
 export function formatOs(os: string | null, arch: string | null): string {
@@ -107,24 +108,24 @@ export function truncateMiddle(value: string | null | undefined, head = 14, tail
 export function metricLabel(metric: string): string {
   switch (metric) {
     case 'cpu.pct':
-      return 'CPU 使用率'
+      return t('s.0633')
     case 'mem.used_pct':
-      return '内存使用率'
+      return t('s.0634')
     case 'mem.used_bytes':
-      return '内存使用量'
+      return t('s.0635')
     case 'disk.used.pct':
     case 'disk.used_pct':
-      return '磁盘使用率'
+      return t('s.0636')
     case 'load.1':
-      return '系统负载（1 分钟）'
+      return t('s.0637')
     case 'net.rx_bytes':
-      return '网络接收'
+      return t('s.0638')
     case 'net.tx_bytes':
-      return '网络发送'
+      return t('s.0639')
     case 'proc.count':
-      return '进程数'
+      return t('s.0640')
     case 'uptime_s':
-      return '运行时长'
+      return t('s.0641')
     default:
       return metric
   }
@@ -134,12 +135,12 @@ export function metricLabel(metric: string): string {
 export function formatDuration(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined) return '—'
   const total = Math.max(0, Math.floor(seconds))
-  if (total === 0) return '立即'
-  if (total < 60) return `${total} 秒`
+  if (total === 0) return t('s.0182')
+  if (total < 60) return t('s.0156', { '0': total })
   const minutes = Math.floor(total / 60)
-  if (minutes < 60) return `${minutes} 分钟`
+  if (minutes < 60) return t('s.0155', { '0': minutes })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return minutes % 60 === 0 ? `${hours} 小时` : `${hours} 小时 ${minutes % 60} 分钟`
+  if (hours < 24) return minutes % 60 === 0 ? t('s.0642', { '0': hours }) : t('s.0154', { '0': hours, '1': minutes % 60 })
   const days = Math.floor(hours / 24)
-  return hours % 24 === 0 ? `${days} 天` : `${days} 天 ${hours % 24} 小时`
+  return hours % 24 === 0 ? t('s.0643', { '0': days }) : t('s.0153', { '0': days, '1': hours % 24 })
 }

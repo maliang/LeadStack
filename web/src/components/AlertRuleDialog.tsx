@@ -19,21 +19,22 @@ import { CheckKindBadge } from './CheckBadges'
 import { ModeBadge } from './StatusBadge'
 import { useToast } from './Toast'
 
+import { t } from '../i18n'
 const inputClass =
   'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:disabled:bg-slate-900'
 
 const labelClass = 'block text-sm font-medium text-slate-700 dark:text-slate-200'
 
 const SOURCES: { value: AlertSource; label: string; hint: string }[] = [
-  { value: 'check', label: '检测项', hint: '检测项状态翻转（失败/恢复）时触发' },
-  { value: 'server', label: '服务器', hint: '服务器上线/离线时触发' },
-  { value: 'metric', label: '指标', hint: '周期评估指标阈值（如 cpu.pct > 80）' },
+  { value: 'check', label: t('s.0086'), hint: t('s.0179') },
+  { value: 'server', label: t('s.0087'), hint: t('s.0180') },
+  { value: 'metric', label: t('s.0088'), hint: t('s.0181') },
 ]
 
 const SEVERITIES: { value: AlertSeverity; label: string }[] = [
-  { value: 'critical', label: '严重' },
-  { value: 'warning', label: '警告' },
-  { value: 'info', label: '提示' },
+  { value: 'critical', label: t('s.0082') },
+  { value: 'warning', label: t('s.0083') },
+  { value: 'info', label: t('s.0084') },
 ]
 
 const METRIC_OPTIONS = [
@@ -48,16 +49,16 @@ const METRIC_OPTIONS = [
 ]
 
 const FOR_PRESETS = [
-  { value: 0, label: '立即' },
-  { value: 60, label: '1 分钟' },
-  { value: 300, label: '5 分钟' },
-  { value: 600, label: '10 分钟' },
+  { value: 0, label: t('s.0182') },
+  { value: 60, label: t('s.0183') },
+  { value: 300, label: t('s.0184') },
+  { value: 600, label: t('s.0185') },
 ]
 
 const DEDUP_PRESETS = [
-  { value: 300, label: '5 分钟' },
-  { value: 900, label: '15 分钟' },
-  { value: 3600, label: '1 小时' },
+  { value: 300, label: t('s.0184') },
+  { value: 900, label: t('s.0186') },
+  { value: 3600, label: t('s.0001') },
 ]
 
 interface AlertRuleDialogProps {
@@ -150,18 +151,18 @@ export function AlertRuleDialog({
   }
 
   const validate = (): string | null => {
-    if (!name.trim()) return '请填写规则名称'
+    if (!name.trim()) return t('s.0187')
     const forValue = Number(forDuration)
-    if (!Number.isInteger(forValue) || forValue < 0) return '持续时长需为不小于 0 的整数（秒）'
+    if (!Number.isInteger(forValue) || forValue < 0) return t('s.0188')
     const dedupValue = Number(dedupWindow)
-    if (!Number.isInteger(dedupValue) || dedupValue < 0) return '去重窗口需为不小于 0 的整数（秒）'
+    if (!Number.isInteger(dedupValue) || dedupValue < 0) return t('s.0189')
     if (source === 'metric') {
-      if (!metric.trim()) return '请填写指标名'
-      if (!['>', '>=', '<', '<='].includes(comparator)) return '比较符需为 >、>=、< 或 <= 之一'
+      if (!metric.trim()) return t('s.0190')
+      if (!['>', '>=', '<', '<='].includes(comparator)) return t('s.0191')
       const thresholdValue = Number(threshold)
-      if (!Number.isFinite(thresholdValue)) return '阈值需为数字'
+      if (!Number.isFinite(thresholdValue)) return t('s.0192')
     }
-    if (channelIds.size === 0) return '请至少选择一个通知渠道（否则告警不会推送给人）'
+    if (channelIds.size === 0) return t('s.0193')
     return null
   }
 
@@ -193,15 +194,15 @@ export function AlertRuleDialog({
     try {
       if (editing && rule) {
         await api.updateAlertRule(rule.id, payload)
-        toast(`规则「${name.trim()}」已更新`, 'success')
+        toast(t('s.0194', { '0': name.trim() }), 'success')
       } else {
         await api.createAlertRule(payload)
-        toast(`规则「${name.trim()}」已创建`, 'success')
+        toast(t('s.0195', { '0': name.trim() }), 'success')
       }
       onSaved()
       onClose()
     } catch (caught) {
-      setError(errorMessage(caught, '保存规则失败'))
+      setError(errorMessage(caught, t('s.0196')))
     } finally {
       setSaving(false)
     }
@@ -209,25 +210,25 @@ export function AlertRuleDialog({
 
   const scopeEmptyHint =
     source === 'check'
-      ? '不选则匹配全部检测项'
+      ? t('s.0197')
       : source === 'server'
-        ? '不选服务器/分组/标签则匹配全部服务器'
+        ? t('s.0198')
         : ''
 
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title={editing ? '编辑告警规则' : '新建告警规则'}
-      description="选择触发来源与适用范围，设置持续时长、去重窗口、级别与通知渠道。"
+      title={editing ? t('s.0199') : t('s.0200')}
+      description={t('s.0201')}
       size="lg"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>
-            取消
+            {t('s.0024')}
           </Button>
           <Button type="submit" form="alert-rule-form" loading={saving}>
-            {editing ? '保存修改' : '创建规则'}
+            {editing ? t('s.0128') : t('s.0202')}
           </Button>
         </>
       }
@@ -236,14 +237,14 @@ export function AlertRuleDialog({
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <label htmlFor="rule-name" className={labelClass}>
-              规则名称
+              {t('s.0203')}
             </label>
             <input
               id="rule-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               maxLength={64}
-              placeholder="例如：核心服务端口不可用"
+              placeholder={t('s.0204')}
               className={inputClass + ' mt-1.5'}
             />
           </div>
@@ -254,12 +255,12 @@ export function AlertRuleDialog({
               onChange={(event) => setEnabled(event.target.checked)}
               className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800"
             />
-            启用该规则
+            {t('s.0205')}
           </label>
         </div>
 
         <div>
-          <span className={labelClass}>触发来源</span>
+          <span className={labelClass}>{t('s.0206')}</span>
           <div className="mt-1.5 grid grid-cols-1 gap-2 sm:grid-cols-3">
             {SOURCES.map((option) => (
               <button
@@ -288,9 +289,9 @@ export function AlertRuleDialog({
           <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className={labelClass}>
-                适用检测项
+                {t('s.0207')}
                 <span className="ml-1.5 font-normal text-slate-400">
-                  已选 {checkIds.size}
+                  {t('s.0208')} {checkIds.size}
                   {checks.length > 0 ? ` / ${checks.length}` : ''}
                 </span>
               </span>
@@ -300,21 +301,21 @@ export function AlertRuleDialog({
                   onClick={() => setCheckIds(new Set(checks.map((check) => check.id)))}
                   className="text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
                 >
-                  全选
+                  {t('s.0209')}
                 </button>
                 <button
                   type="button"
                   onClick={() => setCheckIds(new Set())}
                   className="text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400"
                 >
-                  清空
+                  {t('s.0210')}
                 </button>
               </div>
             </div>
             <div className="mt-2 max-h-48 overflow-y-auto rounded-md border border-slate-100 dark:border-slate-800/70">
               {checks.length === 0 ? (
                 <p className="px-3 py-4 text-center text-xs text-slate-400 dark:text-slate-500">
-                  还没有检测项，请先在检测页创建
+                  {t('s.0211')}
                 </p>
               ) : (
                 checks.map((check) => (
@@ -347,8 +348,8 @@ export function AlertRuleDialog({
           <div className="space-y-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className={labelClass}>
-                适用服务器
-                <span className="ml-1.5 font-normal text-slate-400">已选 {serverIds.size}</span>
+                {t('s.0212')}
+                <span className="ml-1.5 font-normal text-slate-400">{t('s.0208')} {serverIds.size}</span>
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -362,21 +363,21 @@ export function AlertRuleDialog({
                   }
                   className="text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
                 >
-                  全选当前筛选
+                  {t('s.0213')}
                 </button>
                 <button
                   type="button"
                   onClick={() => setServerIds(new Set())}
                   className="text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400"
                 >
-                  清空
+                  {t('s.0210')}
                 </button>
               </div>
             </div>
             <input
               value={serverSearch}
               onChange={(event) => setServerSearch(event.target.value)}
-              placeholder="搜索名称 / 主机 / 标签"
+              placeholder={t('s.0214')}
               className={inputClass}
             />
             <div className="max-h-40 overflow-y-auto rounded-md border border-slate-100 dark:border-slate-800/70">
@@ -403,10 +404,10 @@ export function AlertRuleDialog({
             </div>
 
             <div>
-              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">按分组匹配</p>
+              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">{t('s.0215')}</p>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {groups.length === 0 ? (
-                  <span className="text-xs text-slate-400 dark:text-slate-500">暂无分组</span>
+                  <span className="text-xs text-slate-400 dark:text-slate-500">{t('s.0216')}</span>
                 ) : (
                   groups.map((group) => (
                     <button
@@ -428,10 +429,10 @@ export function AlertRuleDialog({
             </div>
 
             <div>
-              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">按标签匹配</p>
+              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">{t('s.0217')}</p>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {tagOptions.length === 0 ? (
-                  <span className="text-xs text-slate-400 dark:text-slate-500">暂无标签</span>
+                  <span className="text-xs text-slate-400 dark:text-slate-500">{t('s.0218')}</span>
                 ) : (
                   tagOptions.map((tag) => (
                     <button
@@ -459,7 +460,7 @@ export function AlertRuleDialog({
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <label htmlFor="rule-metric" className={labelClass}>
-                指标
+                {t('s.0088')}
               </label>
               <input
                 id="rule-metric"
@@ -478,7 +479,7 @@ export function AlertRuleDialog({
             </div>
             <div>
               <label htmlFor="rule-comparator" className={labelClass}>
-                比较符
+                {t('s.0219')}
               </label>
               <select
                 id="rule-comparator"
@@ -495,7 +496,7 @@ export function AlertRuleDialog({
             </div>
             <div>
               <label htmlFor="rule-threshold" className={labelClass}>
-                阈值
+                {t('s.0220')}
               </label>
               <input
                 id="rule-threshold"
@@ -506,7 +507,7 @@ export function AlertRuleDialog({
               />
             </div>
             <p className="text-xs text-slate-400 sm:col-span-3 dark:text-slate-500">
-              例：`cpu.pct &gt; 80` 表示 CPU 使用率超过 80% 时按规则触发。
+              {t('s.0221')}
             </p>
           </div>
         ) : null}
@@ -514,7 +515,7 @@ export function AlertRuleDialog({
         <div className="grid gap-4 sm:grid-cols-3">
           <div>
             <label htmlFor="rule-for-duration" className={labelClass}>
-              持续时长（秒）
+              {t('s.0222')}
             </label>
             <input
               id="rule-for-duration"
@@ -524,7 +525,7 @@ export function AlertRuleDialog({
               className={inputClass + ' mt-1.5'}
             />
             <p className="mt-1 text-xs leading-relaxed text-slate-400 dark:text-slate-500">
-              人话：异常要连续存在这么久才真正告警；中途恢复就不告警。填 0 = 一发现异常就告警。
+              {t('s.0223')}
             </p>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {FOR_PRESETS.map((preset) => (
@@ -541,7 +542,7 @@ export function AlertRuleDialog({
           </div>
           <div>
             <label htmlFor="rule-dedup" className={labelClass}>
-              去重窗口（秒）
+              {t('s.0224')}
             </label>
             <input
               id="rule-dedup"
@@ -551,7 +552,7 @@ export function AlertRuleDialog({
               className={inputClass + ' mt-1.5'}
             />
             <p className="mt-1 text-xs leading-relaxed text-slate-400 dark:text-slate-500">
-              人话：告警没恢复期间，同一个故障在这段时间内不重复打扰（只累加通知次数）；超过窗口仍未恢复才会再推一次。
+              {t('s.0225')}
             </p>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {DEDUP_PRESETS.map((preset) => (
@@ -568,7 +569,7 @@ export function AlertRuleDialog({
           </div>
           <div>
             <label htmlFor="rule-severity" className={labelClass}>
-              严重级别
+              {t('s.0226')}
             </label>
             <select
               id="rule-severity"
@@ -583,8 +584,7 @@ export function AlertRuleDialog({
               ))}
             </select>
             <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-              当前设置：持续 {formatDuration(Number(forDuration) || 0)}后触发，
-              每 {formatDuration(Number(dedupWindow) || 0)}最多重复通知一次。
+              {t('s.0227')} {formatDuration(Number(forDuration) || 0)}{t('s.0228')} {formatDuration(Number(dedupWindow) || 0)}{t('s.0229')}
             </p>
           </div>
         </div>
@@ -592,8 +592,8 @@ export function AlertRuleDialog({
         <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className={labelClass}>
-              通知渠道
-              <span className="ml-1.5 font-normal text-slate-400">已选 {channelIds.size}</span>
+              {t('s.0230')}
+              <span className="ml-1.5 font-normal text-slate-400">{t('s.0208')} {channelIds.size}</span>
             </span>
             <div className="flex items-center gap-2">
               <button
@@ -601,21 +601,21 @@ export function AlertRuleDialog({
                 onClick={() => setChannelIds(new Set(channels.map((channel) => channel.id)))}
                 className="text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
               >
-                全选
+                {t('s.0209')}
               </button>
               <button
                 type="button"
                 onClick={() => setChannelIds(new Set())}
                 className="text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400"
               >
-                清空
+                {t('s.0210')}
               </button>
             </div>
           </div>
           <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
             {channels.length === 0 ? (
               <p className="text-xs text-slate-400 sm:col-span-2 dark:text-slate-500">
-                还没有通知渠道，请先在「渠道」标签页创建
+                {t('s.0231')}
               </p>
             ) : (
               channels.map((channel) => (
@@ -634,14 +634,14 @@ export function AlertRuleDialog({
                   </span>
                   <ChannelKindBadge kind={channel.kind} />
                   {!channel.enabled ? (
-                    <span className="text-[11px] text-slate-400 dark:text-slate-500">已停用</span>
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500">{t('s.0232')}</span>
                   ) : null}
                 </label>
               ))
             )}
           </div>
           <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-            规则触发与恢复都会发送到这些渠道；留空则不会通知任何人。
+            {t('s.0233')}
           </p>
         </div>
 

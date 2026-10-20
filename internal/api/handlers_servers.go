@@ -89,6 +89,11 @@ func (a *API) handleListServers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	params, perr := parsePage(r)
+	if perr != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, perr.Error())
+		return
+	}
 	nowMS := a.nowMS()
 	servers, err := a.st.ListServersFiltered(ctx, filter, nowMS)
 	if err != nil {
@@ -119,7 +124,11 @@ func (a *API) handleListServers(w http.ResponseWriter, r *http.Request) {
 	for _, srv := range servers {
 		out = append(out, toServerPayload(srv, nowMS, metrics[srv.ID], hostInfoRaw(hostInfos, srv.ID)))
 	}
-	writeData(w, http.StatusOK, out)
+	start, end, meta := params.window(len(out))
+	if !params.Paged {
+		start, end = 0, len(out)
+	}
+	writePagedList(w, params, out[start:end], meta)
 }
 
 // handleGetServer 处理 GET /api/v1/servers/{id}。

@@ -1,4 +1,5 @@
 # 构建产物
+# /dist/ 同时是 goreleaser 与 make cross 的输出目录（gitignore 不支持行尾注释，注释单独成行）
 /bin/
 /dist/
 /data/
@@ -46,6 +47,12 @@ coverage.out
 coverage.html
 *.test
 *.prof
+
+# goreleaser 本地快照与容器运行时（本地验证用，不入库）
+/.colima/
+.colima/
+# 容器冒烟卷/临时数据（docker-check 用命名卷，不会落在仓库；这里兜底防手滑）
+/.docker/
 
 # 编辑器 / 系统
 .DS_Store

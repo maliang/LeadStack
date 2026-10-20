@@ -28,6 +28,8 @@ const (
 	hourRollupRetentionMS = int64(365*24*3600) * 1000
 	// checkResultsRetentionMS 是检测结果保留时长（30 天，契约第 16 节）。
 	checkResultsRetentionMS = int64(30*24*3600) * 1000
+	// scheduledRunRetentionMS 是定时任务执行记录保留时长（30 天）。
+	scheduledRunRetentionMS = int64(30*24*3600) * 1000
 )
 
 // SweepOnce 执行一次离线清扫：把超时未心跳的服务器置为 offline 并记事件。
@@ -125,6 +127,19 @@ func (a *API) runRetention(ctx context.Context) {
 		a.logger.Warn("清理历史检测结果失败", "err", err)
 	} else if n > 0 {
 		a.logger.Info("清理历史检测结果完成", "deleted", n)
+	}
+	if days := a.cfg.AuditRetentionDays; days > 0 {
+		cutoff := nowMS - int64(days)*24*3600*1000
+		if n, err := a.st.DeleteAuditLogsBefore(ctx, cutoff); err != nil {
+			a.logger.Warn("清理历史审计日志失败", "err", err)
+		} else if n > 0 {
+			a.logger.Info("清理历史审计日志完成", "deleted", n, "retention_days", days)
+		}
+	}
+	if n, err := a.st.DeleteScheduledTaskRunsBefore(ctx, nowMS-scheduledRunRetentionMS); err != nil {
+		a.logger.Warn("清理历史定时任务记录失败", "err", err)
+	} else if n > 0 {
+		a.logger.Info("清理历史定时任务记录完成", "deleted", n)
 	}
 	if days := a.cfg.AlertRetentionDays; days > 0 {
 		cutoff := nowMS - int64(days)*24*3600*1000

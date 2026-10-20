@@ -75,10 +75,10 @@ type Client struct {
 	fingerprint string
 }
 
-// Dial 建立 SSH 连接（含认证与主机密钥校验）。
-func Dial(ctx context.Context, o DialOptions) (*Client, error) {
+// dialSSH 建立底层 SSH 连接（含认证与主机密钥校验），供 Dial / PTY / SFTP 复用。
+func dialSSH(ctx context.Context, o DialOptions) (*ssh.Client, string, string, error) {
 	if err := validateDialOptions(o); err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 
 	port := o.Port
@@ -96,11 +96,11 @@ func Dial(ctx context.Context, o DialOptions) (*Client, error) {
 
 	hostKeyCallback, fingerprint, err := buildHostKeyCallback(policy, o.KnownHostsPath, o.OnNewHostKey)
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	authMethods, err := buildAuthMethods(o.Auth)
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 
 	addr := net.JoinHostPort(o.Host, strconv.Itoa(port))
@@ -117,7 +117,7 @@ func Dial(ctx context.Context, o DialOptions) (*Client, error) {
 
 	conn, err := (&net.Dialer{Timeout: timeout}).DialContext(dialCtx, "tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("sshx: 连接 %s 失败: %w", addr, err)
+		return nil, "", "", fmt.Errorf("sshx: 连接 %s 失败: %w", addr, err)
 	}
 
 	type handshakeResult struct {
@@ -143,20 +143,25 @@ func Dial(ctx context.Context, o DialOptions) (*Client, error) {
 		case <-time.After(3 * time.Second):
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, fmt.Errorf("sshx: 连接 %s 被取消: %w", addr, ctxErr)
+			return nil, "", "", fmt.Errorf("sshx: 连接 %s 被取消: %w", addr, ctxErr)
 		}
-		return nil, fmt.Errorf("sshx: 连接 %s 超时（%s）", addr, timeout)
+		return nil, "", "", fmt.Errorf("sshx: 连接 %s 超时（%s）", addr, timeout)
 	}
 	if res.err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("sshx: 与 %s 握手/认证失败: %w", addr, res.err)
+		return nil, "", "", fmt.Errorf("sshx: 与 %s 握手/认证失败: %w", addr, res.err)
 	}
 
-	return &Client{
-		client:      ssh.NewClient(res.conn, res.chans, res.reqs),
-		version:     string(res.conn.ServerVersion()),
-		fingerprint: fingerprint(),
-	}, nil
+	return ssh.NewClient(res.conn, res.chans, res.reqs), string(res.conn.ServerVersion()), fingerprint(), nil
+}
+
+// Dial 建立 SSH 连接（含认证与主机密钥校验）。
+func Dial(ctx context.Context, o DialOptions) (*Client, error) {
+	client, version, fingerprint, err := dialSSH(ctx, o)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{client: client, version: version, fingerprint: fingerprint}, nil
 }
 
 func validateDialOptions(o DialOptions) error {

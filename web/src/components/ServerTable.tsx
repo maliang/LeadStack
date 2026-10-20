@@ -16,6 +16,7 @@ import { ModeBadge, StatusBadge } from './StatusBadge'
 import { IconButton } from './Button'
 import { AlertTriangleIcon, FolderIcon, PencilIcon, TagIcon, TrashIcon } from './Icons'
 
+import { t } from '../i18n'
 interface ServerTableProps {
   servers: Server[]
   now: number
@@ -57,16 +58,16 @@ function UsageBar({ value }: { value: number | null }) {
 function HostSummary({ server }: { server: Server }) {
   const info = server.host_info
   if (!info) {
-    return <span className="text-xs text-slate-400 dark:text-slate-500">尚未采集</span>
+    return <span className="text-xs text-slate-400 dark:text-slate-500">{t('s.0526')}</span>
   }
   const diskPct =
     info.disk_total_bytes && info.disk_used_bytes
       ? `${((info.disk_used_bytes / info.disk_total_bytes) * 100).toFixed(0)}%`
       : null
   const text = [
-    info.cpu_cores ? `${info.cpu_cores} 核` : null,
+    info.cpu_cores ? t('s.0527', { '0': info.cpu_cores }) : null,
     info.mem_total_bytes ? formatBytes(info.mem_total_bytes, 0) : null,
-    diskPct ? `磁盘 ${diskPct}` : null,
+    diskPct ? t('s.0528', { '0': diskPct }) : null,
   ]
     .filter(Boolean)
     .join(' · ')
@@ -75,7 +76,7 @@ function HostSummary({ server }: { server: Server }) {
       className="text-xs text-slate-600 dark:text-slate-300"
       title={[info.cpu_model, info.os_version, info.timezone].filter(Boolean).join(' · ')}
     >
-      {text || '已采集'}
+      {text || t('s.0529')}
     </span>
   )
 }
@@ -109,24 +110,24 @@ export function ServerTable({
               <input
                 ref={headerCheckboxRef}
                 type="checkbox"
-                aria-label="全选服务器"
+                aria-label={t('s.0530')}
                 checked={allSelected}
                 onChange={(event) => onToggleAll(event.target.checked)}
                 className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800"
               />
             </th>
-            <th scope="col" className="px-4 py-2.5 font-medium">名称</th>
-            <th scope="col" className="px-4 py-2.5 font-medium">主机</th>
-            <th scope="col" className="px-4 py-2.5 font-medium">方式</th>
-            <th scope="col" className="px-4 py-2.5 font-medium">状态</th>
-            <th scope="col" className="px-4 py-2.5 font-medium">分组</th>
-            <th scope="col" className="px-4 py-2.5 font-medium">系统</th>
-            <th scope="col" className="px-4 py-2.5 font-medium">主机信息</th>
+            <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0531')}</th>
+            <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0060')}</th>
+            <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0532')}</th>
+            <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0533')}</th>
+            <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0062')}</th>
+            <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0534')}</th>
+            <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0535')}</th>
             <th scope="col" className="px-4 py-2.5 font-medium">CPU</th>
-            <th scope="col" className="px-4 py-2.5 font-medium">内存</th>
-            <th scope="col" className="px-4 py-2.5 font-medium">负载</th>
-            <th scope="col" className="px-4 py-2.5 font-medium">最后心跳</th>
-            <th scope="col" className="px-4 py-2.5 text-right font-medium">操作</th>
+            <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0536')}</th>
+            <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0537')}</th>
+            <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0538')}</th>
+            <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('s.0539')}</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -144,7 +145,7 @@ export function ServerTable({
                 <td className="px-3 py-3 align-top">
                   <input
                     type="checkbox"
-                    aria-label={`选择 ${server.name}`}
+                    aria-label={t('s.0540', { '0': server.name })}
                     checked={selected.has(server.id)}
                     onChange={() => onToggle(server.id)}
                     className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800"
@@ -161,7 +162,7 @@ export function ServerTable({
                     {server.last_error ? (
                       <span
                         className="shrink-0 text-amber-500 dark:text-amber-400"
-                        title={`最后错误：${server.last_error}`}
+                        title={t('s.0541', { '0': server.last_error })}
                       >
                         <AlertTriangleIcon className="h-3.5 w-3.5" />
                       </span>
@@ -205,7 +206,7 @@ export function ServerTable({
                 <td className="px-4 py-3 align-top">
                   <span
                     className="text-xs text-slate-600 dark:text-slate-300"
-                    title={server.kernel ? `内核 ${server.kernel}` : undefined}
+                    title={server.kernel ? t('s.0542', { '0': server.kernel }) : undefined}
                   >
                     {formatOs(server.os ?? info?.os ?? null, server.arch ?? info?.arch ?? null)}
                   </span>
@@ -225,20 +226,20 @@ export function ServerTable({
                 <td className="px-4 py-3 align-top">
                   <span
                     className="text-xs text-slate-500 dark:text-slate-400"
-                    title={server.last_seen_at ? formatDateTime(server.last_seen_at) : '从未上报'}
+                    title={server.last_seen_at ? formatDateTime(server.last_seen_at) : t('s.0543')}
                   >
                     {formatRelativeTime(server.last_seen_at, now)}
                   </span>
                 </td>
                 <td className="px-4 py-3 align-top">
                   <div className="flex items-center justify-end gap-0.5">
-                    <IconButton label="编辑标签" onClick={() => onEditTags(server)}>
+                    <IconButton label={t('s.0544')} onClick={() => onEditTags(server)}>
                       <TagIcon className="h-4 w-4" />
                     </IconButton>
-                    <IconButton label="重命名" onClick={() => onRename(server)}>
+                    <IconButton label={t('s.0545')} onClick={() => onRename(server)}>
                       <PencilIcon className="h-4 w-4" />
                     </IconButton>
-                    <IconButton label="删除服务器" tone="danger" onClick={() => onDelete(server)}>
+                    <IconButton label={t('s.0513')} tone="danger" onClick={() => onDelete(server)}>
                       <TrashIcon className="h-4 w-4" />
                     </IconButton>
                   </div>

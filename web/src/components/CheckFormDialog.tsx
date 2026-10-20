@@ -15,33 +15,34 @@ import { Modal } from './Modal'
 import { ModeBadge } from './StatusBadge'
 import { useToast } from './Toast'
 
+import { t } from '../i18n'
 const inputClass =
   'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:disabled:bg-slate-900 dark:disabled:text-slate-400'
 
 const labelClass = 'block text-sm font-medium text-slate-700 dark:text-slate-200'
 
 const KIND_OPTIONS: { value: CheckKind; label: string; hint: string }[] = [
-  { value: 'tcp', label: 'TCP', hint: '端口存活，控制端直连' },
-  { value: 'http', label: 'HTTP', hint: '状态码 / 关键字，控制端直连' },
-  { value: 'ping', label: 'Ping', hint: 'ICMP 非特权模式，控制端直连' },
-  { value: 'process', label: '进程', hint: '在目标机执行，按进程数判定' },
-  { value: 'script', label: '脚本', hint: '在目标机执行脚本并按退出码判定' },
+  { value: 'tcp', label: 'TCP', hint: t('s.0319') },
+  { value: 'http', label: 'HTTP', hint: t('s.0320') },
+  { value: 'ping', label: 'Ping', hint: t('s.0321') },
+  { value: 'process', label: t('s.0314'), hint: t('s.0322') },
+  { value: 'script', label: t('s.0315'), hint: t('s.0323') },
 ]
 
 const TARGET_PLACEHOLDER: Record<CheckKind, string> = {
-  tcp: '例如 127.0.0.1:8080',
-  http: '例如 https://example.com/healthz',
-  ping: '例如 1.1.1.1 或 example.com',
-  process: '进程名，例如 nginx 或 leadstack',
+  tcp: t('s.0324'),
+  http: t('s.0325'),
+  ping: t('s.0326'),
+  process: t('s.0327'),
   script: '',
 }
 
 const TARGET_LABEL: Record<CheckKind, string> = {
-  tcp: '目标地址（host:port）',
-  http: '目标 URL',
-  ping: '目标主机',
-  process: '进程名',
-  script: '脚本内容',
+  tcp: t('s.0328'),
+  http: t('s.0329'),
+  ping: t('s.0330'),
+  process: t('s.0331'),
+  script: t('s.0332'),
 }
 
 interface CheckFormDialogProps {
@@ -143,30 +144,30 @@ export function CheckFormDialog({
   }
 
   const validate = (): string | null => {
-    if (!name.trim()) return '请填写检测项名称'
+    if (!name.trim()) return t('s.0333')
     const interval = Number(intervalS)
-    if (!Number.isInteger(interval) || interval < 10) return '执行间隔需为不小于 10 的整数（秒）'
+    if (!Number.isInteger(interval) || interval < 10) return t('s.0334')
     const timeout = Number(timeoutS)
-    if (!Number.isInteger(timeout) || timeout < 1) return '超时需为不小于 1 的整数（秒）'
+    if (!Number.isInteger(timeout) || timeout < 1) return t('s.0335')
     const thresholdValue = Number(threshold)
-    if (!Number.isInteger(thresholdValue) || thresholdValue < 1) return '连续失败阈值需为不小于 1 的整数'
+    if (!Number.isInteger(thresholdValue) || thresholdValue < 1) return t('s.0336')
 
     const value = target.trim()
-    if (!value) return `请填写${TARGET_LABEL[kind]}`
+    if (!value) return t('s.0121', { '0': TARGET_LABEL[kind] })
     if (kind === 'tcp') {
       const match = value.match(/^([^\s:]+):(\d{1,5})$/)
-      if (!match) return 'TCP 目标需为 host:port 形式，例如 127.0.0.1:8080'
+      if (!match) return t('s.0337')
       const port = Number(match[2])
-      if (port <= 0 || port > 65535) return 'TCP 端口需在 1-65535 之间'
+      if (port <= 0 || port > 65535) return t('s.0338')
     }
     if (kind === 'http' && !/^https?:\/\/\S+$/i.test(value)) {
-      return 'HTTP 目标需为完整 URL，例如 https://example.com/healthz'
+      return t('s.0339')
     }
     if (kind === 'ping' && /[:/]/.test(value)) {
-      return 'Ping 目标只需主机名或 IP，不要带协议与端口'
+      return t('s.0340')
     }
-    if (kind === 'process' && /\s/.test(value)) return '进程名不要包含空格'
-    if (selected.size === 0) return '请至少选择一台适用服务器'
+    if (kind === 'process' && /\s/.test(value)) return t('s.0341')
+    if (selected.size === 0) return t('s.0342')
     return null
   }
 
@@ -211,12 +212,12 @@ export function CheckFormDialog({
         try {
           await api.setCheckTargets(check.id, serverIds)
         } catch (caught) {
-          toast(`检测项已保存，但适用服务器更新失败：${errorMessage(caught)}`, 'error')
+          toast(t('s.0343', { '0': errorMessage(caught) }), 'error')
           onSaved()
           onClose()
           return
         }
-        toast(`检测项「${name.trim()}」已更新`, 'success')
+        toast(t('s.0344', { '0': name.trim() }), 'success')
       } else {
         await api.createCheck({
           name: name.trim(),
@@ -227,12 +228,12 @@ export function CheckFormDialog({
           params: buildParams(),
           server_ids: serverIds,
         })
-        toast(`检测项「${name.trim()}」已创建`, 'success')
+        toast(t('s.0345', { '0': name.trim() }), 'success')
       }
       onSaved()
       onClose()
     } catch (caught) {
-      setError(errorMessage(caught, '保存检测项失败'))
+      setError(errorMessage(caught, t('s.0346')))
     } finally {
       setSaving(false)
     }
@@ -242,32 +243,32 @@ export function CheckFormDialog({
     <Modal
       open={open}
       onClose={onClose}
-      title={editing ? '编辑检测项' : '新建检测项'}
+      title={editing ? t('s.0347') : t('s.0348')}
       description={
         editing
-          ? '类型与目标不可修改；如需变更请新建检测项。修改间隔后会重新排期。'
-          : '选择检测类型并填写目标，检测项会作用于你选择的服务器。'
+          ? t('s.0349')
+          : t('s.0350')
       }
       size="lg"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>
-            取消
+            {t('s.0024')}
           </Button>
           <Button type="submit" form="check-form" loading={saving}>
-            {editing ? '保存修改' : '创建检测项'}
+            {editing ? t('s.0128') : t('s.0351')}
           </Button>
         </>
       }
     >
       <form id="check-form" onSubmit={handleSubmit} className="space-y-5">
         <div>
-          <span className={labelClass}>检测类型</span>
+          <span className={labelClass}>{t('s.0352')}</span>
           {editing ? (
             <div className="mt-1.5 flex items-center gap-2">
               <CheckKindBadge kind={kind} />
               <span className="text-xs text-slate-400 dark:text-slate-500">
-                编辑模式下类型固定
+                {t('s.0353')}
               </span>
             </div>
           ) : (
@@ -301,20 +302,20 @@ export function CheckFormDialog({
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="sm:col-span-1">
             <label htmlFor="check-name" className={labelClass}>
-              检测项名称
+              {t('s.0354')}
             </label>
             <input
               id="check-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               maxLength={64}
-              placeholder="例如：API 健康检查"
+              placeholder={t('s.0355')}
               className={inputClass + ' mt-1.5'}
             />
           </div>
           <div>
             <label htmlFor="check-interval" className={labelClass}>
-              执行间隔（秒）
+              {t('s.0356')}
             </label>
             <input
               id="check-interval"
@@ -326,7 +327,7 @@ export function CheckFormDialog({
           </div>
           <div>
             <label htmlFor="check-timeout" className={labelClass}>
-              超时（秒）
+              {t('s.0100')}
             </label>
             <input
               id="check-timeout"
@@ -365,7 +366,7 @@ export function CheckFormDialog({
           )}
           {kind === 'script' ? (
             <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-              脚本会在目标服务器上执行，请确认内容安全；脚本内容会进入审计日志。
+              {t('s.0357')}
             </p>
           ) : null}
         </div>
@@ -374,28 +375,28 @@ export function CheckFormDialog({
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <label htmlFor="check-expect-status" className={labelClass}>
-                期望状态码
+                {t('s.0358')}
               </label>
               <input
                 id="check-expect-status"
                 value={expectStatus}
                 onChange={(event) => setExpectStatus(event.target.value)}
-                placeholder="200 或 200-299"
+                placeholder={t('s.0359')}
                 className={inputClass + ' mt-1.5'}
               />
               <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                支持单值或区间，留空按 2xx
+                {t('s.0360')}
               </p>
             </div>
             <div>
               <label htmlFor="check-keyword" className={labelClass}>
-                关键字 <span className="font-normal text-slate-400">（可选）</span>
+                {t('s.0361')} <span className="font-normal text-slate-400">{t('s.0040')}</span>
               </label>
               <input
                 id="check-keyword"
                 value={keyword}
                 onChange={(event) => setKeyword(event.target.value)}
-                placeholder="响应体中需包含的内容"
+                placeholder={t('s.0362')}
                 className={inputClass + ' mt-1.5'}
               />
             </div>
@@ -406,7 +407,7 @@ export function CheckFormDialog({
                 onChange={(event) => setInsecure(event.target.checked)}
                 className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800"
               />
-              跳过证书校验
+              {t('s.0363')}
             </label>
           </div>
         ) : null}
@@ -415,7 +416,7 @@ export function CheckFormDialog({
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label htmlFor="check-min-count" className={labelClass}>
-                最少进程数
+                {t('s.0364')}
               </label>
               <input
                 id="check-min-count"
@@ -427,13 +428,13 @@ export function CheckFormDialog({
             </div>
             <div>
               <label htmlFor="check-process-user" className={labelClass}>
-                限定用户 <span className="font-normal text-slate-400">（可选）</span>
+                {t('s.0365')} <span className="font-normal text-slate-400">{t('s.0040')}</span>
               </label>
               <input
                 id="check-process-user"
                 value={processUser}
                 onChange={(event) => setProcessUser(event.target.value)}
-                placeholder="例如 nginx"
+                placeholder={t('s.0366')}
                 className={inputClass + ' mt-1.5'}
               />
             </div>
@@ -449,17 +450,17 @@ export function CheckFormDialog({
                 onChange={(event) => setExitZeroOk(event.target.checked)}
                 className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800"
               />
-              退出码为 0 视为成功
+              {t('s.0367')}
             </label>
             <div>
               <label htmlFor="check-expect-stdout" className={labelClass}>
-                期望输出 <span className="font-normal text-slate-400">（可选）</span>
+                {t('s.0368')} <span className="font-normal text-slate-400">{t('s.0040')}</span>
               </label>
               <input
                 id="check-expect-stdout"
                 value={expectStdout}
                 onChange={(event) => setExpectStdout(event.target.value)}
-                placeholder="stdout 需包含的内容"
+                placeholder={t('s.0369')}
                 className={inputClass + ' mt-1.5'}
               />
             </div>
@@ -469,7 +470,7 @@ export function CheckFormDialog({
         <div className="grid gap-4 sm:grid-cols-3">
           <div>
             <label htmlFor="check-threshold" className={labelClass}>
-              连续失败阈值
+              {t('s.0370')}
             </label>
             <input
               id="check-threshold"
@@ -479,7 +480,7 @@ export function CheckFormDialog({
               className={inputClass + ' mt-1.5'}
             />
             <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-              连续失败达到该次数后状态变 down（默认 3）
+              {t('s.0371')}
             </p>
           </div>
           <label className="mt-6 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
@@ -489,16 +490,16 @@ export function CheckFormDialog({
               onChange={(event) => setEnabled(event.target.checked)}
               className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800"
             />
-            启用该检测项
+            {t('s.0372')}
           </label>
         </div>
 
         <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className={labelClass}>
-              适用服务器
+              {t('s.0212')}
               <span className="ml-1.5 font-normal text-slate-400">
-                已选 {selected.size} / {servers.length}
+                {t('s.0208')} {selected.size} / {servers.length}
               </span>
             </span>
             <div className="flex flex-wrap items-center gap-2">
@@ -513,7 +514,7 @@ export function CheckFormDialog({
                 }
                 className="text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
               >
-                全选当前筛选（{filteredServers.length}）
+                {t('s.0373')}{filteredServers.length}）
               </button>
               <button
                 type="button"
@@ -526,14 +527,14 @@ export function CheckFormDialog({
                 }
                 className="text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               >
-                取消当前筛选
+                {t('s.0374')}
               </button>
               <button
                 type="button"
                 onClick={() => setSelected(new Set())}
                 className="text-xs font-medium text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400"
               >
-                清空
+                {t('s.0210')}
               </button>
             </div>
           </div>
@@ -542,16 +543,16 @@ export function CheckFormDialog({
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索名称 / 主机 / 标签"
+              placeholder={t('s.0214')}
               className={inputClass + ' sm:col-span-2'}
             />
             <select
-              aria-label="按分组筛选服务器"
+              aria-label={t('s.0375')}
               value={pickerGroup}
               onChange={(event) => setPickerGroup(event.target.value)}
               className={inputClass}
             >
-              <option value="">全部分组</option>
+              <option value="">{t('s.0376')}</option>
               {groups.map((group) => (
                 <option key={group.name} value={group.name}>
                   {group.name}（{group.count}）
@@ -559,12 +560,12 @@ export function CheckFormDialog({
               ))}
             </select>
             <select
-              aria-label="按标签筛选服务器"
+              aria-label={t('s.0377')}
               value={pickerTag}
               onChange={(event) => setPickerTag(event.target.value)}
               className={inputClass}
             >
-              <option value="">全部标签</option>
+              <option value="">{t('s.0378')}</option>
               {tagOptions.map((tag) => (
                 <option key={tag} value={tag}>
                   {tag}
@@ -576,11 +577,11 @@ export function CheckFormDialog({
           <div className="mt-2 max-h-52 overflow-y-auto rounded-md border border-slate-100 dark:border-slate-800/70">
             {servers.length === 0 ? (
               <p className="px-3 py-4 text-center text-xs text-slate-400 dark:text-slate-500">
-                还没有服务器，请先在总览页添加服务器
+                {t('s.0379')}
               </p>
             ) : filteredServers.length === 0 ? (
               <p className="px-3 py-4 text-center text-xs text-slate-400 dark:text-slate-500">
-                当前筛选条件下没有服务器
+                {t('s.0380')}
               </p>
             ) : (
               filteredServers.map((server) => (

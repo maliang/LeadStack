@@ -21,12 +21,14 @@ import {
   RefreshIcon,
   ServerIcon,
   TrashIcon,
+
 } from '../components/Icons'
 import { InlineLoading } from '../components/Loading'
 import { ReleaseWizard } from '../components/ReleaseWizard'
 import { TemplateDialog } from '../components/TemplateDialog'
 import { useToast } from '../components/Toast'
 
+import { t } from '../i18n'
 type Tab = 'apps' | 'templates'
 
 export default function AppsPage() {
@@ -106,11 +108,11 @@ export default function AppsPage() {
     setDeleteAppError(null)
     try {
       await api.deleteApp(deletingApp.id)
-      toast(`已删除应用「${deletingApp.name}」`, 'success')
+      toast(t('s.0804', { '0': deletingApp.name }), 'success')
       setDeletingApp(null)
       await refreshAll()
     } catch (caught) {
-      setDeleteAppError(errorMessage(caught, '删除应用失败'))
+      setDeleteAppError(errorMessage(caught, t('s.0805')))
     } finally {
       setDeleteAppLoading(false)
     }
@@ -122,11 +124,11 @@ export default function AppsPage() {
     setDeleteTemplateError(null)
     try {
       await api.deleteTemplate(deletingTemplate.id)
-      toast(`已删除模板「${deletingTemplate.name}」`, 'success')
+      toast(t('s.0806', { '0': deletingTemplate.name }), 'success')
       setDeletingTemplate(null)
       await refreshAll()
     } catch (caught) {
-      setDeleteTemplateError(errorMessage(caught, '删除模板失败'))
+      setDeleteTemplateError(errorMessage(caught, t('s.0807')))
     } finally {
       setDeleteTemplateLoading(false)
     }
@@ -137,10 +139,10 @@ export default function AppsPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-            应用与发布
+            {t('s.0808')}
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            应用 = 被部署的业务单元；模板定义怎么部署；每次发布都会冻结模板快照，每 10 秒自动刷新
+            {t('s.0809')}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -150,7 +152,7 @@ export default function AppsPage() {
             loading={refreshing}
             icon={<RefreshIcon className="h-4 w-4" />}
           >
-            刷新
+            {t('s.0689')}
           </Button>
           {tab === 'apps' ? (
             <>
@@ -162,7 +164,7 @@ export default function AppsPage() {
                   setAppDialogOpen(true)
                 }}
               >
-                新建应用
+                {t('s.0240')}
               </Button>
               <Button
                 icon={<PlayIcon className="h-4 w-4" />}
@@ -171,7 +173,7 @@ export default function AppsPage() {
                   setWizardOpen(true)
                 }}
               >
-                发起发布
+                {t('s.0459')}
               </Button>
             </>
           ) : (
@@ -182,7 +184,7 @@ export default function AppsPage() {
                 setTemplateDialogOpen(true)
               }}
             >
-              新建模板
+              {t('s.0559')}
             </Button>
           )}
         </div>
@@ -191,8 +193,8 @@ export default function AppsPage() {
       <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-800">
         {(
           [
-            { key: 'apps' as const, label: '应用', count: apps.length },
-            { key: 'templates' as const, label: '模板', count: templates.length },
+            { key: 'apps' as const, label: t('s.0461'), count: apps.length },
+            { key: 'templates' as const, label: t('s.0483'), count: templates.length },
           ]
         ).map((option) => (
           <button
@@ -217,26 +219,26 @@ export default function AppsPage() {
       {tab === 'apps' ? (
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">应用列表</h2>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0810')}</h2>
             {appsQuery.error ? (
               <span className="text-xs text-rose-600 dark:text-rose-400">
-                加载失败：{appsQuery.error}
+                {t('s.0725')}{appsQuery.error}
               </span>
             ) : (
               <p className="text-xs text-slate-400 dark:text-slate-500">
-                部署目录：&lt;root&gt;/releases/&lt;release_id&gt;，current 指向当前版本
+                {t('s.0811')}
               </p>
             )}
           </div>
 
           {appsQuery.loading && appsQuery.data === null ? (
-            <InlineLoading label="正在加载应用…" />
+            <InlineLoading label={t('s.0812')} />
           ) : apps.length === 0 ? (
             <EmptyState
               icon={<FolderIcon className="h-6 w-6" />}
-              title="还没有应用"
-              description="先创建一个应用（例如 order-service），再配合模板发布到服务器"
-              actionLabel="新建应用"
+              title={t('s.0813')}
+              description={t('s.0814')}
+              actionLabel={t('s.0240')}
               onAction={() => {
                 setEditingApp(null)
                 setAppDialogOpen(true)
@@ -247,12 +249,12 @@ export default function AppsPage() {
               <table className="w-full min-w-[1000px] border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-xs font-medium whitespace-nowrap text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                    <th scope="col" className="px-4 py-2.5 font-medium">应用</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">部署根目录</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">最近发布</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">发布次数</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">服务器数</th>
-                    <th scope="col" className="px-4 py-2.5 text-right font-medium">操作</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0461')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0246')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0815')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0816')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0817')}</th>
+                    <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('s.0539')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -298,7 +300,7 @@ export default function AppsPage() {
                               </span>
                             </span>
                           ) : (
-                            <span className="text-xs text-slate-400 dark:text-slate-500">尚未发布</span>
+                            <span className="text-xs text-slate-400 dark:text-slate-500">{t('s.0818')}</span>
                           )}
                         </td>
                         <td className="px-4 py-3 align-top text-xs tabular-nums text-slate-600 dark:text-slate-300">
@@ -321,13 +323,13 @@ export default function AppsPage() {
                               }}
                               icon={<PlayIcon className="h-3.5 w-3.5" />}
                             >
-                              发布
+                              {t('s.0819')}
                             </Button>
-                            <IconButton label="应用详情" onClick={() => navigate(`/apps/${app.id}`)}>
+                            <IconButton label={t('s.0820')} onClick={() => navigate(`/apps/${app.id}`)}>
                               <ChevronRightIcon className="h-4 w-4" />
                             </IconButton>
                             <IconButton
-                              label="编辑应用"
+                              label={t('s.0239')}
                               onClick={() => {
                                 setEditingApp(app)
                                 setAppDialogOpen(true)
@@ -336,7 +338,7 @@ export default function AppsPage() {
                               <PencilIcon className="h-4 w-4" />
                             </IconButton>
                             <IconButton
-                              label="删除应用"
+                              label={t('s.0821')}
                               tone="danger"
                               onClick={() => {
                                 setDeleteAppError(null)
@@ -358,20 +360,20 @@ export default function AppsPage() {
       ) : (
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">部署模板</h2>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0464')}</h2>
             <p className="text-xs text-slate-400 dark:text-slate-500">
-              支持 compose / systemd / binary；模板是版本化文本，发布时冻结快照
+              {t('s.0822')}
             </p>
           </div>
 
           {templatesQuery.loading && templatesQuery.data === null ? (
-            <InlineLoading label="正在加载模板…" />
+            <InlineLoading label={t('s.0823')} />
           ) : templates.length === 0 ? (
             <EmptyState
               icon={<ListChecksIcon className="h-6 w-6" />}
-              title="还没有部署模板"
-              description="新建模板，或用「填充示例模板」从三种类型的示例开始改"
-              actionLabel="新建模板"
+              title={t('s.0824')}
+              description={t('s.0825')}
+              actionLabel={t('s.0559')}
               onAction={() => {
                 setEditingTemplate(null)
                 setTemplateDialogOpen(true)
@@ -382,11 +384,11 @@ export default function AppsPage() {
               <table className="w-full min-w-[880px] border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-xs font-medium whitespace-nowrap text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                    <th scope="col" className="px-4 py-2.5 font-medium">名称</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">类型</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">内容</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">更新时间</th>
-                    <th scope="col" className="px-4 py-2.5 text-right font-medium">操作</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0531')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0399')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0826')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0827')}</th>
+                    <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('s.0539')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -412,10 +414,10 @@ export default function AppsPage() {
                       </td>
                       <td className="max-w-[320px] px-4 py-3 align-top">
                         <span className="block truncate font-mono text-[11px] text-slate-500 dark:text-slate-400">
-                          {template.content.split('\n').find((line) => line.trim() !== '') ?? '（空）'}
+                          {template.content.split('\n').find((line) => line.trim() !== '') ?? t('s.0828')}
                         </span>
                         <span className="mt-0.5 block text-[11px] text-slate-400 dark:text-slate-500">
-                          {template.content.split('\n').length} 行 · {template.content.length} 字符
+                          {template.content.split('\n').length} {t('s.0829')} {template.content.length} {t('s.0830')}
                         </span>
                       </td>
                       <td className="px-4 py-3 align-top text-xs text-slate-500 dark:text-slate-400">
@@ -424,7 +426,7 @@ export default function AppsPage() {
                       <td className="px-4 py-3 align-top">
                         <div className="flex items-center justify-end gap-0.5">
                           <IconButton
-                            label="编辑模板"
+                            label={t('s.0558')}
                             onClick={() => {
                               setEditingTemplate(template)
                               setTemplateDialogOpen(true)
@@ -433,7 +435,7 @@ export default function AppsPage() {
                             <PencilIcon className="h-4 w-4" />
                           </IconButton>
                           <IconButton
-                            label="删除模板"
+                            label={t('s.0831')}
                             tone="danger"
                             onClick={() => {
                               setDeleteTemplateError(null)
@@ -489,9 +491,9 @@ export default function AppsPage() {
 
       <ConfirmDialog
         open={deletingApp !== null}
-        title="删除应用"
-        description={deletingApp ? `应用：${deletingApp.name}（${deletingApp.slug}）` : undefined}
-        confirmLabel="确认删除"
+        title={t('s.0821')}
+        description={deletingApp ? t('s.0832', { '0': deletingApp.name, '1': deletingApp.slug }) : undefined}
+        confirmLabel={t('s.0295')}
         tone="danger"
         loading={deleteAppLoading}
         error={deleteAppError}
@@ -502,19 +504,19 @@ export default function AppsPage() {
         onConfirm={() => void handleDeleteApp()}
       >
         <p>
-          确定要删除应用
+          {t('s.0833')}
           <span className="font-semibold text-slate-900 dark:text-slate-100">
             「{deletingApp?.name}」
           </span>
-          吗？若该应用已有发布记录，控制端会拒绝删除（409）。
+          {t('s.0834')}
         </p>
       </ConfirmDialog>
 
       <ConfirmDialog
         open={deletingTemplate !== null}
-        title="删除模板"
-        description={deletingTemplate ? `模板：${deletingTemplate.name}` : undefined}
-        confirmLabel="确认删除"
+        title={t('s.0831')}
+        description={deletingTemplate ? t('s.0835', { '0': deletingTemplate.name }) : undefined}
+        confirmLabel={t('s.0295')}
         tone="danger"
         loading={deleteTemplateLoading}
         error={deleteTemplateError}
@@ -525,11 +527,11 @@ export default function AppsPage() {
         onConfirm={() => void handleDeleteTemplate()}
       >
         <p>
-          确定要删除模板
+          {t('s.0836')}
           <span className="font-semibold text-slate-900 dark:text-slate-100">
             「{deletingTemplate?.name}」
           </span>
-          吗？已发布的历史使用的是快照，不受影响。
+          {t('s.0837')}
         </p>
       </ConfirmDialog>
     </div>

@@ -75,6 +75,8 @@ type Agent struct {
 	metNS atomic.Int64
 	// jobs 跟踪正在执行的命令任务。
 	jobs *jobManager
+	// upgrader 处理 agent.upgrade 自升级指令。
+	upgrader *upgrader
 
 	rndMu sync.Mutex
 	rnd   *rand.Rand
@@ -87,13 +89,14 @@ func New(cfg Config) *Agent {
 		log = slog.Default()
 	}
 	a := &Agent{
-		cfg:    cfg,
-		log:    log,
-		col:    NewCollector(log),
-		buf:    newSampleBuffer(defaultBufferCapacity, defaultBufferRetention),
-		notify: make(chan struct{}, 1),
-		jobs:   newJobManager(log),
-		rnd:    rand.New(rand.NewSource(time.Now().UnixNano())),
+		cfg:      cfg,
+		log:      log,
+		col:      NewCollector(log),
+		buf:      newSampleBuffer(defaultBufferCapacity, defaultBufferRetention),
+		notify:   make(chan struct{}, 1),
+		jobs:     newJobManager(log),
+		upgrader: newUpgrader(log),
+		rnd:      rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	a.applyIntervals(protocol.DefaultHeartbeatIntervalS, protocol.DefaultMetricsIntervalS)
 	return a
@@ -232,6 +235,10 @@ func (a *Agent) serve(ctx context.Context, w *wsConn) error {
 	ackReady := make(chan struct{})
 	var ackOnce sync.Once
 
+	// 终端会话与连接同生命周期：连接断开时必须结束所有 PTY 进程组。
+	terms := newTerminalManager(a.log)
+	defer terms.CloseAll()
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -239,7 +246,7 @@ func (a *Agent) serve(ctx context.Context, w *wsConn) error {
 			if env.Type == protocol.TypeHelloAck {
 				ackOnce.Do(func() { close(ackReady) })
 			}
-			a.handleFrame(ctx, w, env)
+			a.handleFrame(ctx, w, terms, env)
 		})
 	}()
 
@@ -344,7 +351,7 @@ func (a *Agent) flushBacklog(ctx context.Context, w *wsConn) error {
 }
 
 // handleFrame 处理控制端下发的帧；未识别的 type 只忽略，绝不断开连接。
-func (a *Agent) handleFrame(ctx context.Context, w *wsConn, env protocol.Envelope) {
+func (a *Agent) handleFrame(ctx context.Context, w *wsConn, terms *terminalManager, env protocol.Envelope) {
 	switch env.Type {
 	case protocol.TypeHelloAck:
 		var ack protocol.HelloAck
@@ -378,9 +385,46 @@ func (a *Agent) handleFrame(ctx context.Context, w *wsConn, env protocol.Envelop
 		// 异步执行，避免阻塞读循环（长任务不能影响心跳收发）。
 		a.jobs.start(ctx, w, spec)
 
-	case protocol.TypeTermOpen, protocol.TypeTermResize, protocol.TypeTermClose:
-		// M0 不实现交互式终端；忽略而不是断开，保证向前兼容。
-		a.log.Debug("M0 暂不支持终端消息，已忽略", "type", env.Type)
+	case protocol.TypeTermOpen:
+		var spec protocol.TermOpen
+		if err := json.Unmarshal(env.Payload, &spec); err != nil {
+			a.log.Warn("解析 term.open 失败", "err", err)
+			return
+		}
+		terms.HandleOpen(ctx, w, spec)
+
+	case protocol.TypeTermData:
+		var data protocol.TermData
+		if err := json.Unmarshal(env.Payload, &data); err != nil {
+			a.log.Warn("解析 term.data 失败", "err", err)
+			return
+		}
+		terms.HandleData(ctx, w, data)
+
+	case protocol.TypeTermResize:
+		var spec protocol.TermResize
+		if err := json.Unmarshal(env.Payload, &spec); err != nil {
+			a.log.Warn("解析 term.resize 失败", "err", err)
+			return
+		}
+		terms.HandleResize(ctx, w, spec)
+
+	case protocol.TypeTermClose:
+		var spec protocol.TermClose
+		if err := json.Unmarshal(env.Payload, &spec); err != nil {
+			a.log.Warn("解析 term.close 失败", "err", err)
+			return
+		}
+		terms.HandleClose(ctx, w, spec)
+
+	case protocol.TypeAgentUpgrade:
+		var spec protocol.AgentUpgrade
+		if err := json.Unmarshal(env.Payload, &spec); err != nil {
+			a.log.Warn("解析 agent.upgrade 失败", "err", err)
+			return
+		}
+		// 升级包含下载/校验/替换，必须异步执行，不能阻塞读循环与心跳。
+		go a.handleUpgrade(ctx, w, spec)
 
 	default:
 		a.log.Debug("忽略未识别的消息类型", "type", env.Type)

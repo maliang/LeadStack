@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { cn } from '../lib/cn'
 import { Button } from './Button'
 import { CheckIcon, CopyIcon } from './Icons'
+import { t } from '../i18n'
 
 interface CopyButtonProps {
   value: string
@@ -34,7 +35,7 @@ async function writeClipboard(value: string): Promise<boolean> {
   }
 }
 
-export function CopyButton({ value, label = '复制', className }: CopyButtonProps) {
+export function CopyButton({ value, label = t('s.0388'), className }: CopyButtonProps) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -52,7 +53,7 @@ export function CopyButton({ value, label = '复制', className }: CopyButtonPro
       className={cn(copied && 'text-emerald-600 dark:text-emerald-300', className)}
       icon={copied ? <CheckIcon className="h-4 w-4" /> : <CopyIcon className="h-4 w-4" />}
     >
-      {copied ? '已复制' : label}
+      {copied ? t('s.0389') : label}
     </Button>
   )
 }

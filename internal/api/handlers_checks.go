@@ -164,7 +164,16 @@ func (a *API) handleListChecks(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	writeData(w, http.StatusOK, payloads)
+	params, perr := parsePage(r)
+	if perr != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, perr.Error())
+		return
+	}
+	start, end, meta := params.window(len(payloads))
+	if !params.Paged {
+		start, end = 0, len(payloads)
+	}
+	writePagedList(w, params, payloads[start:end], meta)
 }
 
 // handleGetCheck 处理 GET /api/v1/checks/{id}。

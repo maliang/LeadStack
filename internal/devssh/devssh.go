@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	gliderssh "github.com/gliderlabs/ssh"
+	"github.com/pkg/sftp"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -97,6 +98,21 @@ func Start(cfg Config) (*Server, error) {
 	}
 	srv.AddHostKey(hostSigner)
 
+	// SFTP 子系统：测试专用，直接暴露本机文件系统（DEV-ONLY）。
+	srv.SubsystemHandlers = map[string]gliderssh.SubsystemHandler{
+		"sftp": func(sess gliderssh.Session) {
+			server, err := sftp.NewServer(sess)
+			if err != nil {
+				_, _ = io.WriteString(sess.Stderr(), "devssh: 启动 SFTP 子系统失败: "+err.Error()+"\n")
+				return
+			}
+			defer server.Close()
+			if err := server.Serve(); err != nil && !errors.Is(err, io.EOF) {
+				_, _ = io.WriteString(sess.Stderr(), "devssh: SFTP 会话结束: "+err.Error()+"\n")
+			}
+		},
+	}
+
 	// 固定账号密码：未知用户一律拒绝。
 	srv.PasswordHandler = func(ctx gliderssh.Context, password string) bool {
 		if ctx.User() != cfg.Username {
@@ -148,8 +164,13 @@ func parseAuthorizedKeys(b []byte) ([]gliderssh.PublicKey, error) {
 	return keys, nil
 }
 
-// handleSession 把 exec 请求交给 Executor（默认本机 sh -c）执行并回传真实结果。
+// handleSession 把 exec 请求交给 Executor（默认本机 sh -c）执行并回传真实结果；
+// 请求了 pty 的会话则交给真实伪终端 shell（DEV-ONLY）。
 func (s *Server) handleSession(sess gliderssh.Session) {
+	if ptyReq, winCh, isPty := sess.Pty(); isPty {
+		servePTYShell(sess, ptyReq, winCh)
+		return
+	}
 	cmd := sess.RawCommand()
 	if strings.TrimSpace(cmd) == "" {
 		// 不支持交互式 shell：测试端点只服务 exec 请求。

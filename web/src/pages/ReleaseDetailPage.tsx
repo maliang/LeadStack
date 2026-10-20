@@ -19,6 +19,7 @@ import { InlineLoading } from '../components/Loading'
 import { ReleaseLogPanel } from '../components/ReleaseLogPanel'
 import { useToast } from '../components/Toast'
 
+import { t } from '../i18n'
 function summarize(release: Release) {
   const success = release.runs.filter((run) => run.status === 'success').length
   const failed = release.runs.filter((run) => run.status === 'failed').length
@@ -45,10 +46,10 @@ export default function ReleaseDetailPage() {
   const release = releaseQuery.data
   const streaming = release?.status === 'pending' || release?.status === 'running'
   const appName = useMemo(() => {
-    if (!release) return '应用'
+    if (!release) return t('s.0461')
     if (release.app_name) return release.app_name
     const app = (appsQuery.data ?? []).find((item) => item.id === release.app_id)
-    return app?.name ?? '应用'
+    return app?.name ?? t('s.0461')
   }, [release, appsQuery.data])
   const stats = release ? summarize(release) : null
 
@@ -64,18 +65,18 @@ export default function ReleaseDetailPage() {
     try {
       if (actionKind === 'retry') {
         await api.retryRelease(release.id)
-        toast('已重试失败的服务器（成功的机器不会重复执行）', 'success')
+        toast(t('s.1044'), 'success')
       } else if (actionKind === 'rollback') {
         await api.rollbackRelease(release.id)
-        toast('已发起回滚', 'success')
+        toast(t('s.0767'), 'success')
       } else {
         await api.cancelRelease(release.id)
-        toast('已取消未完成的 run', 'success')
+        toast(t('s.0768'), 'success')
       }
       setActionKind(null)
       await releaseQuery.refresh()
     } catch (caught) {
-      setActionError(errorMessage(caught, '操作失败'))
+      setActionError(errorMessage(caught, t('s.0769')))
     } finally {
       setActionLoading(false)
     }
@@ -84,7 +85,7 @@ export default function ReleaseDetailPage() {
   if (releaseQuery.loading && !release) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <InlineLoading label="正在加载发布详情…" />
+        <InlineLoading label={t('s.1045')} />
       </div>
     )
   }
@@ -92,13 +93,13 @@ export default function ReleaseDetailPage() {
   if (!release) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <p className="text-sm font-medium text-slate-900 dark:text-slate-100">发布不存在或已被删除</p>
+        <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{t('s.1046')}</p>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          {releaseQuery.error ?? '请返回应用列表检查。'}
+          {releaseQuery.error ?? t('s.0772')}
         </p>
         <Link to="/apps" className="mt-4 inline-block">
           <Button variant="secondary" icon={<ArrowLeftIcon className="h-4 w-4" />}>
-            返回应用列表
+            {t('s.0773')}
           </Button>
         </Link>
       </div>
@@ -118,7 +119,7 @@ export default function ReleaseDetailPage() {
           className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 transition-colors hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400"
         >
           <ArrowLeftIcon className="h-3.5 w-3.5" />
-          返回应用
+          {t('s.1047')}
         </Link>
 
         <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
@@ -130,9 +131,9 @@ export default function ReleaseDetailPage() {
               <ReleaseStatusBadge status={release.status} />
             </div>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              创建于 {formatDateTime(release.created_at)}（{formatRelativeTime(release.created_at)}）
-              {duration !== null ? ` · 耗时 ${duration} 秒` : ''}
-              {release.created_by ? ` · 发起人 ${release.created_by}` : ''}
+              {t('s.1048')} {formatDateTime(release.created_at)}（{formatRelativeTime(release.created_at)}）
+              {duration !== null ? t('s.1049', { '0': duration }) : ''}
+              {release.created_by ? t('s.1050', { '0': release.created_by }) : ''}
             </p>
             <p className="mt-0.5 font-mono text-[11px] text-slate-400 dark:text-slate-500">
               release {release.id}
@@ -146,7 +147,7 @@ export default function ReleaseDetailPage() {
               loading={releaseQuery.loading}
               icon={<RefreshIcon className="h-4 w-4" />}
             >
-              刷新
+              {t('s.0689')}
             </Button>
             {stats && stats.failed > 0 ? (
               <Button
@@ -157,7 +158,7 @@ export default function ReleaseDetailPage() {
                 }}
                 icon={<RotateCcwIcon className="h-4 w-4" />}
               >
-                重试失败项（{stats.failed}）
+                {t('s.1051')}{stats.failed}）
               </Button>
             ) : null}
             {stats && stats.success > 0 ? (
@@ -168,7 +169,7 @@ export default function ReleaseDetailPage() {
                   setActionKind('rollback')
                 }}
               >
-                回滚
+                {t('s.0786')}
               </Button>
             ) : null}
             {stats && stats.active > 0 ? (
@@ -180,7 +181,7 @@ export default function ReleaseDetailPage() {
                 }}
 
               >
-                取消
+                {t('s.0024')}
               </Button>
             ) : null}
           </div>
@@ -189,25 +190,25 @@ export default function ReleaseDetailPage() {
 
       {releaseQuery.error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-          刷新失败：{releaseQuery.error}（下方为上次成功获取的数据）
+          {t('s.1052')}{releaseQuery.error}{t('s.0999')}
         </div>
       ) : null}
 
       {streaming ? (
         <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">
           <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
-          发布执行中，进度与日志每 3 秒自动刷新
+          {t('s.1053')}
         </div>
       ) : null}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {[
-          { label: '成功', value: stats?.success ?? 0, tone: 'text-emerald-600 dark:text-emerald-300' },
-          { label: '失败', value: stats?.failed ?? 0, tone: 'text-rose-600 dark:text-rose-300' },
-          { label: '进行中', value: stats?.active ?? 0, tone: 'text-blue-600 dark:text-blue-300' },
+          { label: t('s.0300'), value: stats?.success ?? 0, tone: 'text-emerald-600 dark:text-emerald-300' },
+          { label: t('s.0301'), value: stats?.failed ?? 0, tone: 'text-rose-600 dark:text-rose-300' },
+          { label: t('s.0415'), value: stats?.active ?? 0, tone: 'text-blue-600 dark:text-blue-300' },
           {
-            label: '总计（含取消）',
-            value: `${stats?.total ?? 0}${stats && stats.canceled > 0 ? ` / 取消 ${stats.canceled}` : ''}`,
+            label: t('s.1054'),
+            value: t('s.1055', { '0': stats?.total ?? 0, '1': stats && stats.canceled > 0 ? t('releaseDetail.canceledPart', { '0': stats.canceled }) : '' }),
             tone: 'text-slate-700 dark:text-slate-200',
           },
         ].map((card) => (
@@ -225,28 +226,28 @@ export default function ReleaseDetailPage() {
 
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">服务器执行情况</h2>
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.1056')}</h2>
           <p className="text-xs text-slate-400 dark:text-slate-500">
-            点击某一行可切换下方日志面板；失败会显示失败步骤、退出码与原因
+            {t('s.1057')}
           </p>
         </div>
 
         {release.runs.length === 0 ? (
           <p className="px-4 py-6 text-center text-xs text-slate-400 dark:text-slate-500">
-            该发布没有目标服务器记录
+            {t('s.1058')}
           </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1080px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs font-medium whitespace-nowrap text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                  <th scope="col" className="px-4 py-2.5 font-medium">服务器</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">状态</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">退出码</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">失败步骤</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">原因 / 摘要</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">耗时</th>
-                  <th scope="col" className="px-4 py-2.5 text-right font-medium">操作</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0087')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0533')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0432')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.1059')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.1060')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0782')}</th>
+                  <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('s.0539')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -320,12 +321,12 @@ export default function ReleaseDetailPage() {
                         )}
                         {run.prev_release_id ? (
                           <span className="mt-0.5 block font-mono text-[11px] text-slate-400 dark:text-slate-500">
-                            上一版本 {run.prev_release_id}
+                            {t('s.1061')} {run.prev_release_id}
                           </span>
                         ) : null}
                       </td>
                       <td className="px-4 py-3 align-top text-xs tabular-nums text-slate-600 dark:text-slate-300">
-                        {runDuration === null ? '—' : `${runDuration} 秒`}
+                        {runDuration === null ? '—' : t('s.0156', { '0': runDuration })}
                       </td>
                       <td className="px-4 py-3 align-top">
                         <div className="flex justify-end">
@@ -340,7 +341,7 @@ export default function ReleaseDetailPage() {
                                 ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
                             }}
                           >
-                            查看日志
+                            {t('s.1062')}
                           </Button>
                         </div>
                       </td>
@@ -359,16 +360,16 @@ export default function ReleaseDetailPage() {
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">实时日志</h2>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.1063')}</h2>
             <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-              按 run 增量拉取（after_seq 断点续读），不整段重拉；可切换服务器，失败原因就在日志末尾
+              {t('s.1064')}
             </p>
           </div>
           <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500">
             <ClockIcon className="h-3.5 w-3.5" />
             {release.finished_at
-              ? `结束于 ${formatDateTime(release.finished_at)}`
-              : '仍在执行中'}
+              ? t('s.1065', { '0': formatDateTime(release.finished_at) })
+              : t('s.1066')}
           </span>
         </div>
         <div className="mt-3">
@@ -383,20 +384,20 @@ export default function ReleaseDetailPage() {
       </section>
 
       <p className="text-xs text-slate-400 dark:text-slate-500">
-        失败时控制端会按逆序执行回滚步骤；回滚 = 把 current 指回上一个成功版本，秒级生效且不会重新下载制品。
+        {t('s.1067')}
       </p>
 
       <ConfirmDialog
         open={actionKind !== null}
         title={
           actionKind === 'retry'
-            ? '重试失败的服务器'
+            ? t('s.0794')
             : actionKind === 'rollback'
-              ? '回滚这次发布'
-              : '取消未完成的 run'
+              ? t('s.0795')
+              : t('s.0796')
         }
-        description={`发布：v${release.version}`}
-        confirmLabel={actionKind === 'cancel' ? '确认取消' : '确认执行'}
+        description={t('s.0797', { '0': release.version })}
+        confirmLabel={actionKind === 'cancel' ? t('s.0798') : t('s.0799')}
         tone={actionKind === 'cancel' ? 'danger' : 'primary'}
         loading={actionLoading}
         error={actionError}
@@ -407,11 +408,11 @@ export default function ReleaseDetailPage() {
         onConfirm={() => void handleAction()}
       >
         {actionKind === 'retry' ? (
-          <p>只重跑 failed 的服务器（当前 {stats?.failed ?? 0} 台），成功的机器不会重复执行。</p>
+          <p>{t('s.1068')} {stats?.failed ?? 0} {t('s.1069')}</p>
         ) : actionKind === 'rollback' ? (
-          <p>把各服务器的 current 指回上一个成功版本并重启服务，秒级完成、无需重新下载制品。</p>
+          <p>{t('s.1070')}</p>
         ) : (
-          <p>终止仍在 pending / running 的 run（当前 {stats?.active ?? 0} 台），已成功的机器不受影响。</p>
+          <p>{t('s.1071')} {stats?.active ?? 0} {t('s.1072')}</p>
         )}
       </ConfirmDialog>
     </div>

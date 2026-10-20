@@ -261,7 +261,7 @@ func (n *AlertNotifier) notifyOne(ctx context.Context, a alerting.Alert, channel
 	}
 	if sendErr != nil {
 		reason := sendErr.Error()
-		n.writeChannelResult(ctx, channel.ID, nil, reason)
+		n.writeChannelResult(ctx, channel.ID, nil, classifySendError(reason, nil))
 		n.logger.Warn("告警通知发送失败",
 			"alert_id", a.ID, "channel_id", channel.ID, "kind", channel.Kind, "recovered", recovered, "err", reason)
 		n.appendEvent(ctx, a.ID, fmt.Sprintf("%s通知经渠道「%s」(%s) 发送失败：%s",

@@ -26,8 +26,8 @@ func validateDingTalk(ch Channel) error {
 	return nil
 }
 
-// sendDingTalk 发送钉钉机器人 markdown 消息；配置了 secret 时按官方算法加签。
-func (c *Client) sendDingTalk(ctx context.Context, ch Channel, msg Message) error {
+// buildDingTalk 构造钉钉 markdown 请求；配置了 secret 时按官方算法加签。
+func (c *Client) buildDingTalk(ch Channel, msg Message) (httpRequest, error) {
 	rawURL, _, _ := cfgString(ch.Config, "webhook")
 	secret, hasSecret, _ := cfgString(ch.Config, "secret")
 	scr := newScrubber(ch)
@@ -40,7 +40,7 @@ func (c *Client) sendDingTalk(ctx context.Context, ch Channel, msg Message) erro
 		// 得到错误的 base64，导致签名校验失败。
 		t, err := appendRawQuery(rawURL, "timestamp", strconv.FormatInt(ts, 10), "sign", dingTalkSign(secret, ts))
 		if err != nil {
-			return err
+			return httpRequest{}, newSendError(ch.Kind, ErrorKindConfig, 0, "", err.Error(), "")
 		}
 		target = t
 	}
@@ -54,12 +54,21 @@ func (c *Client) sendDingTalk(ctx context.Context, ch Channel, msg Message) erro
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return httpRequest{}, newSendError(ch.Kind, ErrorKindInternal, 0, "", err.Error(), "")
 	}
 	scr.addURL(target) // 加签后的完整 URL（含 access_token）精确脱敏
-	respBody, err := c.do(ctx, http.MethodPost, target, nil, body, c.Timeout(), scr, "钉钉")
+	return httpRequest{method: http.MethodPost, url: target, body: body, timeout: c.Timeout(), scr: scr}, nil
+}
+
+// sendDingTalk 发送钉钉机器人 markdown 消息；errcode != 0 视为服务商拒绝。
+func (c *Client) sendDingTalk(ctx context.Context, ch Channel, msg Message) error {
+	req, err := c.buildDingTalk(ch, msg)
 	if err != nil {
 		return err
 	}
-	return checkErrCode("钉钉", respBody, scr)
+	res, err := c.deliver(ctx, ch.Kind, req)
+	if err != nil {
+		return err
+	}
+	return checkErrCode(ch.Kind, res, req.scr)
 }

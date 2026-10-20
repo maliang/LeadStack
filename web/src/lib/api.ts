@@ -1,3 +1,4 @@
+import { t } from '../i18n'
 /**
  * 控制端 REST 客户端。
  *
@@ -74,6 +75,8 @@ interface RequestOptions {
   body?: unknown
   auth?: boolean
   signal?: AbortSignal
+  /** 返回完整信封（用于分页 page 字段） */
+  rawPayload?: boolean
 }
 
 interface ErrorEnvelope {
@@ -100,7 +103,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new ApiError(0, 'network_error', '无法连接控制端，请确认 LeadStack 服务已启动')
+    throw new ApiError(0, 'network_error', t('s.0578'))
   }
 
   const text = await response.text()
@@ -118,7 +121,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     const apiError = new ApiError(
       response.status,
       envelope?.error?.code ?? 'http_error',
-      envelope?.error?.message ?? `请求失败（HTTP ${response.status}）`,
+      envelope?.error?.message ?? t('s.0579', { '0': response.status }),
     )
     if (response.status === 401 && auth) {
       clearToken()
@@ -127,10 +130,37 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw apiError
   }
 
+  if (options.rawPayload) return payload as T
   if (payload !== null && typeof payload === 'object' && 'data' in payload) {
     return (payload as { data: T }).data
   }
   return payload as T
+}
+
+/** 分页接口：显式传 limit 时返回 {data:[...], page:{...}}；不传时仍是数组。 */
+async function requestPaged<T>(
+  path: string,
+  normalize: (raw: unknown) => T,
+): Promise<Paged<T>> {
+  const payload = await request<unknown>(path, { rawPayload: true })
+  const record = toRecord(payload)
+  const dataField = record?.data
+  const dataRecord = toRecord(dataField)
+  const itemsRaw = Array.isArray(payload)
+    ? payload
+    : Array.isArray(dataField)
+      ? dataField
+      : dataRecord
+        ? extractList(dataRecord, ['logs', 'items', 'entries', 'runs'])
+        : []
+  const pageRaw = toRecord(record?.page) ?? toRecord(dataRecord?.page)
+  const page: PageInfo | null = pageRaw
+    ? {
+        next_cursor: toText(pageRaw.next_cursor ?? pageRaw.nextCursor),
+        has_more: toBool(pageRaw.has_more ?? pageRaw.hasMore),
+      }
+    : null
+  return { items: itemsRaw.map(normalize), page }
 }
 
 /** multipart 上传（制品上传用）：与 request 相同的信封与 401 处理。 */
@@ -148,7 +178,7 @@ async function requestMultipart<T>(
   try {
     response = await fetch(`${API_PREFIX}${path}`, { method: 'POST', headers, body: form })
   } catch {
-    throw new ApiError(0, 'network_error', '无法连接控制端，请确认 LeadStack 服务已启动')
+    throw new ApiError(0, 'network_error', t('s.0578'))
   }
 
   const text = await response.text()
@@ -166,7 +196,7 @@ async function requestMultipart<T>(
     const apiError = new ApiError(
       response.status,
       envelope?.error?.code ?? 'http_error',
-      envelope?.error?.message ?? `请求失败（HTTP ${response.status}）`,
+      envelope?.error?.message ?? t('s.0579', { '0': response.status }),
     )
     if (response.status === 401 && auth) {
       clearToken()
@@ -203,6 +233,8 @@ export interface SystemInfo {
   uptime_s: number
   server_count: number
   online_count: number
+  /** M6：首次安装向导是否需要引导 */
+  needs_setup?: boolean
 }
 
 /** 列表/详情里附带的最新指标快照（契约 3.1，map[string]float64）。 */
@@ -533,14 +565,14 @@ export interface ReleaseLogEntry {
 
 /** 模板渲染预览的可用占位符（契约第 26 节）。 */
 export const TEMPLATE_PLACEHOLDERS: { name: string; description: string }[] = [
-  { name: 'APP_SLUG', description: '应用 slug（[a-z0-9-]{1,40}）' },
-  { name: 'VERSION', description: '版本号（[A-Za-z0-9._-]{1,64}）' },
-  { name: 'RELEASE_ID', description: '本次发布 ID' },
-  { name: 'ROOT', description: '部署根目录' },
+  { name: 'APP_SLUG', description: t('s.0580') },
+  { name: 'VERSION', description: t('s.0581') },
+  { name: 'RELEASE_ID', description: t('s.0582') },
+  { name: 'ROOT', description: t('s.0246') },
   { name: 'RELEASE_DIR', description: '<ROOT>/releases/<RELEASE_ID>' },
-  { name: 'ARTIFACT_URL', description: '制品下载地址' },
-  { name: 'ARTIFACT_SHA256', description: '制品校验和' },
-  { name: 'PREV_RELEASE_ID', description: '上一个成功发布 ID' },
+  { name: 'ARTIFACT_URL', description: t('s.0470') },
+  { name: 'ARTIFACT_SHA256', description: t('s.0583') },
+  { name: 'PREV_RELEASE_ID', description: t('s.0584') },
 ]
 
 export interface CreateAppPayload {
@@ -636,6 +668,173 @@ export interface RestoreStagedResult {
 export interface BackupDownload {
   blob: Blob
   filename: string
+}
+
+
+/* ------------------------------------------------------------------ */
+/* M5/M6：审计 / 用户 / API Token / 定时任务 / 导入 / 终端 / 文件 / 日志 */
+/* ------------------------------------------------------------------ */
+
+export interface PageInfo {
+  next_cursor: string | null
+  has_more: boolean
+}
+
+export interface Paged<T> {
+  items: T[]
+  page: PageInfo | null
+}
+
+export interface AuditLogEntry {
+  id: number
+  ts: number | null
+  actor: string
+  actor_role: string | null
+  action: string
+  resource_type: string | null
+  resource_id: string | null
+  method: string | null
+  path: string | null
+  status_code: number | null
+  ip: string | null
+  user_agent: string | null
+  detail: string | null
+}
+
+export interface AuditFilters {
+  actor?: string
+  action?: string
+  resource_type?: string
+  from?: number
+  to?: number
+  limit?: number
+  cursor?: string
+}
+
+export type UserRole = 'admin' | 'operator' | 'viewer'
+
+export interface ManagedUser {
+  id: string
+  username: string
+  role: UserRole | string
+  disabled: boolean
+  created_at: number | null
+  updated_at: number | null
+}
+
+export interface ApiToken {
+  id: string
+  name: string
+  role: UserRole | string
+  created_by: string | null
+  created_at: number | null
+  last_used_at: number | null
+  expires_at: number | null
+  revoked_at: number | null
+}
+
+export interface CreatedApiToken extends ApiToken {
+  /** 明文只在创建响应出现一次 */
+  token: string | null
+}
+
+export interface ScheduledTask {
+  id: string
+  name: string
+  cron: string
+  command: string
+  timeout_s: number
+  enabled: boolean
+  concurrency: number
+  created_at: number | null
+  last_run_at: number | null
+  next_run_at: number | null
+  server_ids: string[]
+}
+
+export interface ScheduledTaskPayload {
+  name: string
+  cron: string
+  command: string
+  timeout_s: number
+  enabled: boolean
+  concurrency: number
+  server_ids: string[]
+}
+
+export type ScheduledRunStatus = 'success' | 'failed' | 'running' | 'pending' | 'canceled' | string
+
+export interface ScheduledTaskRun {
+  id: number
+  task_id: string
+  server_id: string
+  ts: number | null
+  status: ScheduledRunStatus
+  exit_code: number | null
+  duration_ms: number | null
+  stdout: string | null
+  stderr: string | null
+  message: string | null
+}
+
+export interface ImportServersPayload {
+  text: string
+  default_port: number
+  credential_id: string
+  group?: string
+  tags?: string[]
+  mode: 'agent' | 'ssh'
+}
+
+export interface ImportServersResult {
+  total: number
+  created: { host: string; server_id: string }[]
+  failed: { host: string; error: string }[]
+}
+
+export interface TerminalTicket {
+  ticket: string
+  expires_in: number
+}
+
+export interface RemoteFileEntry {
+  name: string
+  is_dir: boolean
+  size: number
+  mod_time: number | null
+  mode: string | null
+}
+
+export interface RemoteFileDownload {
+  blob: Blob
+  filename: string
+}
+
+export interface RemoteProcess {
+  pid: number
+  user: string | null
+  cpu_pct: number | null
+  mem_pct: number | null
+  rss_kb: number | null
+  command: string
+}
+
+export interface RemotePort {
+  proto: string
+  local: string
+  pid: number | null
+  process: string | null
+}
+
+export interface ServerLogsResult {
+  lines: string[]
+  truncated: boolean
+}
+
+export interface SetupStatus {
+  needs_setup: boolean
+  version: string
+  instance_name: string | null
 }
 
 /* ------------------------------------------------------------------ */
@@ -1005,7 +1204,7 @@ export function normalizeCheck(input: unknown): CheckItem {
 
   return {
     id: String(raw.id ?? ''),
-    name: toText(raw.name) ?? '未命名检测项',
+    name: toText(raw.name) ?? t('s.0585'),
     kind: toText(raw.kind) ?? 'tcp',
     target: toText(raw.target) ?? '',
     interval_s: toNumber(raw.interval_s) ?? 30,
@@ -1106,7 +1305,7 @@ export function normalizeAlertRule(input: unknown): AlertRule {
   const severity = toText(raw.severity)
   return {
     id: String(raw.id ?? ''),
-    name: toText(raw.name) ?? '未命名规则',
+    name: toText(raw.name) ?? t('s.0586'),
     enabled: toBool(raw.enabled, true),
     source: (toText(raw.source) as AlertSource) ?? 'check',
     check_ids: toStringArray(raw.check_ids),
@@ -1144,7 +1343,7 @@ export function normalizeAlertChannel(input: unknown): AlertChannel {
   }
   return {
     id: String(raw.id ?? ''),
-    name: toText(raw.name) ?? '未命名渠道',
+    name: toText(raw.name) ?? t('s.0587'),
     kind: toText(raw.kind) ?? 'webhook',
     enabled: toBool(raw.enabled, true),
     config,
@@ -1184,7 +1383,7 @@ export function normalizeAlert(input: unknown): AlertItem {
       severity === 'critical' || severity === 'warning' || severity === 'info'
         ? severity
         : 'warning',
-    title: toText(raw.title) ?? '未命名告警',
+    title: toText(raw.title) ?? t('s.0588'),
     message: toText(raw.message),
     value: toNumber(raw.value),
     started_at: toNumber(raw.started_at),
@@ -1281,7 +1480,7 @@ export function normalizeApp(input: unknown): AppItem {
   const lastRelease = lastReleaseRaw ? normalizeRelease(lastReleaseRaw) : null
   return {
     id: String(raw.id ?? ''),
-    name: toText(raw.name) ?? '未命名应用',
+    name: toText(raw.name) ?? t('s.0589'),
     slug: toText(raw.slug) ?? '',
     root: toText(raw.root),
     description: toText(raw.description),
@@ -1296,7 +1495,7 @@ export function normalizeTemplate(input: unknown): DeployTemplate {
   const raw = toRecord(input) ?? {}
   return {
     id: String(raw.id ?? ''),
-    name: toText(raw.name) ?? '未命名模板',
+    name: toText(raw.name) ?? t('s.0590'),
     kind: toText(raw.kind) ?? 'binary',
     content: typeof raw.content === 'string' ? raw.content : '',
     created_at: toNumber(raw.created_at),
@@ -1401,11 +1600,92 @@ export function normalizeRestoreStagedResult(input: unknown): RestoreStagedResul
   }
 }
 
+/* ---------------------- M5/M6：归一化 ---------------------- */
+
+export function normalizeAuditLog(input: unknown): AuditLogEntry {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: toNumber(raw.id) ?? 0,
+    ts: toNumber(raw.ts),
+    actor: toText(raw.actor) ?? '—',
+    actor_role: toText(raw.actor_role),
+    action: toText(raw.action) ?? '—',
+    resource_type: toText(raw.resource_type),
+    resource_id: toText(raw.resource_id),
+    method: toText(raw.method),
+    path: toText(raw.path),
+    status_code: toNumber(raw.status_code),
+    ip: toText(raw.ip),
+    user_agent: toText(raw.user_agent),
+    detail: typeof raw.detail === 'string' ? raw.detail : null,
+  }
+}
+
+export function normalizeManagedUser(input: unknown): ManagedUser {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: String(raw.id ?? ''),
+    username: toText(raw.username) ?? '',
+    role: toText(raw.role) ?? 'viewer',
+    disabled: toBool(raw.disabled),
+    created_at: toNumber(raw.created_at),
+    updated_at: toNumber(raw.updated_at),
+  }
+}
+
+export function normalizeApiToken(input: unknown): CreatedApiToken {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: String(raw.id ?? ''),
+    name: toText(raw.name) ?? '',
+    role: toText(raw.role) ?? 'viewer',
+    created_by: toText(raw.created_by),
+    created_at: toNumber(raw.created_at),
+    last_used_at: toNumber(raw.last_used_at),
+    expires_at: toNumber(raw.expires_at),
+    revoked_at: toNumber(raw.revoked_at),
+    token: toText(raw.token),
+  }
+}
+
+export function normalizeScheduledTask(input: unknown): ScheduledTask {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: String(raw.id ?? ''),
+    name: toText(raw.name) ?? '',
+    cron: toText(raw.cron) ?? '',
+    command: toText(raw.command) ?? '',
+    timeout_s: toNumber(raw.timeout_s) ?? 60,
+    enabled: toBool(raw.enabled, true),
+    concurrency: toNumber(raw.concurrency) ?? 4,
+    created_at: toNumber(raw.created_at),
+    last_run_at: toNumber(raw.last_run_at),
+    next_run_at: toNumber(raw.next_run_at),
+    server_ids: toStringArray(raw.server_ids ?? raw.servers ?? raw.targets),
+  }
+}
+
+export function normalizeScheduledTaskRun(input: unknown): ScheduledTaskRun {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: toNumber(raw.id) ?? 0,
+    task_id: toText(raw.task_id) ?? '',
+    server_id: toText(raw.server_id) ?? '',
+    ts: toNumber(raw.ts),
+    status: toText(raw.status) ?? 'pending',
+    exit_code: toNumber(raw.exit_code),
+    duration_ms: toNumber(raw.duration_ms),
+    stdout: typeof raw.stdout === 'string' ? raw.stdout : null,
+    stderr: typeof raw.stderr === 'string' ? raw.stderr : null,
+    message: toText(raw.message),
+  }
+}
+
 export function normalizeCredential(input: unknown): Credential {
   const raw = toRecord(input) ?? {}
   return {
     id: String(raw.id ?? ''),
-    name: toText(raw.name) ?? '未命名凭证',
+    name: toText(raw.name) ?? t('s.0591'),
     kind: toText(raw.kind) ?? 'password',
     username: toText(raw.username) ?? '',
     fingerprint: toText(raw.fingerprint),
@@ -1426,7 +1706,7 @@ export function normalizeServer(input: unknown): Server {
 
   return {
     id: String(raw.id ?? ''),
-    name: toText(raw.name) ?? '未命名服务器',
+    name: toText(raw.name) ?? t('s.0592'),
     host: toText(raw.host) ?? '—',
     port: toNumber(raw.port),
     mode: toText(raw.mode) ?? 'agent',
@@ -2026,7 +2306,7 @@ export const api = {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
     if (!response.ok) {
-      let message = `下载失败（HTTP ${response.status}）`
+      let message = t('s.0593', { '0': response.status })
       try {
         const payload = (await response.json()) as ErrorEnvelope
         if (payload?.error?.message) message = payload.error.message
@@ -2070,6 +2350,265 @@ export const api = {
   updateBackupSettings(payload: BackupSettings): Promise<BackupSettings> {
     return request<unknown>('/backup-settings', { method: 'PATCH', body: payload }).then(
       normalizeBackupSettings,
+    )
+  },
+
+  /* ---------------------- M5/M6：运维增强（契约第 36–45 节） ---------------------- */
+
+  auditLogs(filters: AuditFilters = {}): Promise<Paged<AuditLogEntry>> {
+    const params = new URLSearchParams()
+    if (filters.actor) params.set('actor', filters.actor)
+    if (filters.action) params.set('action', filters.action)
+    if (filters.resource_type) params.set('resource_type', filters.resource_type)
+    if (filters.from) params.set('from', String(filters.from))
+    if (filters.to) params.set('to', String(filters.to))
+    if (filters.limit) params.set('limit', String(filters.limit))
+    if (filters.cursor) params.set('cursor', filters.cursor)
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    return requestPaged(`/audit-logs${suffix}`, normalizeAuditLog)
+  },
+
+  users(): Promise<ManagedUser[]> {
+    return request<unknown>('/users').then((raw) =>
+      extractList(raw, ['users', 'items']).map(normalizeManagedUser),
+    )
+  },
+
+  createUser(payload: { username: string; password: string; role: UserRole }): Promise<ManagedUser> {
+    return request<unknown>('/users', { method: 'POST', body: payload }).then(normalizeManagedUser)
+  },
+
+  updateUser(
+    id: string,
+    payload: { role?: UserRole; disabled?: boolean; password?: string },
+  ): Promise<ManagedUser> {
+    return request<unknown>(`/users/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: payload,
+    }).then(normalizeManagedUser)
+  },
+
+  deleteUser(id: string): Promise<unknown> {
+    return request<unknown>(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  changeMyPassword(payload: { old_password: string; new_password: string }): Promise<unknown> {
+    return request<unknown>('/users/me/password', { method: 'POST', body: payload })
+  },
+
+  apiTokens(): Promise<ApiToken[]> {
+    return request<unknown>('/api-tokens').then((raw) =>
+      extractList(raw, ['tokens', 'items']).map(normalizeApiToken),
+    )
+  },
+
+  createApiToken(payload: {
+    name: string
+    role: UserRole
+    expires_in?: string
+  }): Promise<CreatedApiToken> {
+    return request<unknown>('/api-tokens', { method: 'POST', body: payload }).then(normalizeApiToken)
+  },
+
+  deleteApiToken(id: string): Promise<unknown> {
+    return request<unknown>(`/api-tokens/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  scheduledTasks(): Promise<ScheduledTask[]> {
+    return request<unknown>('/scheduled-tasks').then((raw) =>
+      extractList(raw, ['tasks', 'items']).map(normalizeScheduledTask),
+    )
+  },
+
+  createScheduledTask(payload: ScheduledTaskPayload): Promise<ScheduledTask> {
+    return request<unknown>('/scheduled-tasks', { method: 'POST', body: payload }).then(
+      normalizeScheduledTask,
+    )
+  },
+
+  updateScheduledTask(
+    id: string,
+    payload: Partial<ScheduledTaskPayload>,
+  ): Promise<ScheduledTask> {
+    return request<unknown>(`/scheduled-tasks/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: payload,
+    }).then(normalizeScheduledTask)
+  },
+
+  deleteScheduledTask(id: string): Promise<unknown> {
+    return request<unknown>(`/scheduled-tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  runScheduledTask(id: string): Promise<unknown> {
+    return request<unknown>(`/scheduled-tasks/${encodeURIComponent(id)}/run`, { method: 'POST' })
+  },
+
+  scheduledTaskRuns(id: string, limit = 50): Promise<ScheduledTaskRun[]> {
+    return request<unknown>(
+      `/scheduled-tasks/${encodeURIComponent(id)}/runs?limit=${limit}`,
+    ).then((raw) => extractList(raw, ['runs', 'items']).map(normalizeScheduledTaskRun))
+  },
+
+  importServers(payload: ImportServersPayload): Promise<ImportServersResult> {
+    return request<unknown>('/servers/import', { method: 'POST', body: payload }).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      return {
+        total: toNumber(record.total) ?? 0,
+        created: extractList(record.created, ['created']).map((item) => {
+          const entry = toRecord(item) ?? {}
+          return {
+            host: toText(entry.host) ?? '',
+            server_id: toText(entry.server_id ?? entry.id) ?? '',
+          }
+        }),
+        failed: extractList(record.failed, ['failed']).map((item) => {
+          const entry = toRecord(item) ?? {}
+          return { host: toText(entry.host) ?? '', error: toText(entry.error) ?? t('s.0301') }
+        }),
+      }
+    })
+  },
+
+  /** POST /servers/{id}/terminal-ticket —— 一次性 ticket（60s，避免 JWT 进 URL） */
+  createTerminalTicket(serverId: string): Promise<TerminalTicket> {
+    return request<unknown>(`/servers/${encodeURIComponent(serverId)}/terminal-ticket`, {
+      method: 'POST',
+    }).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      return {
+        ticket: toText(record.ticket) ?? '',
+        expires_in: toNumber(record.expires_in) ?? 60,
+      }
+    })
+  },
+
+  listFiles(serverId: string, path: string): Promise<RemoteFileEntry[]> {
+    const params = new URLSearchParams({ path })
+    return request<unknown>(
+      `/servers/${encodeURIComponent(serverId)}/files?${params.toString()}`,
+    ).then((raw) =>
+      extractList(raw, ['entries', 'items']).map((item) => {
+        const entry = toRecord(item) ?? {}
+        return {
+          name: toText(entry.name) ?? '',
+          is_dir: toBool(entry.is_dir),
+          size: toNumber(entry.size) ?? 0,
+          mod_time: toNumber(entry.mod_time),
+          mode: toText(entry.mode),
+        }
+      }),
+    )
+  },
+
+  async downloadServerFile(serverId: string, path: string): Promise<RemoteFileDownload> {
+    const token = getToken()
+    const params = new URLSearchParams({ path })
+    const response = await fetch(
+      `${API_PREFIX}/servers/${encodeURIComponent(serverId)}/files/download?${params.toString()}`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+    )
+    if (!response.ok) {
+      let message = t('s.0593', { '0': response.status })
+      try {
+        const payload = (await response.json()) as ErrorEnvelope
+        if (payload?.error?.message) message = payload.error.message
+      } catch {
+        /* ignore */
+      }
+      if (response.status === 401) {
+        clearToken()
+        unauthorizedHandler?.()
+      }
+      throw new ApiError(response.status, 'download_failed', message)
+    }
+    const disposition = response.headers.get('Content-Disposition') ?? ''
+    const match = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition)
+    const filename = match
+      ? decodeURIComponent(match[1].replace(/"/g, ''))
+      : path.split('/').pop() || 'download'
+    return { blob: await response.blob(), filename }
+  },
+
+  uploadServerFile(
+    serverId: string,
+    path: string,
+    file: File,
+  ): Promise<{ ok: boolean; bytes: number }> {
+    const form = new FormData()
+    form.append('path', path)
+    form.append('file', file, file.name)
+    return requestMultipart<unknown>(
+      `/servers/${encodeURIComponent(serverId)}/files/upload`,
+      form,
+    ).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      return { ok: toBool(record.ok, true), bytes: toNumber(record.bytes) ?? file.size }
+    })
+  },
+
+  deleteServerFile(serverId: string, path: string): Promise<unknown> {
+    const params = new URLSearchParams({ path })
+    return request<unknown>(
+      `/servers/${encodeURIComponent(serverId)}/files?${params.toString()}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  serverLogs(
+    serverId: string,
+    query: { path: string; lines?: number; grep?: string },
+  ): Promise<ServerLogsResult> {
+    const params = new URLSearchParams({ path: query.path })
+    if (query.lines) params.set('lines', String(query.lines))
+    if (query.grep) params.set('grep', query.grep)
+    return request<unknown>(
+      `/servers/${encodeURIComponent(serverId)}/logs?${params.toString()}`,
+    ).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      return {
+        lines: extractList(raw, ['lines']).map((line) => String(line)),
+        truncated: toBool(record.truncated),
+      }
+    })
+  },
+
+  serverProcesses(
+    serverId: string,
+    query: { sort?: string; limit?: number } = {},
+  ): Promise<RemoteProcess[]> {
+    const params = new URLSearchParams()
+    if (query.sort) params.set('sort', query.sort)
+    if (query.limit) params.set('limit', String(query.limit))
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    return request<unknown>(
+      `/servers/${encodeURIComponent(serverId)}/processes${suffix}`,
+    ).then((raw) =>
+      extractList(raw, ['processes', 'items']).map((item) => {
+        const entry = toRecord(item) ?? {}
+        return {
+          pid: toNumber(entry.pid) ?? 0,
+          user: toText(entry.user),
+          cpu_pct: toNumber(entry.cpu_pct),
+          mem_pct: toNumber(entry.mem_pct),
+          rss_kb: toNumber(entry.rss_kb),
+          command: toText(entry.command) ?? '',
+        }
+      }),
+    )
+  },
+
+  serverPorts(serverId: string): Promise<RemotePort[]> {
+    return request<unknown>(`/servers/${encodeURIComponent(serverId)}/ports`).then((raw) =>
+      extractList(raw, ['ports', 'items']).map((item) => {
+        const entry = toRecord(item) ?? {}
+        return {
+          proto: toText(entry.proto) ?? '',
+          local: toText(entry.local) ?? '',
+          pid: toNumber(entry.pid),
+          process: toText(entry.process),
+        }
+      }),
     )
   },
 }

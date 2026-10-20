@@ -14,8 +14,12 @@ import (
 // processGOOS 是生成进程查询命令时使用的目标机 OS。
 //
 // 契约里 Executor 只给出「在目标机上执行命令」的能力，没有携带目标机 OS，
-// 因此这里以控制端所在的 OS 为准（agentless 场景控制端与目标机通常同族）；
-// 测试可通过替换该变量覆盖 Windows 分支。
+// 因此 OS 来源按优先级取：
+//  1. spec.Params["os"]（"linux" / "darwin" / "windows"，大小写不敏感）—— 由 backend 按
+//     servers.os 传下来，跨 OS 纳管（控制端 Linux 管 Windows 机器）时必须用它；
+//  2. 缺省沿用控制端 GOOS（本变量），兼容 M2 已有检测项。
+//
+// 注意：这是**不改 Executor 接口**的前提下实现的（改了会打挂 backend 与 internal/jobs）。
 var processGOOS = runtime.GOOS
 
 // Windows 下 tasklist 的 IMAGENAME 过滤器不接受任意字符；与其做易错的 cmd 转义，
@@ -43,7 +47,11 @@ func probeProcess(ctx context.Context, spec Spec, exec Executor, serverID string
 	}
 	user := strings.TrimSpace(paramString(spec.Params, "user"))
 
-	command, err := processCommand(processGOOS, name, user)
+	goos, err := targetOS(spec.Params)
+	if err != nil {
+		return failResult(0, "process 检测配置错误: %s", err.Error())
+	}
+	command, err := processCommand(goos, name, user)
 	if err != nil {
 		return failResult(0, "生成进程查询命令失败: %s", err.Error())
 	}
@@ -59,7 +67,7 @@ func probeProcess(ctx context.Context, spec Spec, exec Executor, serverID string
 	if exitCode != 0 {
 		return failResult(lat, "进程查询命令退出码 %d%s", exitCode, stderrSuffix(stderr))
 	}
-	count, perr := parseProcessCount(processGOOS, stdout)
+	count, perr := parseProcessCount(goos, stdout)
 	if perr != nil {
 		return failResult(lat, "解析进程数失败: %s（stdout=%q stderr=%q）",
 			perr.Error(), snippet(stdout, 120), snippet(stderr, 120))
@@ -68,6 +76,24 @@ func probeProcess(ctx context.Context, spec Spec, exec Executor, serverID string
 		return failResult(lat, "匹配进程数 %d < 期望最少 %d%s", count, minCount, stderrSuffix(stderr))
 	}
 	return okResult(lat, 0, "匹配进程数 %d（≥%d）", count, minCount)
+}
+
+// targetOS 解析 process 检测的目标机 OS：params["os"] 优先，缺省沿用控制端 GOOS。
+func targetOS(params map[string]any) (string, error) {
+	raw := strings.TrimSpace(paramString(params, "os"))
+	if raw == "" {
+		return processGOOS, nil
+	}
+	switch strings.ToLower(raw) {
+	case "linux":
+		return "linux", nil
+	case "darwin", "mac", "macos", "osx":
+		return "darwin", nil
+	case "windows", "win":
+		return "windows", nil
+	default:
+		return "", fmt.Errorf("os 参数非法: %q（支持 linux/darwin/windows）", raw)
+	}
 }
 
 // processCommand 生成「统计匹配进程数」的目标机命令。
@@ -119,14 +145,25 @@ func processCommand(goos, name, user string) (string, error) {
 	awkProg := fmt.Sprintf(`'$1!=me && $2!=me%s { line=$%d; for(i=%d;i<=NF;i++) line=line" "$i; if (index(line, ENVIRON["PAT"])>0) n++ } END{print n+0}'`,
 		userFilter, cmdStart, cmdStart+1)
 
+	// linux(procps) 用 `-eo`；darwin(BSD ps) 用 `-ww -axo`：
+	// 两者都关掉表头（`=` 后缀）并输出 pid/ppid/command 三列，便于同一套 awk 过滤自身进程树。
+	psCmd := "ps -ww -eo pid=,ppid=,command="
+	if goos == "darwin" {
+		psCmd = "ps -ww -axo pid=,ppid=,command="
+	}
+
 	var b strings.Builder
 	b.WriteString("P=$(printf '")
 	b.WriteString(pat)
 	b.WriteString("'); PAT=\"$P\"; export PAT; ")
 	if user != "" {
-		fmt.Fprintf(&b, `ps -ww -eo pid=,ppid=,user=,command= | awk -v me=$$ -v u="%s" %s`, user, awkProg)
+		if goos == "darwin" {
+			fmt.Fprintf(&b, `ps -ww -axo pid=,ppid=,user=,command= | awk -v me=$$ -v u="%s" %s`, user, awkProg)
+		} else {
+			fmt.Fprintf(&b, `ps -ww -eo pid=,ppid=,user=,command= | awk -v me=$$ -v u="%s" %s`, user, awkProg)
+		}
 	} else {
-		fmt.Fprintf(&b, `ps -ww -eo pid=,ppid=,command= | awk -v me=$$ %s`, awkProg)
+		fmt.Fprintf(&b, `%s | awk -v me=$$ %s`, psCmd, awkProg)
 	}
 	return b.String(), nil
 }

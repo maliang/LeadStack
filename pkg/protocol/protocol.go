@@ -182,3 +182,16 @@ type TermData struct {
 	SessionID string `json:"session_id"`
 	B64       string `json:"b64"`
 }
+
+// TypeAgentUpgrade 是控制端 → agent 的升级指令（契约第 44 节）。
+// agent 收到后下载并校验 sha256，使用 A/B 替换策略更新自身，失败必须保留旧版本。
+const TypeAgentUpgrade = "agent.upgrade"
+
+// AgentUpgrade 描述一次 agent 升级请求。
+type AgentUpgrade struct {
+	Version string `json:"version"`
+	URL     string `json:"url"`
+	SHA256  string `json:"sha256"`
+	// Restart 为 true 时 agent 在替换完成后重启自身（或交由服务管理器重启）。
+	Restart bool `json:"restart"`
+}

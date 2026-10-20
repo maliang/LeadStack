@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
+import { t } from '../i18n'
 
 export type ToastKind = 'success' | 'error' | 'info'
 
@@ -67,6 +68,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
 export function useToast(): ToastContextValue {
   const context = useContext(ToastContext)
-  if (!context) throw new Error('useToast 必须在 <ToastProvider> 内使用')
+  if (!context) throw new Error(t('s.0577'))
   return context
 }

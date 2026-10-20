@@ -4,6 +4,7 @@ import 'uplot/dist/uPlot.min.css'
 import type { MetricSeries } from '../lib/api'
 import { metricLabel } from '../lib/format'
 import { useTheme } from '../lib/theme'
+import { t } from '../i18n'
 
 interface MetricChartProps {
   /** 每条 series 画一条曲线；空数据时渲染占位提示。 */
@@ -40,7 +41,7 @@ export function MetricChart({
   series,
   height = 200,
   formatValue = (value) => value.toFixed(2),
-  emptyHint = '暂无数据',
+  emptyHint = t('s.0426'),
 }: MetricChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const formatRef = useRef(formatValue)

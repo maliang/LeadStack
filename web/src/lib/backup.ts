@@ -1,3 +1,4 @@
+import { t } from '../i18n'
 /** 备份相关的错误分类与时长工具（契约第 31/33 节）。 */
 
 export type BackupErrorKind = 'bad_passphrase' | 'corrupt' | 'schema_too_new' | 'unknown'
@@ -23,7 +24,7 @@ export function classifyBackupError(error: unknown): BackupErrorInsight {
       ? error.message
       : typeof error === 'string'
         ? error
-        : '未知错误'
+        : t('s.0595')
   const code =
     error && typeof error === 'object' && 'code' in error
       ? String((error as { code?: unknown }).code ?? '')
@@ -36,10 +37,10 @@ export function classifyBackupError(error: unknown): BackupErrorInsight {
   if (isSchemaTooNew) {
     return {
       kind: 'schema_too_new',
-      title: '备份来自更新版本，当前控制端无法恢复',
-      reason: '归档里的数据库 schema 版本比当前控制端支持的最高版本更高。',
+      title: t('s.0596'),
+      reason: t('s.0597'),
       guidance:
-        '请先把控制端升级到与备份相同（或更高）的版本再恢复；不要用旧版本强行恢复新版本备份，否则可能损坏数据。',
+        t('s.0598'),
       raw,
     }
   }
@@ -51,11 +52,11 @@ export function classifyBackupError(error: unknown): BackupErrorInsight {
   if (isBadPassphrase) {
     return {
       kind: 'bad_passphrase',
-      title: '备份口令错误',
+      title: t('s.0599'),
       reason:
-        '控制端当前使用的解密口令与创建这份备份时的口令不一致（AES-GCM 认证失败通常就是口令不对）。',
+        t('s.0600'),
       guidance:
-        '请确认数据目录里的 backup.pass（或环境变量 LEADSTACK_BACKUP_PASSPHRASE）与创建备份时一致。口令文件丢失后该备份无法解开，只能改用更早的、仍记得口令的备份。',
+        t('s.0601'),
       raw,
     }
   }
@@ -67,20 +68,20 @@ export function classifyBackupError(error: unknown): BackupErrorInsight {
   if (isCorrupt) {
     return {
       kind: 'corrupt',
-      title: '归档损坏或格式不符',
-      reason: '文件可能在上传/下载/拷贝过程中损坏，或被意外修改，或根本不是 LeadStack 备份归档。',
+      title: t('s.0602'),
+      reason: t('s.0603'),
       guidance:
-        '请重新下载或重新拷贝该归档后再校验一次（大文件传输中断很常见）。若仍然失败，说明源文件已损坏，请改用其他备份；建议保留多份不同时间的备份。',
+        t('s.0604'),
       raw,
     }
   }
 
   return {
     kind: 'unknown',
-    title: '校验 / 恢复失败',
-    reason: '控制端返回了未归类的错误，请结合原始错误信息排查。',
+    title: t('s.0605'),
+    reason: t('s.0606'),
     guidance:
-      '可以先在控制端所在机器上用命令行 `leadstack backup verify --file <归档>` 复现；若涉及权限或磁盘空间，请检查数据目录权限与剩余空间。',
+      t('s.0607'),
     raw,
   }
 }
@@ -122,8 +123,8 @@ export function formatBackupInterval(value: string): string {
   const total = parseGoDurationSeconds(value)
   if (total === null || total <= 0) return value.trim()
   const seconds = Math.round(total)
-  if (seconds % 86_400 === 0 && seconds >= 86_400) return `每 ${seconds / 86_400} 天`
-  if (seconds % 3_600 === 0 && seconds >= 3_600) return `每 ${seconds / 3_600} 小时`
-  if (seconds % 60 === 0 && seconds >= 60) return `每 ${seconds / 60} 分钟`
-  return `每 ${seconds} 秒`
+  if (seconds % 86_400 === 0 && seconds >= 86_400) return t('s.0608', { '0': seconds / 86_400 })
+  if (seconds % 3_600 === 0 && seconds >= 3_600) return t('s.0609', { '0': seconds / 3_600 })
+  if (seconds % 60 === 0 && seconds >= 60) return t('s.0610', { '0': seconds / 60 })
+  return t('s.0611', { '0': seconds })
 }

@@ -9,182 +9,173 @@ import (
 
 // Router 组装全部路由。
 //
-// 顺序很关键：具体路由优先注册，未匹配的路径再由 NotFound 分流
-// （/api 与 /agent 返回 JSON 404，其余交给 SPA）。
+// 设计要点：
+//   - **全平坦注册**（不用 r.Route 子路由）——避免 chi 在「子树 + 同前缀平坦路由」混用时
+//     把 /servers/{id} 之类的路径判成 405/404；
+//   - 角色分组用 r.Group，但同一路径的 GET 与写方法必须在同一组内，否则会互相抢占节点。
+//
+// 权限（契约第 37 节）：
+//   - 免鉴权：/healthz、/agent/ws、/api/v1/auth/login；
+//   - viewer+：业务只读；
+//   - operator+：业务写 + 终端/文件/日志/进程/端口/定时任务/备份创建；
+//   - admin：用户、审计、Token、删除服务器/凭证、备份恢复与校验、Agent 升级、enroll token。
 func (a *API) Router() http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(a.middlewareRequestID)
 	r.Use(a.middlewareRecover)
 	r.Use(a.middlewareLog)
+	r.Use(a.auditMiddleware)
 
-	// 免鉴权探针。
 	r.Get("/healthz", a.handleHealthz)
-
-	// agent WebSocket：使用 enroll-token 握手，不走 JWT 中间件。
 	r.Get("/agent/ws", a.handleAgentWS)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// 登录免鉴权。
+		// 登录：无鉴权（契约要求保持可访问）。
 		r.Post("/auth/login", a.handleLogin)
+		// 终端 WebSocket：浏览器无法自定义 Header，用一次性 ticket 鉴权（60s、单次）。
+		r.Get("/servers/{serverID}/terminal", a.handleTerminalWS)
 
 		r.Group(func(r chi.Router) {
-			r.Use(a.authMgr.RequireAuth)
+			r.Use(a.requireAuth)
 
+			// ---------------- viewer 及以上：只读 ----------------
 			r.Get("/auth/me", a.handleMe)
 			r.Post("/auth/logout", a.handleLogout)
+			r.Post("/users/me/password", a.handleChangeOwnPassword)
 			r.Get("/system/info", a.handleSystemInfo)
-
-			r.Route("/servers", func(r chi.Router) {
-				r.Get("/", a.handleListServers)
-				r.Post("/", a.handleCreateServer)
-				// 批量操作必须先于 /{serverID} 注册，避免 "batch" 被当成服务器 ID。
-				r.Post("/batch", a.handleBatchServers)
-				r.Route("/{serverID}", func(r chi.Router) {
-					r.Get("/", a.handleGetServer)
-					r.Patch("/", a.handlePatchServer)
-					r.Delete("/", a.handleDeleteServer)
-					r.Post("/test-connection", a.handleTestConnection)
-					r.Post("/refresh-host-info", a.handleRefreshHostInfo)
-					r.Get("/metrics", a.handleServerMetrics)
-					r.Get("/checks", a.handleServerChecks)
-				})
-			})
-
+			r.Get("/system/onboarding", a.handleOnboarding)
 			r.Get("/groups", a.handleListGroups)
 
-			// ---- M3 告警 ----
-			r.Route("/alert-rules", func(r chi.Router) {
-				r.Get("/", a.handleListAlertRules)
-				r.Post("/", a.handleCreateAlertRule)
-				r.Route("/{ruleID}", func(r chi.Router) {
-					r.Get("/", a.handleGetAlertRule)
-					r.Patch("/", a.handlePatchAlertRule)
-					r.Delete("/", a.handleDeleteAlertRule)
-					r.Post("/silence", a.handleSilenceAlertRule)
-				})
-			})
-
-			r.Route("/alert-channels", func(r chi.Router) {
-				r.Get("/", a.handleListAlertChannels)
-				r.Post("/", a.handleCreateAlertChannel)
-				r.Route("/{channelID}", func(r chi.Router) {
-					r.Patch("/", a.handlePatchAlertChannel)
-					r.Delete("/", a.handleDeleteAlertChannel)
-					r.Post("/test", a.handleTestAlertChannel)
-				})
-			})
-
-			// ---- M4 批量部署 ----
-			r.Route("/apps", func(r chi.Router) {
-				r.Get("/", a.handleListApps)
-				r.Post("/", a.handleCreateApp)
-				r.Route("/{appID}", func(r chi.Router) {
-					r.Get("/", a.handleGetApp)
-					r.Patch("/", a.handlePatchApp)
-					r.Delete("/", a.handleDeleteApp)
-				})
-			})
-
-			r.Route("/templates", func(r chi.Router) {
-				r.Get("/", a.handleListTemplates)
-				r.Post("/", a.handleCreateTemplate)
-				r.Route("/{templateID}", func(r chi.Router) {
-					r.Get("/", a.handleGetTemplate)
-					r.Patch("/", a.handlePatchTemplate)
-					r.Delete("/", a.handleDeleteTemplate)
-					r.Post("/render", a.handleRenderTemplate)
-				})
-			})
-
-			r.Route("/artifacts", func(r chi.Router) {
-				r.Post("/", a.handleCreateArtifact)
-				r.Get("/{artifactID}/download", a.handleDownloadArtifact)
-			})
-
-			r.Route("/releases", func(r chi.Router) {
-				r.Get("/", a.handleListReleases)
-				r.Post("/", a.handleCreateRelease)
-				r.Route("/{releaseID}", func(r chi.Router) {
-					r.Get("/", a.handleGetRelease)
-					r.Get("/runs", a.handleListReleaseRuns)
-					r.Get("/runs/{serverID}/logs", a.handleReleaseLogs)
-					r.Post("/retry", a.handleRetryRelease)
-					r.Post("/rollback", a.handleRollbackRelease)
-					r.Post("/cancel", a.handleCancelRelease)
-				})
-			})
-
-			// ---- 备份与恢复 ----
-			r.Route("/backups", func(r chi.Router) {
-				r.Get("/", a.handleListBackups)
-				r.Post("/", a.handleCreateBackup)
-				// /backups/restore 必须先于 /{name} 类路由注册（静态优先）。
-				r.Post("/restore", a.handleRestoreUpload)
-				r.Get("/{name}/download", a.handleDownloadBackup)
-				r.Post("/{name}/verify", a.handleVerifyBackup)
-				r.Delete("/{name}", a.handleDeleteBackup)
-			})
+			r.Get("/servers", a.handleListServers)
+			r.Get("/servers/{serverID}", a.handleGetServer)
+			r.Get("/credentials", a.handleListCredentials)
+			r.Get("/checks", a.handleListChecks)
+			r.Get("/checks/summary", a.handleCheckSummary)
+			r.Get("/checks/{checkID}", a.handleGetCheck)
+			r.Get("/checks/{checkID}/results", a.handleListCheckResults)
+			r.Get("/alert-rules", a.handleListAlertRules)
+			r.Get("/alert-rules/{ruleID}", a.handleGetAlertRule)
+			r.Get("/alert-channels", a.handleListAlertChannels)
+			r.Get("/alerts", a.handleListAlerts)
+			r.Get("/alerts/summary", a.handleAlertSummary)
+			r.Get("/alerts/{alertID}", a.handleGetAlert)
+			r.Get("/apps", a.handleListApps)
+			r.Get("/apps/{appID}", a.handleGetApp)
+			r.Get("/templates", a.handleListTemplates)
+			r.Get("/templates/{templateID}", a.handleGetTemplate)
+			r.Get("/releases", a.handleListReleases)
+			r.Get("/releases/{releaseID}", a.handleGetRelease)
+			r.Get("/releases/{releaseID}/runs", a.handleListReleaseRuns)
+			r.Get("/releases/{releaseID}/runs/{serverID}/logs", a.handleReleaseLogs)
+			r.Get("/backups", a.handleListBackups)
+			r.Get("/backups/{name}/download", a.handleDownloadBackup)
 			r.Get("/backup-settings", a.handleGetBackupSettings)
-			r.Patch("/backup-settings", a.handlePatchBackupSettings)
+			r.Get("/scheduled-tasks", a.handleListScheduledTasks)
+			r.Get("/scheduled-tasks/{taskID}", a.handleGetScheduledTask)
+			r.Get("/scheduled-tasks/{taskID}/runs", a.handleListScheduledTaskRuns)
 
-			r.Route("/alerts", func(r chi.Router) {
-				// /alerts/summary 必须先于 /alerts/{alertID} 注册。
-				r.Get("/summary", a.handleAlertSummary)
-				r.Get("/", a.handleListAlerts)
-				r.Route("/{alertID}", func(r chi.Router) {
-					r.Get("/", a.handleGetAlert)
-					r.Post("/ack", a.handleAckAlert)
-				})
+			// ---------------- operator 及以上 ----------------
+			r.Group(func(r chi.Router) {
+				r.Use(a.RequireRole(roleOperator))
+
+				r.Post("/servers", a.handleCreateServer)
+				r.Post("/servers/batch", a.handleBatchServers)
+				r.Post("/servers/import", a.handleImportServers)
+				r.Patch("/servers/{serverID}", a.handlePatchServer)
+				r.Post("/servers/{serverID}/test-connection", a.handleTestConnection)
+				r.Post("/servers/{serverID}/refresh-host-info", a.handleRefreshHostInfo)
+				r.Get("/servers/{serverID}/metrics", a.handleServerMetrics)
+				r.Get("/servers/{serverID}/checks", a.handleServerChecks)
+
+				// 终端/文件/日志/进程/端口（运维动作，operator 起）。
+				r.Post("/servers/{serverID}/terminal-ticket", a.handleTerminalTicket)
+
+				r.Get("/servers/{serverID}/files", a.handleListFiles)
+				r.Post("/servers/{serverID}/files/upload", a.handleUploadFile)
+				r.Delete("/servers/{serverID}/files", a.handleDeleteFile)
+				r.Get("/servers/{serverID}/files/download", a.handleDownloadFile)
+				r.Get("/servers/{serverID}/logs", a.handleServerLogs)
+				r.Get("/servers/{serverID}/processes", a.handleServerProcesses)
+				r.Get("/servers/{serverID}/ports", a.handleServerPorts)
+
+				r.Post("/credentials", a.handleCreateCredential)
+				r.Post("/checks", a.handleCreateCheck)
+				r.Patch("/checks/{checkID}", a.handlePatchCheck)
+				r.Delete("/checks/{checkID}", a.handleDeleteCheck)
+				r.Post("/checks/{checkID}/targets", a.handleSetCheckTargets)
+				r.Post("/checks/{checkID}/run", a.handleRunCheck)
+				r.Post("/alert-rules", a.handleCreateAlertRule)
+				r.Patch("/alert-rules/{ruleID}", a.handlePatchAlertRule)
+				r.Post("/alert-rules/{ruleID}/silence", a.handleSilenceAlertRule)
+				r.Post("/alert-channels", a.handleCreateAlertChannel)
+				r.Patch("/alert-channels/{channelID}", a.handlePatchAlertChannel)
+				r.Post("/alert-channels/{channelID}/test", a.handleTestAlertChannel)
+				r.Post("/alerts/{alertID}/ack", a.handleAckAlert)
+				r.Post("/apps", a.handleCreateApp)
+				r.Patch("/apps/{appID}", a.handlePatchApp)
+				r.Post("/templates", a.handleCreateTemplate)
+				r.Patch("/templates/{templateID}", a.handlePatchTemplate)
+				r.Post("/templates/{templateID}/render", a.handleRenderTemplate)
+				r.Post("/artifacts", a.handleCreateArtifact)
+				r.Post("/artifacts/upload", a.handleUploadArtifact)
+				r.Get("/artifacts/{artifactID}/download", a.handleDownloadArtifact)
+				r.Post("/releases", a.handleCreateRelease)
+				r.Post("/releases/{releaseID}/retry", a.handleRetryRelease)
+				r.Post("/releases/{releaseID}/rollback", a.handleRollbackRelease)
+				r.Post("/releases/{releaseID}/cancel", a.handleCancelRelease)
+				r.Post("/backups", a.handleCreateBackup)
+				r.Patch("/backup-settings", a.handlePatchBackupSettings)
+				r.Post("/scheduled-tasks", a.handleCreateScheduledTask)
+				r.Patch("/scheduled-tasks/{taskID}", a.handlePatchScheduledTask)
+				r.Delete("/scheduled-tasks/{taskID}", a.handleDeleteScheduledTask)
+				r.Post("/scheduled-tasks/{taskID}/run", a.handleRunScheduledTask)
+				r.Post("/agent/install-script", a.handleInstallScript)
 			})
 
-			r.Route("/checks", func(r chi.Router) {
-				// /checks/summary 与 /checks/{checkID} 同为静态优先，显式先注册避免歧义。
-				r.Get("/summary", a.handleCheckSummary)
-				r.Get("/", a.handleListChecks)
-				r.Post("/", a.handleCreateCheck)
-				r.Route("/{checkID}", func(r chi.Router) {
-					r.Get("/", a.handleGetCheck)
-					r.Patch("/", a.handlePatchCheck)
-					r.Delete("/", a.handleDeleteCheck)
-					r.Post("/targets", a.handleSetCheckTargets)
-					r.Post("/run", a.handleRunCheck)
-					r.Get("/results", a.handleListCheckResults)
-				})
-			})
+			// ---------------- admin 专属 ----------------
+			r.Group(func(r chi.Router) {
+				r.Use(a.RequireRole(roleAdmin))
 
-			r.Route("/credentials", func(r chi.Router) {
-				r.Get("/", a.handleListCredentials)
-				r.Post("/", a.handleCreateCredential)
-				r.Delete("/{credentialID}", a.handleDeleteCredential)
-			})
+				r.Get("/audit-logs", a.handleListAuditLogs)
+				r.Get("/enroll-tokens", a.handleListEnrollTokens)
+				r.Post("/enroll-tokens", a.handleCreateEnrollToken)
+				r.Get("/api-tokens", a.handleListAPITokens)
+				r.Post("/api-tokens", a.handleCreateAPIToken)
+				r.Delete("/api-tokens/{tokenID}", a.handleDeleteAPIToken)
+				r.Get("/users", a.handleListUsers)
+				r.Post("/users", a.handleCreateUser)
+				r.Patch("/users/{userID}", a.handlePatchUser)
+				r.Delete("/users/{userID}", a.handleDeleteUser)
 
-			r.Route("/enroll-tokens", func(r chi.Router) {
-				r.Get("/", a.handleListEnrollTokens)
-				r.Post("/", a.handleCreateEnrollToken)
-			})
+				r.Delete("/servers/{serverID}", a.handleDeleteServer)
+				r.Delete("/credentials/{credentialID}", a.handleDeleteCredential)
+				r.Delete("/alert-rules/{ruleID}", a.handleDeleteAlertRule)
+				r.Delete("/alert-channels/{channelID}", a.handleDeleteAlertChannel)
+				r.Delete("/apps/{appID}", a.handleDeleteApp)
+				r.Delete("/templates/{templateID}", a.handleDeleteTemplate)
 
-			r.Post("/agent/install-script", a.handleInstallScript)
+				r.Delete("/backups/{name}", a.handleDeleteBackup)
+				r.Post("/backups/{name}/verify", a.handleVerifyBackup)
+				r.Post("/backups/restore", a.handleRestoreUpload)
+
+				r.Post("/servers/{serverID}/agent-upgrade", a.handleAgentUpgrade)
+				r.Post("/agents/upgrade", a.handleBatchAgentUpgrade)
+			})
 		})
 	})
 
-	r.NotFound(a.handleNotFound)
-	r.MethodNotAllowed(a.handleMethodNotAllowed)
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		if isAPIPath(r.URL.Path) {
+			writeError(w, http.StatusNotFound, codeNotFound, "接口不存在")
+			return
+		}
+		a.serveSPA(w, r)
+	})
+	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusMethodNotAllowed, codeInvalidArgument, "HTTP 方法不被支持")
+	})
 	return r
-}
-
-// handleNotFound 对 API/agent 路径返回 JSON 404，其余交给 SPA 回退。
-func (a *API) handleNotFound(w http.ResponseWriter, r *http.Request) {
-	if isAPIPath(r.URL.Path) {
-		writeError(w, http.StatusNotFound, codeNotFound, "接口不存在")
-		return
-	}
-	a.serveSPA(w, r)
-}
-
-// handleMethodNotAllowed 统一方法不允许的响应。
-func (a *API) handleMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusMethodNotAllowed, codeInvalidArgument, "HTTP 方法不被支持")
 }
 
 // isAPIPath 判断路径是否属于后端接口（而非前端 SPA 路由）。

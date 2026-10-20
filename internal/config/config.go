@@ -53,6 +53,14 @@ const (
 	EnvBackupIncludeArtifacts = "LEADSTACK_BACKUP_INCLUDE_ARTIFACTS"
 	// EnvBackupPassphrase 是备份加密口令（设置后不再读取 backup.pass）。
 	EnvBackupPassphrase = "LEADSTACK_BACKUP_PASSPHRASE"
+	// EnvAuditRetentionDays 是审计日志保留天数。
+	EnvAuditRetentionDays = "LEADSTACK_AUDIT_RETENTION_DAYS"
+	// EnvTerminalEnabled 是 Web 终端总开关。
+	EnvTerminalEnabled = "LEADSTACK_TERMINAL_ENABLED"
+	// EnvCronTick 是定时任务引擎的检查周期。
+	EnvCronTick = "LEADSTACK_CRON_TICK"
+	// EnvFileMaxMB 是文件上传的单文件上限（MB）。
+	EnvFileMaxMB = "LEADSTACK_FILE_MAX_MB"
 )
 
 // 默认值。
@@ -91,6 +99,12 @@ const (
 	DefaultBackupInterval = 24 * time.Hour
 	// DefaultBackupRetention 是默认保留份数。
 	DefaultBackupRetention = 7
+	// DefaultAuditRetentionDays 是审计日志默认保留天数。
+	DefaultAuditRetentionDays = 180
+	// DefaultCronTick 是定时任务引擎默认检查周期。
+	DefaultCronTick = time.Minute
+	// DefaultFileMaxMB 是文件上传默认上限（MB）。
+	DefaultFileMaxMB = 8
 	// MasterKeyFileName 是主密钥文件名（位于 DataDir 下）。
 	MasterKeyFileName = "master.key"
 	// MasterKeySize 是主密钥字节数（AES-256）。
@@ -148,6 +162,14 @@ type Config struct {
 	BackupIncludeArtifacts bool
 	// BackupPassphrase 是备份加密口令（可选；空则读 backup.pass 或自动生成）。
 	BackupPassphrase string
+	// AuditRetentionDays 是审计日志保留天数。
+	AuditRetentionDays int
+	// TerminalEnabled 是 Web 终端总开关（默认关闭）。
+	TerminalEnabled bool
+	// CronTick 是定时任务引擎的检查周期。
+	CronTick time.Duration
+	// FileMaxMB 是文件上传的单文件上限（MB）。
+	FileMaxMB int
 }
 
 // Load 解析配置。version 由调用方（main）传入，args 通常为 os.Args[1:]。
@@ -177,6 +199,10 @@ func Load(version string, args []string) (*Config, error) {
 	backupRetention := fs.Int("backup-retention", envIntOr(EnvBackupRetention, DefaultBackupRetention), "保留备份份数（环境变量 "+EnvBackupRetention+"）")
 	backupIncludeArtifacts := fs.Bool("backup-include-artifacts", envBoolOr(EnvBackupIncludeArtifacts, false), "备份是否包含上传制品（环境变量 "+EnvBackupIncludeArtifacts+"）")
 	backupPassphrase := fs.String("backup-passphrase", os.Getenv(EnvBackupPassphrase), "备份加密口令；留空则读 <data-dir>/backup.pass 或自动生成（环境变量 "+EnvBackupPassphrase+"）")
+	auditRetentionDays := fs.Int("audit-retention-days", envIntOr(EnvAuditRetentionDays, DefaultAuditRetentionDays), "审计日志保留天数（环境变量 "+EnvAuditRetentionDays+"）")
+	terminalEnabled := fs.Bool("terminal-enabled", envBoolOr(EnvTerminalEnabled, false), "是否启用 Web 终端（环境变量 "+EnvTerminalEnabled+"）")
+	cronTick := fs.Duration("cron-tick", defaultDurationOr(EnvCronTick, DefaultCronTick), "定时任务检查周期，如 1m（环境变量 "+EnvCronTick+"）")
+	fileMaxMB := fs.Int("file-max-mb", envIntOr(EnvFileMaxMB, DefaultFileMaxMB), "文件上传单文件上限 MB（环境变量 "+EnvFileMaxMB+"）")
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("解析命令行参数: %w", err)
 	}
@@ -203,6 +229,10 @@ func Load(version string, args []string) (*Config, error) {
 		BackupRetention:        *backupRetention,
 		BackupIncludeArtifacts: *backupIncludeArtifacts,
 		BackupPassphrase:       *backupPassphrase,
+		AuditRetentionDays:     *auditRetentionDays,
+		TerminalEnabled:        *terminalEnabled,
+		CronTick:               *cronTick,
+		FileMaxMB:              *fileMaxMB,
 	}
 
 	if cfg.Listen == "" {
@@ -253,6 +283,15 @@ func Load(version string, args []string) (*Config, error) {
 	}
 	if cfg.BackupRetention < 1 || cfg.BackupRetention > 1000 {
 		return nil, errors.New("配置错误: backup-retention 必须在 1-1000 之间")
+	}
+	if cfg.AuditRetentionDays < 1 || cfg.AuditRetentionDays > 3650 {
+		return nil, errors.New("配置错误: audit-retention-days 必须在 1-3650 之间")
+	}
+	if cfg.CronTick < time.Second || cfg.CronTick > 24*time.Hour {
+		return nil, errors.New("配置错误: cron-tick 必须在 1s-24h 之间")
+	}
+	if cfg.FileMaxMB < 1 || cfg.FileMaxMB > 1024 {
+		return nil, errors.New("配置错误: file-max-mb 必须在 1-1024 之间")
 	}
 
 	if raw := strings.TrimSpace(*masterKeyHex); raw != "" {

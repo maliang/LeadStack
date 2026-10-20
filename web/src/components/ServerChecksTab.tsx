@@ -10,6 +10,7 @@ import { CheckTimeline } from '../components/CheckTimeline'
 import { EmptyState } from '../components/EmptyState'
 import { AlertTriangleIcon, ShieldCheckIcon } from '../components/Icons'
 import { InlineLoading } from '../components/Loading'
+import { t } from '../i18n'
 
 /**
  * 服务器详情页「检测」标签：该机器适用的检测项 + 每项最近 100 条结果时间线。
@@ -59,7 +60,7 @@ export function ServerChecksTab({ serverId }: { serverId: string }) {
   if (checksQuery.loading && checksQuery.data === null) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <InlineLoading label="正在加载该服务器的检测项…" />
+        <InlineLoading label={t('s.0490')} />
       </div>
     )
   }
@@ -67,9 +68,9 @@ export function ServerChecksTab({ serverId }: { serverId: string }) {
   if (checksQuery.error && checksQuery.data === null) {
     return (
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-        <span>加载检测项失败：{checksQuery.error}</span>
+        <span>{t('s.0491')}{checksQuery.error}</span>
         <Button size="sm" variant="secondary" onClick={() => void checksQuery.refresh()}>
-          重试
+          {t('s.0053')}
         </Button>
       </div>
     )
@@ -80,13 +81,13 @@ export function ServerChecksTab({ serverId }: { serverId: string }) {
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <EmptyState
           icon={<ShieldCheckIcon className="h-6 w-6" />}
-          title="该服务器还没有适用的检测项"
-          description="到检测页创建检测项并把它应用到这台服务器，结果会在这里形成时间线"
+          title={t('s.0492')}
+          description={t('s.0493')}
         />
         <div className="pb-6 text-center">
           <Link to="/checks">
             <Button size="sm" variant="secondary">
-              去检测页创建
+              {t('s.0494')}
             </Button>
           </Link>
         </div>
@@ -100,8 +101,8 @@ export function ServerChecksTab({ serverId }: { serverId: string }) {
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
           <AlertTriangleIcon className="h-4 w-4" />
           <span className="font-medium">
-            该服务器有 {downCount} 个检测项异常
-            {unknownCount > 0 ? `，另有 ${unknownCount} 个暂无结果` : ''}
+            {t('s.0495')} {downCount} {t('s.0496')}
+            {unknownCount > 0 ? t('s.0497', { '0': unknownCount }) : ''}
           </span>
         </div>
       ) : null}
@@ -124,7 +125,7 @@ export function ServerChecksTab({ serverId }: { serverId: string }) {
                   <CheckStateBadge state={check.state} />
                   {!check.enabled ? (
                     <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                      已停用
+                      {t('s.0232')}
                     </span>
                   ) : null}
                 </div>
@@ -136,9 +137,9 @@ export function ServerChecksTab({ serverId }: { serverId: string }) {
                 </p>
               </div>
               <div className="text-right text-[11px] text-slate-500 dark:text-slate-400">
-                <p>间隔 {check.interval_s}s · 超时 {check.timeout_s}s</p>
+                <p>{t('s.0498')} {check.interval_s}{t('s.0499')} {check.timeout_s}s</p>
                 <p className={cn('mt-0.5 font-medium tabular-nums', availability.className)}>
-                  24h 可用率 {availability.text}
+                  {t('s.0500')} {availability.text}
                 </p>
               </div>
             </div>
@@ -158,15 +159,15 @@ export function ServerChecksTab({ serverId }: { serverId: string }) {
                       : 'text-amber-600 dark:text-amber-400',
                 )}
               >
-                最近{last.ok ? '成功' : '失败'} {formatRelativeTime(last.ts)} · 延迟{' '}
+                {t('s.0383')}{last.ok ? t('s.0300') : t('s.0301')} {formatRelativeTime(last.ts)} {t('s.0501')}{' '}
                 {formatLatency(last.latency_ms)}
                 {last.status_code !== null ? ` · HTTP ${last.status_code}` : ''}
-                {!last.ok && check.state !== 'down' ? ' · 待确认（未达失败阈值）' : ''}
+                {!last.ok && check.state !== 'down' ? t('s.0502') : ''}
                 {!last.ok && last.message ? ` · ${last.message}` : ''}
               </p>
             ) : (
               <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">
-                还没有结果，等待下一次调度或到检测页点「立即执行」。
+                {t('s.0503')}
               </p>
             )}
           </section>

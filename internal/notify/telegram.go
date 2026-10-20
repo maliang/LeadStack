@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,8 +46,8 @@ func validateTelegram(ch Channel) error {
 	return nil
 }
 
-// sendTelegram 调用 sendMessage API 发送文本消息。
-func (c *Client) sendTelegram(ctx context.Context, ch Channel, msg Message) error {
+// buildTelegram 构造 sendMessage 请求。
+func (c *Client) buildTelegram(ch Channel, msg Message) (httpRequest, error) {
 	token, _, _ := cfgString(ch.Config, "bot_token")
 	chatID, _, _ := cfgText(ch.Config, "chat_id")
 	parseMode, hasParseMode, _ := cfgString(ch.Config, "parse_mode")
@@ -54,10 +55,8 @@ func (c *Client) sendTelegram(ctx context.Context, ch Channel, msg Message) erro
 	if !hasBase {
 		base = defaultTelegramAPIBase
 	}
-	base = strings.TrimRight(base, "/")
 	scr := newScrubber(ch)
 
-	endpoint := telegramEndpoint(base, token)
 	payload := map[string]any{
 		"chat_id": chatID,
 		"text":    renderText(msg),
@@ -67,18 +66,29 @@ func (c *Client) sendTelegram(ctx context.Context, ch Channel, msg Message) erro
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return httpRequest{}, newSendError(ch.Kind, ErrorKindInternal, 0, "", err.Error(), "")
 	}
+	endpoint := telegramEndpoint(base, token)
 	scr.addURL(endpoint) // token 在 URL 路径里，必须整条替换才能安全脱敏
-	respBody, err := c.do(ctx, http.MethodPost, endpoint, nil, body, c.Timeout(), scr, "telegram")
+	return httpRequest{method: http.MethodPost, url: endpoint, body: body, timeout: c.Timeout(), scr: scr}, nil
+}
+
+// sendTelegram 调用 sendMessage API 发送文本消息。
+func (c *Client) sendTelegram(ctx context.Context, ch Channel, msg Message) error {
+	req, err := c.buildTelegram(ch, msg)
 	if err != nil {
 		return err
 	}
-	return checkTelegramResult(respBody, scr)
+	res, err := c.deliver(ctx, ch.Kind, req)
+	if err != nil {
+		return err
+	}
+	return checkTelegramResult(ch.Kind, res, req.scr)
 }
 
 // checkTelegramResult 处理 telegram 的 {"ok":false,...}。
-func checkTelegramResult(body []byte, scr *scrubber) error {
+func checkTelegramResult(chKind Kind, res *httpResult, scr *scrubber) error {
+	body := res.Body
 	var r struct {
 		OK          bool   `json:"ok"`
 		ErrorCode   int    `json:"error_code"`
@@ -90,9 +100,21 @@ func checkTelegramResult(body []byte, scr *scrubber) error {
 	if r.OK {
 		return nil
 	}
-	desc, _ := truncateBytes(strings.TrimSpace(r.Description), errorBodyLimit)
+	desc := strings.TrimSpace(r.Description)
 	if desc == "" {
 		desc = "未知错误"
 	}
-	return errors.New("notify: telegram 返回失败 error_code=" + strconv.Itoa(r.ErrorCode) + ": " + scr.scrub(desc))
+	return newSendError(chKind, ErrorKindProvider, res.StatusCode,
+		fmt.Sprintf("error_code=%d", r.ErrorCode), scr.scrub(desc), snippetOf(body, scr))
+}
+
+// telegramProviderCode 提取 telegram 的 error_code（Probe 展示用）。
+func telegramProviderCode(body []byte) string {
+	var r struct {
+		ErrorCode int `json:"error_code"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil || r.ErrorCode == 0 {
+		return ""
+	}
+	return "error_code=" + strconv.Itoa(r.ErrorCode)
 }

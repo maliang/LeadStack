@@ -156,6 +156,60 @@ func (e *SSHExecutor) Exec(ctx context.Context, serverID, command string, timeou
 	return stdout, stderr, exitCode, nil
 }
 
+// openSFTP 打开一条 SFTP 会话（文件管理用，不走连接池）。cmd 把它注入 api.Options.SFTP。
+func (e *SSHExecutor) OpenSFTP(ctx context.Context, serverID string) (SFTPClient, error) {
+	opts, err := e.dialOptions(ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+	sess, err := sshx.SFTP(ctx, sshx.SFTPOptions{DialOptions: opts})
+	if err != nil {
+		return nil, fmt.Errorf("建立 SFTP 会话失败: %w", err)
+	}
+	return sess, nil
+}
+
+// dialOptions 解析服务器 + 凭证，组装 SSH 连接参数（终端/SFTP 复用）。
+func (e *SSHExecutor) dialOptions(ctx context.Context, serverID string) (sshx.DialOptions, error) {
+	srv, err := e.st.GetServer(ctx, serverID)
+	if err != nil {
+		return sshx.DialOptions{}, fmt.Errorf("查询服务器 %s 失败: %w", serverID, err)
+	}
+	if srv.CredentialID == nil || *srv.CredentialID == "" {
+		return sshx.DialOptions{}, errors.New("服务器未绑定 SSH 凭证")
+	}
+	cred, err := e.st.GetCredential(ctx, *srv.CredentialID)
+	if err != nil {
+		return sshx.DialOptions{}, fmt.Errorf("读取凭证失败: %w", err)
+	}
+	plain, err := e.cipher.Decrypt(cred.SecretEnc)
+	if err != nil {
+		return sshx.DialOptions{}, fmt.Errorf("解密凭证失败: %w", err)
+	}
+	secret, err := credential.Unmarshal(plain)
+	if err != nil {
+		return sshx.DialOptions{}, fmt.Errorf("解析凭证失败: %w", err)
+	}
+	policy := sshx.HostKeyPolicy(srv.HostKeyPolicy)
+	if policy == "" {
+		policy = sshx.PolicyAcceptNew
+	}
+	return sshx.DialOptions{
+		Host: srv.Host, Port: srv.Port,
+		Auth: sshx.Auth{
+			Username: secret.Username, Password: secret.Password,
+			PrivateKey: secret.PrivateKey, Passphrase: secret.Passphrase,
+		},
+		Timeout:        sshExecDialTimeout,
+		HostKeyPolicy:  policy,
+		KnownHostsPath: e.known,
+		OnNewHostKey: func(host, fingerprint string) {
+			e.logger.Info("SSH 通道首次见到主机密钥，已记录",
+				"server_id", serverID, "host", host, "fingerprint", fingerprint)
+		},
+	}, nil
+}
+
 // acquireConn 返回可用的连接（优先复用缓存）。
 func (e *SSHExecutor) acquireConn(ctx context.Context, serverID string) (*pooledSSHConn, error) {
 	srv, err := e.st.GetServer(ctx, serverID)

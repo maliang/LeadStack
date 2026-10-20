@@ -43,21 +43,22 @@ import { InlineLoading } from '../components/Loading'
 import { Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
 
+import { t } from '../i18n'
 type Tab = 'alerts' | 'rules' | 'channels'
 
 const RANGES = [
-  { key: '1h', label: '近 1 小时', ms: 3_600_000 },
-  { key: '24h', label: '近 24 小时', ms: 86_400_000 },
-  { key: '7d', label: '近 7 天', ms: 604_800_000 },
-  { key: 'all', label: '全部时间', ms: 0 },
+  { key: '1h', label: t('s.0661'), ms: 3_600_000 },
+  { key: '24h', label: t('s.0662'), ms: 86_400_000 },
+  { key: '7d', label: t('s.0663'), ms: 604_800_000 },
+  { key: 'all', label: t('s.0664'), ms: 0 },
 ] as const
 
 type RangeKey = (typeof RANGES)[number]['key']
 
 const SILENCE_OPTIONS = [
-  { value: 1_800, label: '30 分钟' },
-  { value: 7_200, label: '2 小时' },
-  { value: 86_400, label: '1 天' },
+  { value: 1_800, label: t('s.0665') },
+  { value: 7_200, label: t('s.0666') },
+  { value: 86_400, label: t('s.0667') },
 ]
 
 const selectClass =
@@ -183,7 +184,7 @@ export default function AlertsPage() {
         ...current,
         [alertId]: {
           loading: false,
-          error: errorMessage(caught, '加载详情失败'),
+          error: errorMessage(caught, t('s.0668')),
           alert: current[alertId]?.alert ?? null,
         },
       }))
@@ -204,11 +205,11 @@ export default function AlertsPage() {
     setAckingId(alert.id)
     try {
       await api.ackAlert(alert.id)
-      toast(`告警「${alert.title}」已确认`, 'success')
+      toast(t('s.0669', { '0': alert.title }), 'success')
       await refreshAll()
       if (details[alert.id]) void loadDetail(alert.id)
     } catch (caught) {
-      toast(errorMessage(caught, '确认失败'), 'error')
+      toast(errorMessage(caught, t('s.0670')), 'error')
     } finally {
       setAckingId(null)
     }
@@ -218,10 +219,10 @@ export default function AlertsPage() {
     setTogglingRuleId(rule.id)
     try {
       await api.updateAlertRule(rule.id, { enabled: !rule.enabled })
-      toast(`规则「${rule.name}」已${rule.enabled ? '停用' : '启用'}`, 'success')
+      toast(t('s.0671', { '0': rule.name, '1': rule.enabled ? t('common.disabled') : t('common.enabled') }), 'success')
       await refreshAll()
     } catch (caught) {
-      toast(errorMessage(caught, '切换规则状态失败'), 'error')
+      toast(errorMessage(caught, t('s.0672')), 'error')
     } finally {
       setTogglingRuleId(null)
     }
@@ -233,11 +234,11 @@ export default function AlertsPage() {
     setDeleteRuleError(null)
     try {
       await api.deleteAlertRule(deletingRule.id)
-      toast(`已删除规则「${deletingRule.name}」`, 'success')
+      toast(t('s.0673', { '0': deletingRule.name }), 'success')
       setDeletingRule(null)
       await refreshAll()
     } catch (caught) {
-      setDeleteRuleError(errorMessage(caught, '删除规则失败'))
+      setDeleteRuleError(errorMessage(caught, t('s.0674')))
     } finally {
       setDeleteRuleLoading(false)
     }
@@ -248,11 +249,11 @@ export default function AlertsPage() {
     setSilenceLoading(true)
     try {
       await api.silenceAlertRule(silenceRule.id, durationS)
-      toast(`规则「${silenceRule.name}」已静默 ${formatDuration(durationS)}`, 'success')
+      toast(t('s.0675', { '0': silenceRule.name, '1': formatDuration(durationS) }), 'success')
       setSilenceRule(null)
       await refreshAll()
     } catch (caught) {
-      toast(errorMessage(caught, '静默失败'), 'error')
+      toast(errorMessage(caught, t('s.0676')), 'error')
     } finally {
       setSilenceLoading(false)
     }
@@ -262,10 +263,10 @@ export default function AlertsPage() {
     setTogglingChannelId(channel.id)
     try {
       await api.updateAlertChannel(channel.id, { enabled: !channel.enabled })
-      toast(`渠道「${channel.name}」已${channel.enabled ? '停用' : '启用'}`, 'success')
+      toast(t('s.0677', { '0': channel.name, '1': channel.enabled ? t('common.disabled') : t('common.enabled') }), 'success')
       await refreshAll()
     } catch (caught) {
-      toast(errorMessage(caught, '切换渠道状态失败'), 'error')
+      toast(errorMessage(caught, t('s.0678')), 'error')
     } finally {
       setTogglingChannelId(null)
     }
@@ -277,11 +278,11 @@ export default function AlertsPage() {
     setDeleteChannelError(null)
     try {
       await api.deleteAlertChannel(deletingChannel.id)
-      toast(`已删除渠道「${deletingChannel.name}」`, 'success')
+      toast(t('s.0679', { '0': deletingChannel.name }), 'success')
       setDeletingChannel(null)
       await refreshAll()
     } catch (caught) {
-      setDeleteChannelError(errorMessage(caught, '删除渠道失败'))
+      setDeleteChannelError(errorMessage(caught, t('s.0680')))
     } finally {
       setDeleteChannelLoading(false)
     }
@@ -292,15 +293,15 @@ export default function AlertsPage() {
       return `${rule.metric ?? '—'} ${rule.comparator ?? ''} ${rule.threshold ?? ''}`.trim()
     }
     if (rule.source === 'check') {
-      if (rule.check_ids.length === 0) return '全部检测项'
+      if (rule.check_ids.length === 0) return t('s.0681')
       const names = rule.check_ids.slice(0, 2).map(checkNameOf)
-      return `检测项：${names.join('、')}${rule.check_ids.length > 2 ? ` 等 ${rule.check_ids.length} 项` : ''}`
+      return t('s.0682', { '0': names.join('、'), '1': rule.check_ids.length > 2 ? t('alerts.moreChecks', { '0': rule.check_ids.length }) : '' })
     }
     const parts: string[] = []
-    if (rule.server_ids.length > 0) parts.push(`${rule.server_ids.length} 台服务器`)
-    if (rule.groups.length > 0) parts.push(`分组：${rule.groups.join('、')}`)
-    if (rule.tags.length > 0) parts.push(`标签：${rule.tags.join('、')}`)
-    return parts.length > 0 ? parts.join(' · ') : '全部服务器'
+    if (rule.server_ids.length > 0) parts.push(t('s.0683', { '0': rule.server_ids.length }))
+    if (rule.groups.length > 0) parts.push(t('s.0684', { '0': rule.groups.join('、') }))
+    if (rule.tags.length > 0) parts.push(t('s.0685', { '0': rule.tags.join('、') }))
+    return parts.length > 0 ? parts.join(' · ') : t('s.0686')
   }
 
   const hasAlertFilters = Boolean(
@@ -317,10 +318,10 @@ export default function AlertsPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-            告警
+            {t('s.0687')}
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            规则触发、通知、确认与恢复的完整轨迹，每 10 秒自动刷新
+            {t('s.0688')}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -330,7 +331,7 @@ export default function AlertsPage() {
             loading={refreshing}
             icon={<RefreshIcon className="h-4 w-4" />}
           >
-            刷新
+            {t('s.0689')}
           </Button>
           {tab === 'rules' ? (
             <Button
@@ -340,7 +341,7 @@ export default function AlertsPage() {
                 setRuleDialogOpen(true)
               }}
             >
-              新建规则
+              {t('s.0690')}
             </Button>
           ) : null}
           {tab === 'channels' ? (
@@ -351,7 +352,7 @@ export default function AlertsPage() {
                 setChannelDialogOpen(true)
               }}
             >
-              新建渠道
+              {t('s.0691')}
             </Button>
           ) : null}
         </div>
@@ -361,7 +362,7 @@ export default function AlertsPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-200">
           <span className="inline-flex items-center gap-2 font-medium">
             <AlertTriangleIcon className="h-4 w-4" />
-            当前有 {summary.firing} 条告警处于进行中（firing），请及时处理
+            {t('s.0692')} {summary.firing} {t('s.0693')}
           </span>
           <button
             type="button"
@@ -371,7 +372,7 @@ export default function AlertsPage() {
             }}
             className="text-xs font-medium underline-offset-2 hover:underline"
           >
-            只看进行中
+            {t('s.0694')}
           </button>
         </div>
       ) : null}
@@ -379,9 +380,9 @@ export default function AlertsPage() {
       <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-800">
         {(
           [
-            { key: 'alerts' as const, label: '告警列表', count: summary?.firing ?? alerts.length },
-            { key: 'rules' as const, label: '规则', count: rules.length },
-            { key: 'channels' as const, label: '渠道', count: channels.length },
+            { key: 'alerts' as const, label: t('s.0695'), count: summary?.firing ?? alerts.length },
+            { key: 'rules' as const, label: t('s.0696'), count: rules.length },
+            { key: 'channels' as const, label: t('s.0697'), count: channels.length },
           ]
         ).map((option) => (
           <button
@@ -408,11 +409,11 @@ export default function AlertsPage() {
           {summary ? (
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               {[
-                { label: '进行中 (firing)', value: summary.firing, tone: 'text-rose-600 dark:text-rose-300' },
-                { label: '已确认 (acked)', value: summary.acked, tone: 'text-blue-600 dark:text-blue-300' },
-                { label: '24h 已恢复', value: summary.resolved_24h, tone: 'text-emerald-600 dark:text-emerald-300' },
+                { label: t('s.0698'), value: summary.firing, tone: 'text-rose-600 dark:text-rose-300' },
+                { label: t('s.0699'), value: summary.acked, tone: 'text-blue-600 dark:text-blue-300' },
+                { label: t('s.0700'), value: summary.resolved_24h, tone: 'text-emerald-600 dark:text-emerald-300' },
                 {
-                  label: '按级别 严重/警告/提示',
+                  label: t('s.0701'),
                   value: `${summary.by_severity.critical}/${summary.by_severity.warning}/${summary.by_severity.info}`,
                   tone: 'text-slate-700 dark:text-slate-200',
                 },
@@ -433,36 +434,36 @@ export default function AlertsPage() {
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">告警列表</h2>
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0695')}</h2>
                 <select
-                  aria-label="按状态筛选告警"
+                  aria-label={t('s.0702')}
                   value={statusFilter}
                   onChange={(event) => setStatusFilter(event.target.value as AlertStatus | '')}
                   className={selectClass}
                 >
-                  <option value="">全部状态</option>
-                  <option value="firing">进行中 (firing)</option>
-                  <option value="acked">已确认 (acked)</option>
-                  <option value="resolved">已恢复 (resolved)</option>
+                  <option value="">{t('s.0520')}</option>
+                  <option value="firing">{t('s.0698')}</option>
+                  <option value="acked">{t('s.0699')}</option>
+                  <option value="resolved">{t('s.0703')}</option>
                 </select>
                 <select
-                  aria-label="按级别筛选告警"
+                  aria-label={t('s.0704')}
                   value={severityFilter}
                   onChange={(event) => setSeverityFilter(event.target.value as AlertSeverity | '')}
                   className={selectClass}
                 >
-                  <option value="">全部级别</option>
-                  <option value="critical">严重 (critical)</option>
-                  <option value="warning">警告 (warning)</option>
-                  <option value="info">提示 (info)</option>
+                  <option value="">{t('s.0705')}</option>
+                  <option value="critical">{t('s.0706')}</option>
+                  <option value="warning">{t('s.0707')}</option>
+                  <option value="info">{t('s.0708')}</option>
                 </select>
                 <select
-                  aria-label="按规则筛选告警"
+                  aria-label={t('s.0709')}
                   value={ruleFilter}
                   onChange={(event) => setRuleFilter(event.target.value)}
                   className={selectClass}
                 >
-                  <option value="">全部规则</option>
+                  <option value="">{t('s.0710')}</option>
                   {rules.map((rule) => (
                     <option key={rule.id} value={rule.id}>
                       {rule.name}
@@ -470,12 +471,12 @@ export default function AlertsPage() {
                   ))}
                 </select>
                 <select
-                  aria-label="按服务器筛选告警"
+                  aria-label={t('s.0711')}
                   value={serverFilter}
                   onChange={(event) => setServerFilter(event.target.value)}
                   className={selectClass}
                 >
-                  <option value="">全部服务器</option>
+                  <option value="">{t('s.0686')}</option>
                   {servers.map((server) => (
                     <option key={server.id} value={server.id}>
                       {server.name}
@@ -483,7 +484,7 @@ export default function AlertsPage() {
                   ))}
                 </select>
                 <select
-                  aria-label="按时间范围筛选告警"
+                  aria-label={t('s.0712')}
                   value={rangeKey}
                   onChange={(event) => setRangeKey(event.target.value as RangeKey)}
                   className={selectClass}
@@ -506,38 +507,38 @@ export default function AlertsPage() {
                     }}
                     className="text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
                   >
-                    清除筛选
+                    {t('s.0525')}
                   </button>
                 ) : null}
               </div>
               <p className="text-xs text-slate-400 dark:text-slate-500">
                 {alertsQuery.updatedAt
-                  ? `共 ${alerts.length} 条 · 更新于 ${new Date(alertsQuery.updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
-                  : '加载中…'}
+                  ? t('s.0713', { '0': alerts.length, '1': new Date(alertsQuery.updatedAt).toLocaleTimeString('zh-CN', { hour12: false }) })
+                  : t('s.0425')}
               </p>
             </div>
 
             {alertsQuery.error ? (
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-                <span>加载告警失败：{alertsQuery.error}</span>
+                <span>{t('s.0714')}{alertsQuery.error}</span>
                 <Button size="sm" variant="secondary" onClick={() => void alertsQuery.refresh()}>
-                  重试
+                  {t('s.0053')}
                 </Button>
               </div>
             ) : null}
 
             {alertsQuery.loading && alertsQuery.data === null ? (
-              <InlineLoading label="正在加载告警…" />
+              <InlineLoading label={t('s.0715')} />
             ) : alerts.length === 0 ? (
               <EmptyState
                 icon={<BellIcon className="h-6 w-6" />}
-                title="没有符合条件的告警"
+                title={t('s.0716')}
                 description={
                   hasAlertFilters
-                    ? '当前筛选条件下没有告警，试试放宽时间范围或清除筛选'
-                    : '目前一切正常：规则触发后会在这里出现，并记录触发、通知、确认与恢复轨迹'
+                    ? t('s.0717')
+                    : t('s.0718')
                 }
-                actionLabel={hasAlertFilters ? '清除筛选' : undefined}
+                actionLabel={hasAlertFilters ? t('s.0525') : undefined}
                 onAction={
                   hasAlertFilters
                     ? () => {
@@ -556,15 +557,15 @@ export default function AlertsPage() {
                   <thead>
                     <tr className="border-b border-slate-200 text-left text-xs font-medium whitespace-nowrap text-slate-500 dark:border-slate-800 dark:text-slate-400">
                       <th scope="col" className="w-8 px-2 py-2.5" />
-                      <th scope="col" className="px-4 py-2.5 font-medium">状态</th>
-                      <th scope="col" className="px-4 py-2.5 font-medium">级别</th>
-                      <th scope="col" className="px-4 py-2.5 font-medium">规则</th>
-                      <th scope="col" className="px-4 py-2.5 font-medium">服务器</th>
-                      <th scope="col" className="px-4 py-2.5 font-medium">标题 / 信息</th>
-                      <th scope="col" className="px-4 py-2.5 font-medium">开始时间</th>
-                      <th scope="col" className="px-4 py-2.5 font-medium">持续</th>
-                      <th scope="col" className="px-4 py-2.5 font-medium">通知次数</th>
-                      <th scope="col" className="px-4 py-2.5 text-right font-medium">操作</th>
+                      <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0533')}</th>
+                      <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0719')}</th>
+                      <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0696')}</th>
+                      <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0087')}</th>
+                      <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0720')}</th>
+                      <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0721')}</th>
+                      <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0722')}</th>
+                      <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0723')}</th>
+                      <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('s.0539')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -642,7 +643,7 @@ export default function AlertsPage() {
                               {alert.notify_count}
                               {alert.last_notify_at ? (
                                 <span className="mt-0.5 block text-[11px] text-slate-400 dark:text-slate-500">
-                                  最近 {formatRelativeTime(alert.last_notify_at, now)}
+                                  {t('s.0383')} {formatRelativeTime(alert.last_notify_at, now)}
                                 </span>
                               ) : null}
                             </td>
@@ -659,7 +660,7 @@ export default function AlertsPage() {
                                   onClick={() => void handleAck(alert)}
                                   icon={<CheckIcon className="h-3.5 w-3.5" />}
                                 >
-                                  {alert.status === 'firing' ? '确认' : alert.status === 'acked' ? '已确认' : '已恢复'}
+                                  {alert.status === 'firing' ? t('s.0387') : alert.status === 'acked' ? t('s.0079') : t('s.0080')}
                                 </Button>
                               </div>
                             </td>
@@ -692,30 +693,30 @@ export default function AlertsPage() {
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
             <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">告警规则</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0724')}</h2>
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                 {rules.length}
               </span>
             </div>
             {rulesQuery.error ? (
               <span className="text-xs text-rose-600 dark:text-rose-400">
-                加载失败：{rulesQuery.error}
+                {t('s.0725')}{rulesQuery.error}
               </span>
             ) : (
               <p className="text-xs text-slate-400 dark:text-slate-500">
-                持续时长控制「多久才告警」，去重窗口控制「多久内不重复打扰」
+                {t('s.0726')}
               </p>
             )}
           </div>
 
           {rulesQuery.loading && rulesQuery.data === null ? (
-            <InlineLoading label="正在加载规则…" />
+            <InlineLoading label={t('s.0727')} />
           ) : rules.length === 0 ? (
             <EmptyState
               icon={<BellOffIcon className="h-6 w-6" />}
-              title="还没有告警规则"
-              description="创建规则后，检测失败、服务器离线或指标越界都会按规则推送到通知渠道"
-              actionLabel="新建规则"
+              title={t('s.0728')}
+              description={t('s.0729')}
+              actionLabel={t('s.0690')}
               onAction={() => {
                 setEditingRule(null)
                 setRuleDialogOpen(true)
@@ -726,16 +727,16 @@ export default function AlertsPage() {
               <table className="w-full min-w-[1080px] border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-xs font-medium whitespace-nowrap text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                    <th scope="col" className="px-4 py-2.5 font-medium">名称</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">来源</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">适用范围</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">持续时长</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">去重窗口</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">级别</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">渠道</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">静默</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">启用</th>
-                    <th scope="col" className="px-4 py-2.5 text-right font-medium">操作</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0531')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0730')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0731')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0732')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0733')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0719')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0697')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0734')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0422')}</th>
+                    <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('s.0539')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -781,36 +782,36 @@ export default function AlertsPage() {
                         <td className="px-4 py-3 align-top text-xs tabular-nums text-slate-600 dark:text-slate-300">
                           {rule.channel_ids.length}
                           {rule.channel_ids.length === 0 ? (
-                            <span className="ml-1 text-amber-600 dark:text-amber-400">未配置</span>
+                            <span className="ml-1 text-amber-600 dark:text-amber-400">{t('s.0735')}</span>
                           ) : null}
                         </td>
                         <td className="px-4 py-3 align-top text-xs text-slate-600 dark:text-slate-300">
                           {silenced ? (
                             <span className="text-slate-700 dark:text-slate-200">
-                              静默至 {formatDateTime(rule.silence_until)}
+                              {t('s.0736')} {formatDateTime(rule.silence_until)}
                             </span>
                           ) : (
-                            '未静默'
+                            t('s.0737')
                           )}
                         </td>
                         <td className="px-4 py-3 align-top">
                           <EnableSwitch
                             checked={rule.enabled}
                             loading={togglingRuleId === rule.id}
-                            label={rule.enabled ? '停用该规则' : '启用该规则'}
+                            label={rule.enabled ? t('s.0738') : t('s.0205')}
                             onChange={() => void handleToggleRule(rule)}
                           />
                         </td>
                         <td className="px-4 py-3 align-top">
                           <div className="flex items-center justify-end gap-0.5">
                             <IconButton
-                              label="临时静默"
+                              label={t('s.0739')}
                               onClick={() => setSilenceRule(rule)}
                             >
                               <BellOffIcon className="h-4 w-4" />
                             </IconButton>
                             <IconButton
-                              label="编辑规则"
+                              label={t('s.0740')}
                               onClick={() => {
                                 setEditingRule(rule)
                                 setRuleDialogOpen(true)
@@ -819,7 +820,7 @@ export default function AlertsPage() {
                               <PencilIcon className="h-4 w-4" />
                             </IconButton>
                             <IconButton
-                              label="删除规则"
+                              label={t('s.0741')}
                               tone="danger"
                               onClick={() => {
                                 setDeleteRuleError(null)
@@ -844,24 +845,24 @@ export default function AlertsPage() {
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
             <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">通知渠道</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0230')}</h2>
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                 {channels.length}
               </span>
             </div>
             <p className="text-xs text-slate-400 dark:text-slate-500">
-              密钥字段后端脱敏返回，编辑时留空表示不修改
+              {t('s.0742')}
             </p>
           </div>
 
           {channelsQuery.loading && channelsQuery.data === null ? (
-            <InlineLoading label="正在加载渠道…" />
+            <InlineLoading label={t('s.0743')} />
           ) : channels.length === 0 ? (
             <EmptyState
               icon={<SendIcon className="h-6 w-6" />}
-              title="还没有通知渠道"
-              description="创建 Webhook / 钉钉 / 企微 / 飞书 / Slack / Telegram / 邮件渠道，告警才能推送给人"
-              actionLabel="新建渠道"
+              title={t('s.0744')}
+              description={t('s.0745')}
+              actionLabel={t('s.0691')}
               onAction={() => {
                 setEditingChannel(null)
                 setChannelDialogOpen(true)
@@ -872,11 +873,11 @@ export default function AlertsPage() {
               <table className="w-full min-w-[960px] border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-xs font-medium whitespace-nowrap text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                    <th scope="col" className="px-4 py-2.5 font-medium">名称</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">类型</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">最近结果</th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">启用</th>
-                    <th scope="col" className="px-4 py-2.5 text-right font-medium">操作</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0531')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0399')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0746')}</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0422')}</th>
+                    <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('s.0539')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -904,7 +905,7 @@ export default function AlertsPage() {
                         {channel.last_error ? (
                           <span className="block">
                             <span className="text-xs font-medium text-rose-600 dark:text-rose-400">
-                              最近发送失败
+                              {t('s.0747')}
                             </span>
                             <span
                               className="mt-0.5 block truncate font-mono text-[11px] text-rose-600/90 dark:text-rose-300/90"
@@ -915,14 +916,14 @@ export default function AlertsPage() {
                           </span>
                         ) : channel.last_ok_at ? (
                           <span className="text-xs text-emerald-600 dark:text-emerald-400">
-                            最近成功 {formatRelativeTime(channel.last_ok_at, now)}
+                            {t('s.0748')} {formatRelativeTime(channel.last_ok_at, now)}
                             <span className="mt-0.5 block text-[11px] text-slate-400 dark:text-slate-500">
                               {formatDateTime(channel.last_ok_at)}
                             </span>
                           </span>
                         ) : (
                           <span className="text-xs text-slate-400 dark:text-slate-500">
-                            尚未发送过，建议先点「测试发送」
+                            {t('s.0749')}
                           </span>
                         )}
                       </td>
@@ -930,17 +931,17 @@ export default function AlertsPage() {
                         <EnableSwitch
                           checked={channel.enabled}
                           loading={togglingChannelId === channel.id}
-                          label={channel.enabled ? '停用该渠道' : '启用该渠道'}
+                          label={channel.enabled ? t('s.0750') : t('s.0132')}
                           onChange={() => void handleToggleChannel(channel)}
                         />
                       </td>
                       <td className="px-4 py-3 align-top">
                         <div className="flex items-center justify-end gap-0.5">
-                          <IconButton label="测试发送" onClick={() => setTestingChannel(channel)}>
+                          <IconButton label={t('s.0303')} onClick={() => setTestingChannel(channel)}>
                             <SendIcon className="h-4 w-4" />
                           </IconButton>
                           <IconButton
-                            label="编辑渠道"
+                            label={t('s.0751')}
                             onClick={() => {
                               setEditingChannel(channel)
                               setChannelDialogOpen(true)
@@ -949,7 +950,7 @@ export default function AlertsPage() {
                             <PencilIcon className="h-4 w-4" />
                           </IconButton>
                           <IconButton
-                            label="删除渠道"
+                            label={t('s.0752')}
                             tone="danger"
                             onClick={() => {
                               setDeleteChannelError(null)
@@ -971,7 +972,7 @@ export default function AlertsPage() {
 
       <p className="flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500">
         <HistoryIcon className="h-3.5 w-3.5" />
-        点击任意告警行可展开事件轨迹：何时触发、通知了哪些渠道、何时恢复、谁在何时确认。
+        {t('s.0753')}
       </p>
 
       <AlertRuleDialog
@@ -1007,20 +1008,20 @@ export default function AlertsPage() {
       <Modal
         open={silenceRule !== null}
         onClose={() => setSilenceRule(null)}
-        title="临时静默规则"
+        title={t('s.0754')}
         description={
           silenceRule
-            ? `规则：${silenceRule.name} · 静默期内仍会建告警与记录事件，但不发送通知`
+            ? t('s.0755', { '0': silenceRule.name })
             : undefined
         }
         footer={
           <Button variant="secondary" onClick={() => setSilenceRule(null)} disabled={silenceLoading}>
-            取消
+            {t('s.0024')}
           </Button>
         }
       >
         <div className="space-y-3">
-          <p className="text-sm text-slate-600 dark:text-slate-300">选择静默时长：</p>
+          <p className="text-sm text-slate-600 dark:text-slate-300">{t('s.0756')}</p>
           <div className="grid grid-cols-3 gap-2">
             {SILENCE_OPTIONS.map((option) => (
               <Button
@@ -1035,7 +1036,7 @@ export default function AlertsPage() {
           </div>
           {silenceRule?.silence_until && silenceRule.silence_until > now ? (
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              当前静默至 {formatDateTime(silenceRule.silence_until)}，再次选择时长会覆盖。
+              {t('s.0757')} {formatDateTime(silenceRule.silence_until)}{t('s.0758')}
             </p>
           ) : null}
         </div>
@@ -1043,9 +1044,9 @@ export default function AlertsPage() {
 
       <ConfirmDialog
         open={deletingRule !== null}
-        title="删除告警规则"
-        description={deletingRule ? `规则：${deletingRule.name}` : undefined}
-        confirmLabel="确认删除"
+        title={t('s.0759')}
+        description={deletingRule ? t('s.0760', { '0': deletingRule.name }) : undefined}
+        confirmLabel={t('s.0295')}
         tone="danger"
         loading={deleteRuleLoading}
         error={deleteRuleError}
@@ -1056,19 +1057,19 @@ export default function AlertsPage() {
         onConfirm={() => void handleDeleteRule()}
       >
         <p>
-          确定要删除规则
+          {t('s.0761')}
           <span className="font-semibold text-slate-900 dark:text-slate-100">
             「{deletingRule?.name}」
           </span>
-          吗？删除后不再产生新告警，历史告警仍会保留。
+          {t('s.0762')}
         </p>
       </ConfirmDialog>
 
       <ConfirmDialog
         open={deletingChannel !== null}
-        title="删除通知渠道"
-        description={deletingChannel ? `渠道：${deletingChannel.name}` : undefined}
-        confirmLabel="确认删除"
+        title={t('s.0763')}
+        description={deletingChannel ? t('s.0304', { '0': deletingChannel.name }) : undefined}
+        confirmLabel={t('s.0295')}
         tone="danger"
         loading={deleteChannelLoading}
         error={deleteChannelError}
@@ -1079,11 +1080,11 @@ export default function AlertsPage() {
         onConfirm={() => void handleDeleteChannel()}
       >
         <p>
-          确定要删除渠道
+          {t('s.0764')}
           <span className="font-semibold text-slate-900 dark:text-slate-100">
             「{deletingChannel?.name}」
           </span>
-          吗？引用该渠道的规则将不再能推送通知。
+          {t('s.0765')}
         </p>
       </ConfirmDialog>
     </div>

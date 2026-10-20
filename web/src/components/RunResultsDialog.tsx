@@ -4,6 +4,7 @@ import { formatLatency } from '../lib/format'
 import { Button } from './Button'
 import { CheckIcon, CloseIcon, SpinnerIcon } from './Icons'
 import { Modal } from './Modal'
+import { t } from '../i18n'
 
 interface RunResultsDialogProps {
   open: boolean
@@ -30,17 +31,17 @@ export function RunResultsDialog({
       open={open}
       onClose={onClose}
       title={title}
-      description="对全部适用服务器各执行一次，逐台结果如下"
+      description={t('s.0488')}
       footer={
         <Button onClick={onClose} disabled={loading}>
-          关闭
+          {t('s.0264')}
         </Button>
       }
     >
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-8 text-sm text-slate-500 dark:text-slate-400">
           <SpinnerIcon className="h-4 w-4" />
-          正在执行…
+          {t('s.0299')}
         </div>
       ) : error ? (
         <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
@@ -50,7 +51,7 @@ export function RunResultsDialog({
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
-              成功 {response.summary.ok}
+              {t('s.0300')} {response.summary.ok}
             </span>
             <span
               className={cn(
@@ -60,13 +61,13 @@ export function RunResultsDialog({
                   : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
               )}
             >
-              失败 {response.summary.failed}
+              {t('s.0301')} {response.summary.failed}
             </span>
           </div>
 
           {response.results.length === 0 ? (
             <p className="text-sm text-slate-500 dark:text-slate-400">
-              该检测项还没有适用服务器，请先设置适用服务器。
+              {t('s.0489')}
             </p>
           ) : (
             <ul className="divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
@@ -88,7 +89,7 @@ export function RunResultsDialog({
                     </span>
                     {!result.ok ? (
                       <span className="mt-0.5 block text-xs leading-relaxed text-rose-600 dark:text-rose-300">
-                        {result.message?.trim() ? result.message : '执行失败（控制端未返回原因）'}
+                        {result.message?.trim() ? result.message : t('s.0302')}
                       </span>
                     ) : null}
                   </span>

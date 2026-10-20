@@ -8,6 +8,7 @@ import { CodeEditor } from './CodeEditor'
 import { TemplateKindBadge } from './DeployBadges'
 import { Modal } from './Modal'
 import { useToast } from './Toast'
+import { t } from '../i18n'
 
 const inputClass =
   'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100'
@@ -86,17 +87,17 @@ export function TemplateDialog({ open, template, onClose, onSaved }: TemplateDia
     const sample = SAMPLE_TEMPLATES[kind]
     setContent(sample.content)
     if (!name.trim()) setName(sample.name)
-    toast(`已填充「${TEMPLATE_KIND_LABELS[kind]}」示例模板`, 'info')
+    toast(t('s.0549', { '0': TEMPLATE_KIND_LABELS[kind] }), 'info')
   }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!name.trim()) {
-      setError('请填写模板名称')
+      setError(t('s.0550'))
       return
     }
     if (!content.trim()) {
-      setError('模板内容不能为空')
+      setError(t('s.0551'))
       return
     }
     setSaving(true)
@@ -104,16 +105,16 @@ export function TemplateDialog({ open, template, onClose, onSaved }: TemplateDia
     try {
       if (activeId) {
         await api.updateTemplate(activeId, { name: name.trim(), kind, content })
-        toast(`模板「${name.trim()}」已更新`, 'success')
+        toast(t('s.0552', { '0': name.trim() }), 'success')
         setSavedId(activeId)
       } else {
         const created = await api.createTemplate({ name: name.trim(), kind, content })
         setSavedId(created.id)
-        toast(`模板「${created.name}」已创建`, 'success')
+        toast(t('s.0553', { '0': created.name }), 'success')
       }
       onSaved()
     } catch (caught) {
-      setError(errorMessage(caught, '保存模板失败'))
+      setError(errorMessage(caught, t('s.0554')))
     } finally {
       setSaving(false)
     }
@@ -123,7 +124,7 @@ export function TemplateDialog({ open, template, onClose, onSaved }: TemplateDia
     if (!activeId) {
       // 未保存：先创建再渲染（渲染端点只能对已存在的模板使用）
       if (!name.trim() || !content.trim()) {
-        setRenderError('请先填写模板名称与内容')
+        setRenderError(t('s.0555'))
         return
       }
       setRenderLoading(true)
@@ -134,9 +135,9 @@ export function TemplateDialog({ open, template, onClose, onSaved }: TemplateDia
         onSaved()
         const preview = await api.renderTemplate(created.id, vars)
         setRendered(preview)
-        toast('模板已保存并生成渲染预览', 'success')
+        toast(t('s.0556'), 'success')
       } catch (caught) {
-        setRenderError(errorMessage(caught, '渲染预览失败'))
+        setRenderError(errorMessage(caught, t('s.0557')))
       } finally {
         setRenderLoading(false)
       }
@@ -148,7 +149,7 @@ export function TemplateDialog({ open, template, onClose, onSaved }: TemplateDia
       const preview = await api.renderTemplate(activeId, vars)
       setRendered(preview)
     } catch (caught) {
-      setRenderError(errorMessage(caught, '渲染预览失败'))
+      setRenderError(errorMessage(caught, t('s.0557')))
     } finally {
       setRenderLoading(false)
     }
@@ -158,16 +159,16 @@ export function TemplateDialog({ open, template, onClose, onSaved }: TemplateDia
     <Modal
       open={open}
       onClose={onClose}
-      title={editing ? '编辑模板' : '新建模板'}
-      description="模板是版本化文本，发布时会冻结快照；占位符用 {{VAR}} 表示，未知占位符渲染会报错。"
+      title={editing ? t('s.0558') : t('s.0559')}
+      description={t('s.0560')}
       size="xl"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>
-            关闭
+            {t('s.0264')}
           </Button>
           <Button type="submit" form="template-form" loading={saving}>
-            {activeId ? '保存修改' : '创建模板'}
+            {activeId ? t('s.0128') : t('s.0561')}
           </Button>
         </>
       }
@@ -176,19 +177,19 @@ export function TemplateDialog({ open, template, onClose, onSaved }: TemplateDia
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <label htmlFor="template-name" className={labelClass}>
-              模板名称
+              {t('s.0562')}
             </label>
             <input
               id="template-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               maxLength={64}
-              placeholder="例如：Go 二进制标准发布"
+              placeholder={t('s.0563')}
               className={inputClass + ' mt-1.5'}
             />
           </div>
           <div>
-            <span className={labelClass}>类型</span>
+            <span className={labelClass}>{t('s.0399')}</span>
             <div className="mt-1.5 flex gap-1.5">
               {KINDS.map((option) => (
                 <button
@@ -213,8 +214,8 @@ export function TemplateDialog({ open, template, onClose, onSaved }: TemplateDia
           <div className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className={labelClass}>
-                模板内容
-                <span className="ml-1.5 font-normal text-slate-400">Tab 插入 {2} 空格缩进</span>
+                {t('s.0564')}
+                <span className="ml-1.5 font-normal text-slate-400">{t('s.0565')} {2} {t('s.0566')}</span>
               </span>
               <div className="flex items-center gap-2">
                 <TemplateKindBadge kind={kind} />
@@ -223,7 +224,7 @@ export function TemplateDialog({ open, template, onClose, onSaved }: TemplateDia
                   onClick={handleFillSample}
                   className="text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
                 >
-                  填充示例模板
+                  {t('s.0567')}
                 </button>
               </div>
             </div>
@@ -231,33 +232,33 @@ export function TemplateDialog({ open, template, onClose, onSaved }: TemplateDia
               value={content}
               onChange={setContent}
               rows={16}
-              ariaLabel="模板内容"
-              placeholder={'# 在这里编写部署步骤\nset -e\necho "deploy {{VERSION}} to {{RELEASE_DIR}}"'}
+              ariaLabel={t('s.0564')}
+              placeholder={t('s.0568')}
             />
             {unknownPlaceholders.length > 0 ? (
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                检测到未知占位符：{unknownPlaceholders.map((item) => `{{${item}}}`).join('、')}
-                （渲染时后端会报错，请改成下方可用占位符）
+                {t('s.0569')}{unknownPlaceholders.map((item) => `{{${item}}}`).join('、')}
+                {t('s.0570')}
               </p>
             ) : null}
           </div>
 
           <div className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className={labelClass}>渲染预览</span>
+              <span className={labelClass}>{t('s.0571')}</span>
               <Button
                 size="sm"
                 variant="secondary"
                 onClick={() => void handleRender()}
                 loading={renderLoading}
               >
-                {activeId ? '渲染预览' : '保存并预览'}
+                {activeId ? t('s.0571') : t('s.0572')}
               </Button>
             </div>
 
             <div className="rounded-lg border border-slate-200 p-2.5 dark:border-slate-800">
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                可用占位符（点击填入变量值）：
+                {t('s.0573')}
               </p>
               <div className="mt-1.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                 {TEMPLATE_PLACEHOLDERS.map((placeholder) => (
@@ -279,14 +280,14 @@ export function TemplateDialog({ open, template, onClose, onSaved }: TemplateDia
 
             {renderError ? (
               <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-                渲染失败：{renderError}
+                {t('s.0574')}{renderError}
               </p>
             ) : null}
 
             <div className="rounded-md border border-slate-200 bg-slate-50 p-2.5 dark:border-slate-800 dark:bg-slate-950">
-              <p className="text-xs text-slate-500 dark:text-slate-400">渲染结果（占位符替换后，不会执行）</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">{t('s.0575')}</p>
               <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-slate-700 dark:text-slate-200">
-                {rendered ?? '（尚未渲染：点击右上角「渲染预览」，新模板会先保存再渲染）'}
+                {rendered ?? t('s.0576')}
               </pre>
             </div>
           </div>

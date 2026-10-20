@@ -1,11 +1,12 @@
 import type { BackupErrorInsight } from '../lib/backup'
 import { AlertTriangleIcon, InfoIcon } from './Icons'
+import { t } from '../i18n'
 
 const KIND_LABEL: Record<BackupErrorInsight['kind'], string> = {
-  bad_passphrase: '口令错误',
-  corrupt: '归档损坏',
-  schema_too_new: '版本过新',
-  unknown: '未归类错误',
+  bad_passphrase: t('s.0256'),
+  corrupt: t('s.0257'),
+  schema_too_new: t('s.0258'),
+  unknown: t('s.0259'),
 }
 
 /** 三类备份错误各自的中文说明与「该怎么办」，避免统一显示一句「失败」。 */
@@ -25,7 +26,7 @@ export function BackupErrorCard({ insight }: { insight: BackupErrorInsight }) {
       <div className="mt-2 rounded-md bg-white/70 px-3 py-2 dark:bg-slate-950/40">
         <p className="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-200">
           <InfoIcon className="h-3.5 w-3.5" />
-          该怎么办
+          {t('s.0260')}
         </p>
         <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-slate-600 dark:text-slate-300">
           {insight.guidance}
@@ -33,7 +34,7 @@ export function BackupErrorCard({ insight }: { insight: BackupErrorInsight }) {
       </div>
       <details className="mt-2">
         <summary className="cursor-pointer text-[11px] text-rose-600/80 hover:text-rose-700 dark:text-rose-300/80">
-          原始错误信息
+          {t('s.0261')}
         </summary>
         <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950/5 p-2 font-mono text-[11px] text-slate-600 dark:bg-black/20 dark:text-slate-300">
           {insight.raw}

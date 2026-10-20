@@ -736,6 +736,13 @@ func (c *Client) Send(ctx context.Context, ch Channel, msg Message) error
 | `telegram` | `bot_token`、`chat_id` | `parse_mode`、`api_base`（**测试/代理用**，默认 `https://api.telegram.org`） |
 | `email` | `smtp_host`、`from`、`to`(数组) | `smtp_port`(默认 587)、`username`、`password`、`tls`(`starttls`/`ssl`/`none`，默认 starttls) |
 
+**M6 补充（冻结）**
+- `Client.Probe(ctx, ch) (ProbeResult, error)`：与 `Send` 使用**完全相同**的请求构造，服务商任意应答（含 4xx/5xx/业务码）都算「可达」；只有 DNS/连接/TLS/超时/取消返回分类错误。用于「测试连通性」。
+- `ErrorKind`：`config|dns|connect|tls|timeout|canceled|auth|http|server|provider|internal`，带 `Label()`（中文，可直接写入 `alert_channels.last_error`）、`Category()`（`config|network|provider`）、`Retryable()`。`Send` 返回 `*SendError`，用 `AsSendError`/`KindOf` 取值。
+- **重试**：仅 `timeout` 与 `server`(5xx) 重试，默认 2 次指数退避（总 <10s）；4xx/鉴权/业务错误不重试；ctx 取消立即停止。
+- **SMTP 语义**：SMTP 4xx 属于协议定义的临时失败，**映射为可重试**（与 HTTP 「4xx 不重试」字面不同，按协议语义处理）；SMTP 5xx/535 不重试。
+- `email` 配置新增可选字段：`reply_to`、`html`（true 时发 multipart/alternative）。
+
 发送要求：单渠道超时 10s；HTTP 非 2xx 视为失败并**截断响应体**（保留前 512 字节）进错误信息；**渠道配置里的密钥类字段在日志与错误信息中必须脱敏**（`xxx` 或只留前 4 位）。
 
 ## 20. REST 新增端点（前缀 `/api/v1`）
@@ -1196,3 +1203,187 @@ leadstack restore --file /tmp/x.lsbak --data-dir ./data [--passphrase-file p]   
 10. **主密钥有效性**：恢复后原凭证仍可解密（用恢复后的实例 `POST /servers/{id}/test-connection` 或读取凭证指纹一致来证明）。
 11. 未带 token 访问 `/backups` 返回 401；备份文件名含路径穿越（`../`）时删除/下载被拒（400）。
 12. `scripts/verify_m0.sh` ~ `verify_m4.sh` 仍全绿（**不得回归**）。
+
+---
+
+# M5/M6 契约（运维增强 · 团队协作 · 体验）
+
+> 本批补齐全部剩余功能。**新功能不得破坏既有 166 项验收**：所有列表接口在**不传 `limit` 时仍返回 `{data:[...]}` 数组**（分页参数只在显式传入时生效）。
+
+## 36. 审计日志
+
+**记录范围**：所有写操作（`POST`/`PATCH`/`PUT`/`DELETE`）自动记录；登录成功/失败、终端会话开启、备份恢复、Agent 升级手动记录。
+**不记录**：`GET` 读操作（避免噪声）。
+
+```sql
+CREATE TABLE audit_logs(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  actor TEXT NOT NULL,          -- 用户名；API Token 为 "token:<name>"；系统为 "system"
+  actor_role TEXT,
+  action TEXT NOT NULL,         -- "<resource>.<verb>"，如 server.create / release.rollback
+  resource_type TEXT, resource_id TEXT,
+  method TEXT, path TEXT,
+  status_code INTEGER,
+  ip TEXT, user_agent TEXT,
+  detail TEXT                   -- JSON；**必须脱敏**（密钥/密码/口令一律 ***）
+);
+CREATE INDEX idx_audit_ts ON audit_logs(ts);
+CREATE INDEX idx_audit_actor ON audit_logs(actor, ts);
+```
+
+- 保留 `LEADSTACK_AUDIT_RETENTION_DAYS`（默认 180），随清扫循环清理。
+- **action 命名表**（实现时按此，便于筛选）：`auth.login` / `auth.logout` / `server.create|update|delete|batch` / `credential.create|delete` / `check.create|update|delete|run` / `alert_rule.create|update|delete|silence` / `alert_channel.create|update|delete|test` / `alert.ack` / `app.create|update|delete` / `template.create|update|delete` / `artifact.create` / `release.create|retry|rollback|cancel` / `backup.create|delete|restore` / `user.create|update|delete` / `token.create|delete` / `terminal.open|close` / `agent.upgrade` / `import.servers`。
+- `GET /audit-logs?actor=&action=&resource_type=&from=&to=&limit=&cursor=`
+
+## 37. RBAC 与用户管理
+
+| 角色 | 权限 |
+|---|---|
+| `admin` | 全部 |
+| `operator` | 服务器/凭证（读+用，不可删凭证）/检测/告警规则与渠道/应用/模板/发布/备份/定时任务/终端/文件/日志/进程；**不可**管理用户、不可读审计日志、不可恢复备份、不可删除服务器 |
+| `viewer` | 只读全部业务数据；不可执行任何写操作与终端 |
+
+**实现**：路由组挂 `RequireRole(min)`；写操作用 `RequireRole(operator)`；用户管理/审计/备份恢复/凭证删除用 `RequireRole(admin)`。越权返回 **403** `code=forbidden`。
+
+```
+GET    /users                  # admin
+POST   /users                  # admin  {username,password,role}
+PATCH  /users/{id}             # admin  {role?,disabled?,password?}
+DELETE /users/{id}             # admin；禁止删除最后一个 admin、禁止自删
+POST   /users/me/password      # 所有角色 {old_password,new_password}
+GET    /auth/me                # 返回 {id,username,role}
+```
+用户表新增 `disabled INTEGER NOT NULL DEFAULT 0`、`updated_at INTEGER`。
+
+## 38. API Token
+
+```
+api_tokens(id TEXT PK, name TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL, role TEXT NOT NULL,
+           created_by TEXT, created_at INTEGER NOT NULL, last_used_at INTEGER,
+           expires_at INTEGER, revoked_at INTEGER)
+```
+- 明文格式 `lsk_<32字节base64url>`，**只在创建响应返回一次**；库中只存 sha256。
+- 认证中间件：`Authorization: Bearer lsk_...` → 按 token 角色鉴权，并更新 `last_used_at`；过期/撤销 → 401。
+- `GET /api-tokens`（不返回明文）、`POST /api-tokens {name,role,expires_in?}`、`DELETE /api-tokens/{id}`（admin）。
+
+## 39. 分页约定
+
+- 显式传 `limit`（1–500，默认 100 上限）时：响应 `{data:[...], page:{next_cursor,has_more}}`；`cursor` 为不透明字符串。
+- **不传 `limit` 时保持原样**（`{data:[...]}` 数组），保证既有前端与验收脚本不受影响。
+- 首批接入：`/audit-logs`、`/alerts`、`/releases`、`/checks`、`/servers`、`/scheduled-tasks/{id}/runs`。
+
+## 40. Web SSH 终端
+
+**开关**：`LEADSTACK_TERMINAL_ENABLED`（默认 `false`）；关闭时端点返回 403 并提示。
+
+```
+POST /servers/{id}/terminal-ticket   -> {data:{ticket, expires_in:60}}
+GET  /servers/{id}/terminal?ticket=  -> WebSocket（升级）
+```
+- 一次性 ticket（60s 有效、单次使用），避免把 JWT 放进 URL/日志。
+- **ssh 模式**：`sshx.PTY(ctx, opts)` 打开带 PTY 的会话；**agent 模式**：控制端经 WS 向 agent 发 `term.open`，agent 用 `creack/pty` 起 shell 并双向转发。
+- 帧：文本帧传控制 JSON（`{"type":"input","data":"..."}` / `{"type":"resize","cols":..,"rows":..}`），或直接二进制帧传终端数据；实现选二进制帧 + 首帧 JSON 元信息。
+- 断开/超时（30 分钟无操作）关闭会话；`audit_logs` 写 `terminal.open` / `terminal.close`（含 server_id、操作者、时长）。
+
+## 41. 文件上传/下载
+
+```
+GET  /servers/{id}/files?path=/var/log      -> {entries:[{name,is_dir,size,mod_time,mode}]}
+GET  /servers/{id}/files/download?path=/x   -> 流式下载（Content-Disposition）
+POST /servers/{id}/files/upload             -> multipart（path=..., file=...）→ {ok,bytes}
+DELETE /servers/{id}/files?path=/x          -> 删除（admin 或 operator）
+```
+- **ssh 模式用 SFTP**；**agent 模式用 `job.exec` + base64 分块**（单文件上限 **8 MiB**，超出报错）。两种通道由同一组端点暴露。
+- 路径安全：拒绝 `..` 段穿越出用户指定根；下载/上传记录审计。
+
+## 42. 定时任务（cron）
+
+```sql
+CREATE TABLE scheduled_tasks(
+  id TEXT PK, name TEXT NOT NULL, cron TEXT NOT NULL, command TEXT NOT NULL,
+  timeout_s INTEGER NOT NULL DEFAULT 60, enabled INTEGER NOT NULL DEFAULT 1,
+  concurrency INTEGER NOT NULL DEFAULT 4, created_at INTEGER NOT NULL,
+  last_run_at INTEGER, next_run_at INTEGER);
+CREATE TABLE scheduled_task_targets(task_id TEXT, server_id TEXT, PRIMARY KEY(task_id,server_id)) WITHOUT ROWID;
+CREATE TABLE scheduled_task_runs(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, server_id TEXT NOT NULL,
+  ts INTEGER NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER,
+  stdout TEXT, stderr TEXT, message TEXT);
+CREATE INDEX idx_str_task ON scheduled_task_runs(task_id, ts);
+```
+- cron：**5 字段**（分 时 日 月 周），支持 `*` `,` `-` `*/n`；解析失败 400 并给出人话错误。
+- 引擎每分钟检查一次（`LEADSTACK_CRON_TICK` 可覆盖，测试用 `1s`），按 server_ids 并发执行；保留 30 天。
+- `GET/POST /scheduled-tasks`、`GET/PATCH/DELETE /scheduled-tasks/{id}`、`POST /scheduled-tasks/{id}/run`、`GET /scheduled-tasks/{id}/runs?limit=`。
+- **禁止把 command 直接拼进 shell**：执行方式与检测项一致（经 job.exec / ssh Run），由使用者承担命令内容责任，但界面需提示"命令将在目标机以当前用户权限执行"。
+
+## 43. 日志查看与进程/端口视图
+
+```
+GET /servers/{id}/logs?path=/var/log/app.log&lines=200&grep=error  -> {lines:[...], truncated}
+GET /servers/{id}/processes?sort=cpu|mem&limit=50                  -> {processes:[{pid,user,cpu_pct,mem_pct,rss_kb,command}]}
+GET /servers/{id}/ports                                            -> {ports:[{proto,local,pid,process}]}
+```
+- 实现：ssh 模式执行 `tail -n` / `ps` / `ss -tulpn`（macOS 回退 `lsof -i`）；agent 模式经 `job.exec`。
+- 输出大小上限 256 KB；`grep` 用服务端过滤（不要拉全量）。
+
+## 44. Agent 自升级
+
+- 协议新增（`pkg/protocol`）：`agent.upgrade` → `{version,url,sha256,restart}`。
+- agent 收到后：下载到临时文件 → 校验 sha256 → **A/B 双文件替换**（当前运行的可执行文件不能原地覆盖）→ 重启（systemd/launchd 负责重启，或自 exec）。
+- `POST /servers/{id}/agent-upgrade {version,url,sha256}`、`POST /agents/upgrade`（批量，按当前版本筛选）。
+- 审计 `agent.upgrade`；失败保留旧版本并回报原因。
+
+## 45. 批量导入主机
+
+```
+POST /servers/import
+{ "text": "10.0.0.1\n10.0.0.2:2222\n# 注释行\nhost3.example.com",
+  "default_port": 22, "credential_id": "...", "group": "...", "tags": ["..."],
+  "mode": "ssh" }
+-> {data:{total, created:[{host,server_id}], failed:[{host,error}]}}
+```
+- 解析：每行 `host[:port]`，`#` 开头与空行忽略；去重（同 host:port 已存在则跳过并计失败原因）；单次上限 500 行。
+- 复用 M1 的服务器创建逻辑；返回逐条结果。
+
+## 46. 中英双语 · 主题 · 字号 · 布局（前端规范）
+
+**i18n**： zh-CN（默认）/ en-US：`web/src/i18n/{zh-CN,en-US}.ts` + `useI18n()`；语言存 `localStorage.leadstack.lang`；所有界面文案走 `t('key')`，**不允许硬编码中文残留**（验收会 grep 抽查）。
+
+**主题**：`light` / `dark` / `system` 三态 + 主题色预设（至少 蓝/靛/青/绿/紫 5 种）；写入 `document.documentElement.dataset.theme` 与 `--accent` CSS 变量；图表（uPlot）需随主题重绘。
+
+**字号**：`small` / `normal` / `large` 三档，映射到根 `font-size`（14/16/18px），Tailwind 用 rem 基准；持久化 `localStorage.leadstack.fontSize`。
+
+**密度**：`comfortable` / `compact` 两档（表格行高与内边距）。
+
+**布局与动线（必须遵守）**
+1. 左侧导航**分组**：监控（总览/服务器/检测/告警）· 运维（终端、文件、定时任务、日志）· 发布（应用/发布）· 系统（凭证/用户/审计/备份/设置）。
+2. 顶部：面包屑 + 当前页操作区（主操作靠右）；移动端折叠为抽屉导航。
+3. 详情页统一结构：标题区（名称、状态徽标、主操作）→ 概览卡 → 标签页（概览/检测/监控/终端/文件/日志）。
+4. 所有危险操作（删除/回滚/恢复/重启）使用**确认弹窗 + 影响面描述**。
+5. 空状态必须给出「下一步该做什么」的引导按钮。
+6. 表单错误就近展示，不用全局 toast 代替字段级错误。
+
+## 47. 验收标准（新增 `scripts/verify_ops.sh`）
+
+1. `make build` / `gofmt` / `go vet` / `go test ./...` 全绿；既有 6 个脚本全绿（**不得回归**）。
+2. **审计**：执行创建服务器/发布回滚/删除凭据等写操作后，`GET /audit-logs` 能查到对应 action、actor、IP、状态码；**响应中不含明文密码/密钥**；viewer 角色访问返回 403。
+3. **RBAC**：viewer 执行写操作 → 403；operator 管理用户 → 403；admin 正常；禁止删除最后一个 admin。
+4. **API Token**：创建后返回一次明文；用该 token 调 API 成功且 `last_used_at` 更新；撤销后 401；明文不再出现于任何接口。
+5. **分页**：`?limit=2` 返回 `page.has_more` 与 `next_cursor`，用 cursor 取下一页不重复；不传 limit 仍返回数组。
+6. **批量导入**：导入 3 行（含 1 行重复、1 行注释）→ `created=2 failed=1`，服务器确实存在。
+7. **终端**：`LEADSTACK_TERMINAL_ENABLED=true` 时申请 ticket → WS 连接 → 执行 `echo ls-terminal-ok` → 收到该输出；关闭开关时 403；审计有 `terminal.open`。
+8. **文件**：上传一个小文件到目标机 → 列目录可见 → 下载内容一致 → 删除后不可见（ssh 通道）。
+9. **定时任务**：创建 `* * * * *` 任务（tick 压到 1s）→ 等待后产生 run 记录且 exit_code=0；非法 cron → 400。
+10. **日志/进程/端口**：`/logs` 返回目标机文件末几行；`/processes` 与 `/ports` 返回非空结构。
+11. **Agent 升级**：`POST /servers/{id}/agent-upgrade` 指向一个 sha256 错误的包 → 失败且旧版本仍在运行（不断连）。
+12. **前端**：语言切换 zh↔en 生效且刷新后保持；主题三态与 5 种主题色、三档字号、密度切换均生效并持久化；导航分组与面包屑存在；390px 无横向溢出。
+13. **Docker / GoReleaser**：`goreleaser release --snapshot --clean` 成功产出 5 平台 10 个二进制；docker 可用时 `docker build` 成功且容器 `/healthz` 返回 200（不可用则记录为环境受限）。
+
+## 48. 测试夹具补充：devssh 支持 PTY 与 SFTP
+
+`internal/devssh` 除原有 exec 能力外，扩展支持：
+- `pty-req` + `shell`（服务端用 `creack/pty` 起本机 `sh`，支持 `window-change`）；
+- `sftp` 子系统（`pkg/sftp` 服务端实现）。
+
+**它仍然只是 DEV-ONLY 测试夹具**，不参与发布产物（`make cross` 有断言拦截），生产部署不会用到。扩展目的是让「终端 / 文件传输」在 ssh 通道上也有真实端到端验收端点。

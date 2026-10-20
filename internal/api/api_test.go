@@ -136,7 +136,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	a, err := New(Options{
 		Config: cfg, Store: st, Auth: manager, Cipher: cipher, SSH: sshStub,
 		CheckRunner: runner, Jobs: jobRouter, Alerts: alertEngine, Notifier: notifier,
-		Deploy: deployStub, Backups: backupStub, MaxSchemaVersion: 6,
+		Deploy: deployStub, Backups: backupStub, MaxSchemaVersion: 7,
 		Logger: logger, Version: "test",
 	})
 	if err != nil {

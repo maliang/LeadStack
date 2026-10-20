@@ -99,6 +99,28 @@ func cfgInt(cfg map[string]any, key string, def int) (int, error) {
 	}
 }
 
+// cfgBool 取布尔配置；接受 bool 与 "true"/"false" 字符串。
+func cfgBool(cfg map[string]any, key string, def bool) (bool, error) {
+	v, ok := cfgRaw(cfg, key)
+	if !ok {
+		return def, nil
+	}
+	switch b := v.(type) {
+	case bool:
+		return b, nil
+	case string:
+		switch strings.ToLower(strings.TrimSpace(b)) {
+		case "true", "1", "yes", "on":
+			return true, nil
+		case "false", "0", "no", "off":
+			return false, nil
+		}
+		return false, fmt.Errorf("notify: 配置项 %s 必须是布尔值", key)
+	default:
+		return false, fmt.Errorf("notify: 配置项 %s 必须是布尔值", key)
+	}
+}
+
 // cfgSeconds 取秒数配置（<=0 或缺失时返回 def）。
 func cfgSeconds(cfg map[string]any, key string, def time.Duration) (time.Duration, error) {
 	if _, ok := cfgRaw(cfg, key); !ok {

@@ -114,10 +114,12 @@ type alertChannelRequest struct {
 	Config  map[string]any `json:"config"`
 }
 
-// channelTestResult 是渠道测试响应体。
+// channelTestResult 是渠道测试响应体（probe 为新增字段，既有字段不变）。
 type channelTestResult struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	OK        bool              `json:"ok"`
+	Error     string            `json:"error,omitempty"`
+	ErrorKind string            `json:"error_kind,omitempty"`
+	Probe     *channelProbeInfo `json:"probe,omitempty"`
 }
 
 // ------------------------------------------------ 规则 ------------------------------------------------
@@ -527,12 +529,21 @@ func (a *API) handleTestAlertChannel(w http.ResponseWriter, r *http.Request) {
 	// 回写发送结果，便于排障。
 	nowMS := a.nowMS()
 	if sendErr != nil {
-		errText := sendErr.Error()
+		errText := classifySendError(sendErr.Error(), sendErr)
 		if uerr := a.st.UpdateAlertChannelResult(r.Context(), channel.ID, nil, &errText); uerr != nil {
 			a.logger.Warn("回写渠道失败原因出错", "channel_id", channel.ID, "err", uerr)
 		}
 		a.logger.Warn("渠道测试失败", "channel_id", channel.ID, "kind", channel.Kind, "err", errText)
-		writeData(w, http.StatusOK, channelTestResult{OK: false, Error: errText})
+		result := channelTestResult{OK: false, Error: errText}
+		if se, ok := notify.AsSendError(sendErr); ok {
+			result.ErrorKind = string(se.Kind)
+		}
+		// 真实发送失败时额外做一次端点探测，区分「配置错」与「网络不通」。
+		result.Probe = a.probeAlertChannel(r.Context(), notify.Channel{
+			ID: channel.ID, Name: channel.Name, Kind: notify.Kind(channel.Kind),
+			Enabled: channel.Enabled, Config: config,
+		})
+		writeData(w, http.StatusOK, result)
 		return
 	}
 	if uerr := a.st.UpdateAlertChannelResult(r.Context(), channel.ID, &nowMS, nil); uerr != nil {
@@ -569,6 +580,17 @@ func (a *API) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	params, perr := parsePage(r)
+	if perr != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, perr.Error())
+		return
+	}
+	if params.Paged {
+		limit = params.fetchLimit(alertListDefault)
+		if limit > alertListMax {
+			limit = alertListMax
+		}
+	}
 	filter := store.AlertFilter{
 		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
 		Severity: strings.TrimSpace(r.URL.Query().Get("severity")),
@@ -607,7 +629,11 @@ func (a *API) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	for _, item := range alerts {
 		out = append(out, a.toAlertPayload(item, names, nil))
 	}
-	writeData(w, http.StatusOK, out)
+	start, end, meta := params.window(len(out))
+	if !params.Paged {
+		start, end = 0, len(out)
+	}
+	writePagedList(w, params, out[start:end], meta)
 }
 
 // handleGetAlert 处理 GET /api/v1/alerts/{id}（含 events）。

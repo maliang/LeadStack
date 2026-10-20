@@ -3,6 +3,7 @@ import { ChannelTestSection } from './ChannelTestSection'
 import { ChannelKindBadge } from './AlertBadges'
 import { Modal } from './Modal'
 import type { AlertChannel } from '../lib/api'
+import { t } from '../i18n'
 
 interface ChannelTestDialogProps {
   channel: AlertChannel | null
@@ -16,11 +17,11 @@ export function ChannelTestDialog({ channel, onClose, onResult }: ChannelTestDia
     <Modal
       open={channel !== null}
       onClose={onClose}
-      title="测试发送"
-      description={channel ? `渠道：${channel.name}` : undefined}
+      title={t('s.0303')}
+      description={channel ? t('s.0304', { '0': channel.name }) : undefined}
       footer={
         <Button variant="secondary" onClick={onClose}>
-          关闭
+          {t('s.0264')}
         </Button>
       }
     >
@@ -31,13 +32,13 @@ export function ChannelTestDialog({ channel, onClose, onResult }: ChannelTestDia
             <span className="truncate">{channel.name}</span>
             {!channel.enabled ? (
               <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                已停用
+                {t('s.0232')}
               </span>
             ) : null}
           </div>
           <ChannelTestSection channelId={channel.id} onResult={onResult} />
           <p className="text-xs text-slate-400 dark:text-slate-500">
-            测试失败常见原因：URL/Token 错误、机器人未加签或签名不匹配、被企业网络策略拦截、SMTP 端口或加密方式不对。
+            {t('s.0305')}
           </p>
         </div>
       ) : null}

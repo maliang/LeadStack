@@ -1,4 +1,5 @@
 import { cn } from '../lib/cn'
+import { t } from '../i18n'
 
 interface EnableSwitchProps {
   checked: boolean
@@ -14,7 +15,7 @@ export function EnableSwitch({ checked, loading = false, label, onChange }: Enab
       type="button"
       role="switch"
       aria-checked={checked}
-      aria-label={label ?? (checked ? '停用' : '启用')}
+      aria-label={label ?? (checked ? t('s.0421') : t('s.0422'))}
       disabled={loading}
       onClick={onChange}
       className={cn(

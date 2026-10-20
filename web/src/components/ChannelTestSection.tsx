@@ -4,6 +4,7 @@ import { errorMessage } from '../lib/errors'
 import { cn } from '../lib/cn'
 import { Button } from './Button'
 import { CheckIcon, CloseIcon, SendIcon, SpinnerIcon } from './Icons'
+import { t } from '../i18n'
 
 interface ChannelTestSectionProps {
   channelId: string
@@ -30,7 +31,7 @@ export function ChannelTestSection({ channelId, onResult, compact = false }: Cha
       setResult(response)
       onResult?.(response.ok)
     } catch (caught) {
-      setRequestError(errorMessage(caught, '测试请求失败'))
+      setRequestError(errorMessage(caught, t('s.0306')))
       onResult?.(false)
     } finally {
       setLoading(false)
@@ -42,9 +43,9 @@ export function ChannelTestSection({ channelId, onResult, compact = false }: Cha
       {!compact ? (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <p className="text-sm font-medium text-slate-700 dark:text-slate-200">测试发送</p>
+            <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{t('s.0303')}</p>
             <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-              立即向该渠道发送一条测试消息，失败原因会原样显示
+              {t('s.0307')}
             </p>
           </div>
           <Button
@@ -54,7 +55,7 @@ export function ChannelTestSection({ channelId, onResult, compact = false }: Cha
             loading={loading}
             icon={<SendIcon className="h-3.5 w-3.5" />}
           >
-            测试发送
+            {t('s.0303')}
           </Button>
         </div>
       ) : (
@@ -65,20 +66,20 @@ export function ChannelTestSection({ channelId, onResult, compact = false }: Cha
           loading={loading}
           icon={<SendIcon className="h-3.5 w-3.5" />}
         >
-          测试发送
+          {t('s.0303')}
         </Button>
       )}
 
       {loading ? (
         <p className="mt-2 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
           <SpinnerIcon className="h-3.5 w-3.5" />
-          正在发送测试消息…
+          {t('s.0308')}
         </p>
       ) : null}
 
       {requestError ? (
         <p className="mt-2 whitespace-pre-wrap break-words rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-          测试请求失败：{requestError}
+          {t('s.0309')}{requestError}
         </p>
       ) : null}
 
@@ -93,14 +94,14 @@ export function ChannelTestSection({ channelId, onResult, compact = false }: Cha
         >
           <p className="inline-flex items-center gap-1.5 font-medium">
             {result.ok ? <CheckIcon className="h-3.5 w-3.5" /> : <CloseIcon className="h-3.5 w-3.5" />}
-            {result.ok ? '测试发送成功' : '测试发送失败'}
+            {result.ok ? t('s.0310') : t('s.0311')}
           </p>
           {!result.ok ? (
             <p className="mt-1 whitespace-pre-wrap break-words font-mono leading-relaxed">
-              {result.error?.trim() ? result.error : '渠道返回失败，但控制端未提供原因'}
+              {result.error?.trim() ? result.error : t('s.0312')}
             </p>
           ) : (
-            <p className="mt-1 text-[11px] opacity-80">对端已接受这条测试消息。</p>
+            <p className="mt-1 text-[11px] opacity-80">{t('s.0313')}</p>
           )}
         </div>
       ) : null}

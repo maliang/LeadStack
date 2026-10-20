@@ -8,12 +8,28 @@
     <meta name="description" content="LeadStack 领栈 · 多服务器部署与检测控制台" />
     <title>LeadStack 领栈 · 控制台</title>
     <script>
-      // 首屏前应用主题，避免深色模式闪白；默认浅色。
+      // 首屏前应用主题/主题色/字号/密度/语言，避免闪烁与错版。
       (function () {
         try {
-          if (localStorage.getItem('leadstack_theme') === 'dark') {
-            document.documentElement.classList.add('dark')
-          }
+          var ls = window.localStorage
+          var themeMode = ls.getItem('leadstack.theme') || 'system'
+          var dark =
+            themeMode === 'dark' ||
+            (themeMode === 'system' &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches)
+          var root = document.documentElement
+          root.classList.toggle('dark', !!dark)
+          root.dataset.themeMode = themeMode
+          root.dataset.theme = dark ? 'dark' : 'light'
+          root.dataset.accent = ls.getItem('leadstack.accent') || 'indigo'
+          root.dataset.density = ls.getItem('leadstack.density') || 'comfortable'
+          var size = ls.getItem('leadstack.fontSize') || 'normal'
+          var sizes = { small: '14px', normal: '16px', large: '18px' }
+          root.dataset.fontSize = size
+          root.style.fontSize = sizes[size] || '16px'
+          var lang = ls.getItem('leadstack.lang') || 'zh-CN'
+          root.setAttribute('lang', lang === 'en-US' ? 'en' : 'zh-CN')
         } catch (e) {
           /* localStorage 不可用时忽略 */
         }

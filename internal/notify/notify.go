@@ -10,7 +10,6 @@ package notify
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -91,6 +90,9 @@ type Options struct {
 	Timeout time.Duration
 	// Now 返回当前时间，仅用于签名时间戳（测试可注入固定时钟）；为 nil 时使用 time.Now。
 	Now func() time.Time
+	// Retry 控制 5xx 与超时的重试；nil 时使用 DefaultRetryPolicy（2 次、200ms/400ms 退避）。
+	// 显式传 &RetryPolicy{} 表示不重试。
+	Retry *RetryPolicy
 }
 
 // DefaultTimeout 是契约约定的单渠道默认超时。
@@ -101,6 +103,7 @@ type Client struct {
 	http    *http.Client
 	timeout time.Duration
 	now     func() time.Time
+	retry   RetryPolicy
 }
 
 // NewClient 构造通知客户端。所有渠道共用同一个 http.Client。
@@ -117,7 +120,24 @@ func NewClient(opts Options) *Client {
 	if nowFn == nil {
 		nowFn = time.Now
 	}
-	return &Client{http: hc, timeout: to, now: nowFn}
+	policy := DefaultRetryPolicy()
+	if opts.Retry != nil {
+		policy = *opts.Retry
+	}
+	return &Client{
+		http:    hc,
+		timeout: to,
+		now:     nowFn,
+		retry:   policy.normalized(),
+	}
+}
+
+// RetryPolicy 返回当前生效的重试策略（含默认值补齐）。
+func (c *Client) RetryPolicy() RetryPolicy {
+	if c == nil {
+		return DefaultRetryPolicy()
+	}
+	return c.retry
 }
 
 // Timeout 返回单渠道默认超时。
@@ -152,16 +172,42 @@ func (c *Client) Validate(ch Channel) error {
 }
 
 // Send 发送一条通知。会先校验配置；Enabled 字段由调用方决定（本方法不因 Enabled=false 拒绝）。
+//
+// 重试契约：只有 5xx 与超时（ErrorKind.Retryable）会按 RetryPolicy 指数退避重试，
+// 最多 2 次；4xx、鉴权失败与业务错误（HTTP 200 + errcode≠0）立即返回，不重试。
+// 返回的错误一定是 *SendError（或包装），用 AsSendError/KindOf 取分类。
 func (c *Client) Send(ctx context.Context, ch Channel, msg Message) error {
 	if c == nil {
-		return errors.New("notify: nil client")
-	}
-	if err := c.Validate(ch); err != nil {
-		return err
+		return &SendError{Kind: ErrorKindInternal, Message: "nil client"}
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := c.Validate(ch); err != nil {
+		return wrapConfigError(ch, err)
+	}
+
+	policy := c.retry
+	for attempt := 0; ; attempt++ {
+		err := c.dispatch(ctx, ch, msg)
+		if err == nil {
+			return nil
+		}
+		// 调用方整体取消/超时后不再重试，直接返回最后一次错误。
+		if ctx.Err() != nil {
+			return err
+		}
+		if attempt >= policy.MaxRetries || !KindOf(err).Retryable() {
+			return err
+		}
+		if serr := sleepCtx(ctx, policy.backoffDelay(attempt)); serr != nil {
+			return err
+		}
+	}
+}
+
+// dispatch 按渠道类型分发单次发送（不含重试与配置校验）。
+func (c *Client) dispatch(ctx context.Context, ch Channel, msg Message) error {
 	switch ch.Kind {
 	case KindWebhook:
 		return c.sendWebhook(ctx, ch, msg)
@@ -178,7 +224,7 @@ func (c *Client) Send(ctx context.Context, ch Channel, msg Message) error {
 	case KindEmail:
 		return c.sendEmail(ctx, ch, msg)
 	default:
-		return fmt.Errorf("notify: 不支持的渠道类型 %q", string(ch.Kind))
+		return wrapConfigError(ch, fmt.Errorf("不支持的渠道类型 %q", string(ch.Kind)))
 	}
 }
 

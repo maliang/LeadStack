@@ -1,4 +1,5 @@
 import type { GroupSummary, ServerFilters, ServerStatus } from '../lib/api'
+import { t } from '../i18n'
 
 interface ServerFiltersBarProps {
   filters: ServerFilters
@@ -17,12 +18,12 @@ export function ServerFiltersBar({ filters, groups, tags, onChange }: ServerFilt
   return (
     <div className="flex flex-wrap items-center gap-2">
       <select
-        aria-label="按分组筛选"
+        aria-label={t('s.0517')}
         value={filters.group ?? ''}
         onChange={(event) => onChange({ ...filters, group: event.target.value || undefined })}
         className={selectClass}
       >
-        <option value="">全部分组</option>
+        <option value="">{t('s.0376')}</option>
         {groups.map((group) => (
           <option key={group.name} value={group.name}>
             {group.name}（{group.count}）
@@ -31,12 +32,12 @@ export function ServerFiltersBar({ filters, groups, tags, onChange }: ServerFilt
       </select>
 
       <select
-        aria-label="按标签筛选"
+        aria-label={t('s.0518')}
         value={filters.tag ?? ''}
         onChange={(event) => onChange({ ...filters, tag: event.target.value || undefined })}
         className={selectClass}
       >
-        <option value="">全部标签</option>
+        <option value="">{t('s.0378')}</option>
         {tags.map((tag) => (
           <option key={tag} value={tag}>
             {tag}
@@ -45,26 +46,26 @@ export function ServerFiltersBar({ filters, groups, tags, onChange }: ServerFilt
       </select>
 
       <select
-        aria-label="按状态筛选"
+        aria-label={t('s.0519')}
         value={filters.status ?? ''}
         onChange={(event) =>
           onChange({ ...filters, status: (event.target.value || undefined) as ServerStatus | undefined })
         }
         className={selectClass}
       >
-        <option value="">全部状态</option>
-        <option value="online">在线</option>
-        <option value="offline">离线</option>
-        <option value="unknown">未知</option>
+        <option value="">{t('s.0520')}</option>
+        <option value="online">{t('s.0521')}</option>
+        <option value="offline">{t('s.0522')}</option>
+        <option value="unknown">{t('s.0089')}</option>
       </select>
 
       <select
-        aria-label="按接入方式筛选"
+        aria-label={t('s.0523')}
         value={filters.mode ?? ''}
         onChange={(event) => onChange({ ...filters, mode: event.target.value || undefined })}
         className={selectClass}
       >
-        <option value="">全部方式</option>
+        <option value="">{t('s.0524')}</option>
         <option value="agent">Agent</option>
         <option value="ssh">SSH</option>
       </select>
@@ -75,7 +76,7 @@ export function ServerFiltersBar({ filters, groups, tags, onChange }: ServerFilt
           onClick={() => onChange({})}
           className="text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
         >
-          清除筛选
+          {t('s.0525')}
         </button>
       ) : null}
     </div>

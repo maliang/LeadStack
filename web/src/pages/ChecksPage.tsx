@@ -28,6 +28,7 @@ import { InlineLoading } from '../components/Loading'
 import { RunResultsDialog } from '../components/RunResultsDialog'
 import { useToast } from '../components/Toast'
 
+import { t } from '../i18n'
 interface RunState {
   check: CheckItem
   loading: boolean
@@ -36,10 +37,10 @@ interface RunState {
 }
 
 const STATE_FILTERS: { value: CheckState | ''; label: string }[] = [
-  { value: '', label: '全部' },
-  { value: 'up', label: '正常' },
-  { value: 'down', label: '异常' },
-  { value: 'unknown', label: '未知' },
+  { value: '', label: t('s.0933') },
+  { value: 'up', label: t('s.0317') },
+  { value: 'down', label: t('s.0318') },
+  { value: 'unknown', label: t('s.0089') },
 ]
 
 export default function ChecksPage() {
@@ -109,10 +110,10 @@ export default function ChecksPage() {
     setTogglingId(check.id)
     try {
       await api.updateCheck(check.id, { enabled: !check.enabled })
-      toast(`检测项「${check.name}」已${check.enabled ? '停用' : '启用'}`, 'success')
+      toast(t('s.0934', { '0': check.name, '1': check.enabled ? t('common.disabled') : t('common.enabled') }), 'success')
       await refreshAll()
     } catch (caught) {
-      toast(errorMessage(caught, '切换启用状态失败'), 'error')
+      toast(errorMessage(caught, t('s.0935')), 'error')
     } finally {
       setTogglingId(null)
     }
@@ -124,7 +125,7 @@ export default function ChecksPage() {
       const response = await api.runCheck(check.id)
       setRunState({ check, loading: false, error: null, response })
     } catch (caught) {
-      setRunState({ check, loading: false, error: errorMessage(caught, '立即执行失败'), response: null })
+      setRunState({ check, loading: false, error: errorMessage(caught, t('s.0936')), response: null })
     } finally {
       void refreshAll()
     }
@@ -136,11 +137,11 @@ export default function ChecksPage() {
     setDeleteError(null)
     try {
       await api.deleteCheck(deleting.id)
-      toast(`已删除检测项「${deleting.name}」`, 'success')
+      toast(t('s.0937', { '0': deleting.name }), 'success')
       setDeleting(null)
       await refreshAll()
     } catch (caught) {
-      setDeleteError(errorMessage(caught, '删除检测项失败'))
+      setDeleteError(errorMessage(caught, t('s.0938')))
     } finally {
       setDeleteLoading(false)
     }
@@ -151,10 +152,10 @@ export default function ChecksPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-            检测
+            {t('s.0939')}
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            对服务器做端口 / HTTP / Ping / 进程 / 脚本检测，每 10 秒自动刷新
+            {t('s.0940')}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -164,7 +165,7 @@ export default function ChecksPage() {
             loading={refreshing}
             icon={<RefreshIcon className="h-4 w-4" />}
           >
-            刷新
+            {t('s.0689')}
           </Button>
           <Button
             onClick={() => {
@@ -173,7 +174,7 @@ export default function ChecksPage() {
             }}
             icon={<PlusIcon className="h-4 w-4" />}
           >
-            新建检测项
+            {t('s.0348')}
           </Button>
         </div>
       </div>
@@ -182,33 +183,33 @@ export default function ChecksPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
           <span className="inline-flex items-center gap-2 font-medium">
             <AlertTriangleIcon className="h-4 w-4" />
-            有 {counts.down} 个检测项处于异常（down）状态
+            {t('s.0435')} {counts.down} {t('s.0941')}
           </span>
           <button
             type="button"
             onClick={() => setStateFilter('down')}
             className="text-xs font-medium underline-offset-2 hover:underline"
           >
-            只看异常
+            {t('s.0942')}
           </button>
         </div>
       ) : null}
 
       {checksQuery.error ? (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-          <span>加载检测项失败：{checksQuery.error}</span>
+          <span>{t('s.0491')}{checksQuery.error}</span>
           <Button size="sm" variant="secondary" onClick={refreshAll}>
-            重试
+            {t('s.0053')}
           </Button>
         </div>
       ) : null}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {[
-          { key: '' as const, label: '检测项总数', value: counts.total, tone: 'text-slate-900 dark:text-slate-100' },
-          { key: 'up' as const, label: '正常 (up)', value: counts.up, tone: 'text-emerald-600 dark:text-emerald-300' },
-          { key: 'down' as const, label: '异常 (down)', value: counts.down, tone: 'text-rose-600 dark:text-rose-300' },
-          { key: 'unknown' as const, label: '未知 (unknown)', value: counts.unknown, tone: 'text-slate-500 dark:text-slate-400' },
+          { key: '' as const, label: t('s.0943'), value: counts.total, tone: 'text-slate-900 dark:text-slate-100' },
+          { key: 'up' as const, label: t('s.0944'), value: counts.up, tone: 'text-emerald-600 dark:text-emerald-300' },
+          { key: 'down' as const, label: t('s.0945'), value: counts.down, tone: 'text-rose-600 dark:text-rose-300' },
+          { key: 'unknown' as const, label: t('s.0946'), value: counts.unknown, tone: 'text-slate-500 dark:text-slate-400' },
         ].map((card) => (
           <button
             key={card.label}
@@ -233,7 +234,7 @@ export default function ChecksPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">检测项</h2>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0086')}</h2>
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                 {visibleChecks.length}
                 {visibleChecks.length !== checks.length ? ` / ${checks.length}` : ''}
@@ -242,11 +243,11 @@ export default function ChecksPage() {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索名称 / 目标 / 服务器"
+              placeholder={t('s.0947')}
               className="h-9 w-52 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
             />
             <select
-              aria-label="按状态筛选检测项"
+              aria-label={t('s.0948')}
               value={stateFilter}
               onChange={(event) => setStateFilter(event.target.value as CheckState | '')}
               className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-700 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
@@ -260,19 +261,19 @@ export default function ChecksPage() {
           </div>
           <p className="text-xs text-slate-400 dark:text-slate-500">
             {checksQuery.updatedAt
-              ? `更新于 ${new Date(checksQuery.updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
-              : '加载中…'}
+              ? t('s.0949', { '0': new Date(checksQuery.updatedAt).toLocaleTimeString('zh-CN', { hour12: false }) })
+              : t('s.0425')}
           </p>
         </div>
 
         {checksQuery.loading && checksQuery.data === null ? (
-          <InlineLoading label="正在加载检测项…" />
+          <InlineLoading label={t('s.0950')} />
         ) : checks.length === 0 ? (
           <EmptyState
             icon={<ShieldCheckIcon className="h-6 w-6" />}
-            title="还没有检测项"
-            description="创建第一个检测项，让控制端开始周期性检测你的服务器"
-            actionLabel="新建检测项"
+            title={t('s.0951')}
+            description={t('s.0952')}
+            actionLabel={t('s.0348')}
             onAction={() => {
               setEditing(null)
               setFormOpen(true)
@@ -281,9 +282,9 @@ export default function ChecksPage() {
         ) : visibleChecks.length === 0 ? (
           <EmptyState
             icon={<ShieldCheckIcon className="h-6 w-6" />}
-            title="没有匹配的检测项"
-            description="当前搜索或筛选条件下没有检测项"
-            actionLabel="清除条件"
+            title={t('s.0953')}
+            description={t('s.0954')}
+            actionLabel={t('s.0955')}
             onAction={() => {
               setSearch('')
               setStateFilter('')
@@ -294,16 +295,16 @@ export default function ChecksPage() {
             <table className="w-full min-w-[1180px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs font-medium whitespace-nowrap text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                  <th scope="col" className="px-4 py-2.5 font-medium">名称</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">类型</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">目标</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">间隔</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">适用服务器</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">状态</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">24h 可用率</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">最近结果</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">启用</th>
-                  <th scope="col" className="px-4 py-2.5 text-right font-medium">操作</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0531')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0399')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0956')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0498')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0212')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0533')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0500')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0746')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0422')}</th>
+                  <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('s.0539')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -327,8 +328,8 @@ export default function ChecksPage() {
                           {check.name}
                         </button>
                         <span className="mt-0.5 block text-[11px] text-slate-400 dark:text-slate-500">
-                          超时 {check.timeout_s}s · 阈值{' '}
-                          {String(check.params.fail_threshold ?? 3)} 次
+                          {t('s.0957')} {check.timeout_s}{t('s.0958')}{' '}
+                          {String(check.params.fail_threshold ?? 3)} {t('s.0959')}
                         </span>
                       </td>
                       <td className="px-4 py-3 align-top">
@@ -348,19 +349,19 @@ export default function ChecksPage() {
                       <td className="max-w-[200px] px-4 py-3 align-top">
                         {check.server_ids.length === 0 ? (
                           <span className="text-xs text-slate-400 dark:text-slate-500">
-                            {check.server_count > 0 ? `${check.server_count} 台` : '未设置'}
+                            {check.server_count > 0 ? t('s.0960', { '0': check.server_count }) : t('s.0961')}
                           </span>
                         ) : (
                           <span
                             className="text-xs text-slate-600 dark:text-slate-300"
                             title={check.server_ids.map((id) => serverNameOf(id)).join('、')}
                           >
-                            {check.server_ids.length} 台 ·{' '}
+                            {check.server_ids.length} {t('s.0962')}{' '}
                             {check.server_ids
                               .slice(0, 2)
                               .map((id) => serverNameOf(id))
                               .join('、')}
-                            {check.server_ids.length > 2 ? ' 等' : ''}
+                            {check.server_ids.length > 2 ? t('s.0963') : ''}
                           </span>
                         )}
                       </td>
@@ -383,8 +384,8 @@ export default function ChecksPage() {
                                     : 'text-amber-600 dark:text-amber-400',
                               )}
                             >
-                              {last.ok ? '成功' : '失败'} · {formatLatency(last.latency_ms)}
-                              {!last.ok && check.state !== 'down' ? ' · 待确认（未达阈值）' : ''}
+                              {last.ok ? t('s.0300') : t('s.0301')} · {formatLatency(last.latency_ms)}
+                              {!last.ok && check.state !== 'down' ? t('s.0964') : ''}
                             </span>
                             <span className="block text-[11px] text-slate-400 dark:text-slate-500">
                               {formatRelativeTime(last.ts)}
@@ -392,7 +393,7 @@ export default function ChecksPage() {
                             </span>
                           </span>
                         ) : (
-                          <span className="text-xs text-slate-400 dark:text-slate-500">暂无结果</span>
+                          <span className="text-xs text-slate-400 dark:text-slate-500">{t('s.0965')}</span>
                         )}
                       </td>
                       <td className="px-4 py-3 align-top">
@@ -405,14 +406,14 @@ export default function ChecksPage() {
                       <td className="px-4 py-3 align-top">
                         <div className="flex items-center justify-end gap-0.5">
                           <IconButton
-                            label="立即执行"
+                            label={t('s.0966')}
                             onClick={() => void handleRun(check)}
                             disabled={runState?.loading ?? false}
                           >
                             <PlayIcon className="h-4 w-4" />
                           </IconButton>
                           <IconButton
-                            label="编辑检测项"
+                            label={t('s.0347')}
                             onClick={() => {
                               setEditing(check)
                               setFormOpen(true)
@@ -421,7 +422,7 @@ export default function ChecksPage() {
                             <PencilIcon className="h-4 w-4" />
                           </IconButton>
                           <IconButton
-                            label="删除检测项"
+                            label={t('s.0967')}
                             tone="danger"
                             onClick={() => {
                               setDeleteError(null)
@@ -442,7 +443,7 @@ export default function ChecksPage() {
       </section>
 
       <p className="text-xs text-slate-400 dark:text-slate-500">
-        状态口径：最近一次失败且连续失败次数达到阈值判定为 down；无结果时为 unknown。检测结果保留 30 天。
+        {t('s.0968')}
       </p>
 
       <CheckFormDialog
@@ -459,7 +460,7 @@ export default function ChecksPage() {
 
       <RunResultsDialog
         open={runState !== null}
-        title={runState ? `立即执行 · ${runState.check.name}` : '立即执行'}
+        title={runState ? t('s.0969', { '0': runState.check.name }) : t('s.0966')}
         loading={runState?.loading ?? false}
         error={runState?.error ?? null}
         response={runState?.response ?? null}
@@ -469,9 +470,9 @@ export default function ChecksPage() {
 
       <ConfirmDialog
         open={deleting !== null}
-        title="删除检测项"
-        description={deleting ? `检测项：${deleting.name}` : undefined}
-        confirmLabel="确认删除"
+        title={t('s.0967')}
+        description={deleting ? t('s.0970', { '0': deleting.name }) : undefined}
+        confirmLabel={t('s.0295')}
         tone="danger"
         loading={deleteLoading}
         error={deleteError}
@@ -482,11 +483,11 @@ export default function ChecksPage() {
         onConfirm={() => void handleDelete()}
       >
         <p>
-          确定要删除检测项
+          {t('s.0971')}
           <span className="font-semibold text-slate-900 dark:text-slate-100">
             「{deleting?.name}」
           </span>
-          吗？历史结果与状态会一并删除，该操作不可撤销。
+          {t('s.0972')}
         </p>
       </ConfirmDialog>
     </div>

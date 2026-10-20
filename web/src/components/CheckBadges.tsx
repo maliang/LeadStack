@@ -1,5 +1,6 @@
 import type { CheckState } from '../lib/api'
 import { cn } from '../lib/cn'
+import { t } from '../i18n'
 
 const kindConfig: Record<string, { label: string; container: string }> = {
   tcp: {
@@ -18,12 +19,12 @@ const kindConfig: Record<string, { label: string; container: string }> = {
       'bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-500/10 dark:text-violet-300 dark:ring-violet-400/30',
   },
   process: {
-    label: '进程',
+    label: t('s.0314'),
     container:
       'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/30',
   },
   script: {
-    label: '脚本',
+    label: t('s.0315'),
     container:
       'bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-500/10 dark:text-rose-300 dark:ring-rose-400/30',
   },
@@ -32,7 +33,7 @@ const kindConfig: Record<string, { label: string; container: string }> = {
 /** 检测类型徽标：TCP / HTTP / Ping / 进程 / 脚本。 */
 export function CheckKindBadge({ kind, className }: { kind: string; className?: string }) {
   const config = kindConfig[kind] ?? {
-    label: kind || '未知',
+    label: kind || t('s.0089'),
     container:
       'bg-slate-100 text-slate-600 ring-slate-500/20 dark:bg-slate-500/10 dark:text-slate-300 dark:ring-slate-400/30',
   }
@@ -43,7 +44,7 @@ export function CheckKindBadge({ kind, className }: { kind: string; className?: 
         config.container,
         className,
       )}
-      title={`检测类型：${kind}`}
+      title={t('s.0316', { '0': kind })}
     >
       {config.label}
     </span>
@@ -52,19 +53,19 @@ export function CheckKindBadge({ kind, className }: { kind: string; className?: 
 
 const stateConfig: Record<CheckState, { label: string; container: string; dot: string }> = {
   up: {
-    label: '正常',
+    label: t('s.0317'),
     container:
       'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-400/30',
     dot: 'bg-emerald-500',
   },
   down: {
-    label: '异常',
+    label: t('s.0318'),
     container:
       'bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-500/10 dark:text-rose-300 dark:ring-rose-400/30',
     dot: 'bg-rose-500',
   },
   unknown: {
-    label: '未知',
+    label: t('s.0089'),
     container:
       'bg-slate-100 text-slate-600 ring-slate-500/20 dark:bg-slate-500/10 dark:text-slate-300 dark:ring-slate-400/30',
     dot: 'bg-slate-400 dark:bg-slate-500',
@@ -81,7 +82,7 @@ export function CheckStateBadge({ state, className }: { state: CheckState; class
         config.container,
         className,
       )}
-      title={`状态：${state}`}
+      title={t('s.0081', { '0': state })}
     >
       <span className={cn('h-1.5 w-1.5 rounded-full', config.dot)} aria-hidden="true" />
       {config.label}

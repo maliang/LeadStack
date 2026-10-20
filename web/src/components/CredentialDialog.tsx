@@ -4,6 +4,7 @@ import { errorMessage } from '../lib/errors'
 import { Button } from './Button'
 import { Modal } from './Modal'
 import { useToast } from './Toast'
+import { t } from '../i18n'
 
 interface CredentialDialogProps {
   open: boolean
@@ -61,26 +62,26 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
       setPrivateKey(text)
       setKeyFileName(file.name)
     } catch {
-      setError('读取私钥文件失败，请改为手动粘贴')
+      setError(t('s.0390'))
     }
   }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!name.trim()) {
-      setError('请填写凭证名称')
+      setError(t('s.0391'))
       return
     }
     if (!username.trim()) {
-      setError('请填写登录用户名')
+      setError(t('s.0392'))
       return
     }
     if (kind === 'password' && !password) {
-      setError('请填写密码')
+      setError(t('s.0393'))
       return
     }
     if (kind === 'key' && !privateKey.trim()) {
-      setError('请粘贴或上传私钥内容')
+      setError(t('s.0394'))
       return
     }
 
@@ -100,11 +101,11 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
       )
       // 提交成功即清空内存中的密钥，不保留、不回显
       reset()
-      toast(`凭证「${created.name}」已创建`, 'success')
+      toast(t('s.0395', { '0': created.name }), 'success')
       onCreated?.(created)
       onClose()
     } catch (caught) {
-      setError(errorMessage(caught, '凭证创建失败'))
+      setError(errorMessage(caught, t('s.0396')))
     } finally {
       setSaving(false)
     }
@@ -117,8 +118,8 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
         reset()
         onClose()
       }}
-      title="新建凭证"
-      description="凭证用于 SSH 免安装接入；密钥会加密存储，界面不会再展示。"
+      title={t('s.0070')}
+      description={t('s.0397')}
       footer={
         <>
           <Button
@@ -129,22 +130,22 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
               onClose()
             }}
           >
-            取消
+            {t('s.0024')}
           </Button>
           <Button type="submit" form="credential-form" loading={saving}>
-            保存凭证
+            {t('s.0398')}
           </Button>
         </>
       }
     >
       <form id="credential-form" onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <span className={labelClass}>类型</span>
+          <span className={labelClass}>{t('s.0399')}</span>
           <div className="mt-1.5 grid grid-cols-2 gap-2">
             {(
               [
-                { value: 'password', label: '密码', hint: '用户名 + 密码' },
-                { value: 'key', label: '私钥', hint: 'PEM 私钥，可选口令' },
+                { value: 'password', label: t('s.0073'), hint: t('s.0400') },
+                { value: 'key', label: t('s.0072'), hint: t('s.0401') },
               ] as const
             ).map((option) => (
               <button
@@ -172,20 +173,20 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label htmlFor="credential-name" className={labelClass}>
-              凭证名称
+              {t('s.0402')}
             </label>
             <input
               id="credential-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               maxLength={64}
-              placeholder="例如：生产环境 root"
+              placeholder={t('s.0403')}
               className={inputClass + ' mt-1.5'}
             />
           </div>
           <div>
             <label htmlFor="credential-username" className={labelClass}>
-              用户名
+              {t('s.0112')}
             </label>
             <input
               id="credential-username"
@@ -201,7 +202,7 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
         {kind === 'password' ? (
           <div>
             <label htmlFor="credential-password" className={labelClass}>
-              密码
+              {t('s.0073')}
             </label>
             <input
               id="credential-password"
@@ -209,7 +210,7 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               autoComplete="new-password"
-              placeholder="登录密码"
+              placeholder={t('s.0404')}
               className={inputClass + ' mt-1.5'}
             />
           </div>
@@ -218,7 +219,7 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
             <div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <label htmlFor="credential-key" className={labelClass}>
-                  私钥内容（PEM）
+                  {t('s.0405')}
                 </label>
                 <div className="flex items-center gap-2">
                   <button
@@ -226,14 +227,14 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
                     onClick={() => setShowKey((shown) => !shown)}
                     className="text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
                   >
-                    {showKey ? '隐藏内容' : '显示内容'}
+                    {showKey ? t('s.0406') : t('s.0407')}
                   </button>
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     className="text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
                   >
-                    上传文件
+                    {t('s.0408')}
                   </button>
                 </div>
               </div>
@@ -259,13 +260,13 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
               />
               {keyFileName ? (
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  已读取文件：{keyFileName}（内容不会显示在页面上）
+                  {t('s.0409')}{keyFileName}{t('s.0410')}
                 </p>
               ) : null}
             </div>
             <div>
               <label htmlFor="credential-passphrase" className={labelClass}>
-                私钥口令 <span className="font-normal text-slate-400">（可选）</span>
+                {t('s.0411')} <span className="font-normal text-slate-400">{t('s.0040')}</span>
               </label>
               <input
                 id="credential-passphrase"
@@ -273,7 +274,7 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
                 value={passphrase}
                 onChange={(event) => setPassphrase(event.target.value)}
                 autoComplete="new-password"
-                placeholder="私钥有 passphrase 时填写"
+                placeholder={t('s.0412')}
                 className={inputClass + ' mt-1.5'}
               />
             </div>
@@ -281,7 +282,7 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
         )}
 
         <p className="text-xs text-slate-400 dark:text-slate-500">
-          密钥内容仅用于建立连接：提交后前端立即清空，列表接口只返回名称、类型、用户名与指纹。
+          {t('s.0413')}
         </p>
 
         {error ? (

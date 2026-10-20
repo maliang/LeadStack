@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Button } from './Button'
 import { Modal } from './Modal'
 import { CloseIcon } from './Icons'
+import { t } from '../i18n'
 
 interface TagsDialogProps {
   open: boolean
@@ -23,7 +24,7 @@ export function TagsDialog({
   initialTags,
   loading = false,
   error,
-  submitLabel = '保存',
+  submitLabel = t('s.0509'),
   onSubmit,
   onClose,
 }: TagsDialogProps) {
@@ -67,7 +68,7 @@ export function TagsDialog({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={loading}>
-            取消
+            {t('s.0024')}
           </Button>
           <Button type="submit" form="tags-form" loading={loading}>
             {submitLabel}
@@ -78,7 +79,7 @@ export function TagsDialog({
       <form id="tags-form" onSubmit={handleSubmit} className="space-y-3">
         <div className="flex flex-wrap gap-1.5">
           {tags.length === 0 ? (
-            <span className="text-xs text-slate-400 dark:text-slate-500">暂无标签</span>
+            <span className="text-xs text-slate-400 dark:text-slate-500">{t('s.0218')}</span>
           ) : (
             tags.map((tag) => (
               <span
@@ -88,7 +89,7 @@ export function TagsDialog({
                 {tag}
                 <button
                   type="button"
-                  aria-label={`移除标签 ${tag}`}
+                  aria-label={t('s.0546', { '0': tag })}
                   onClick={() => setTags((current) => current.filter((item) => item !== tag))}
                   className="text-slate-400 hover:text-rose-500 dark:text-slate-500 dark:hover:text-rose-400"
                 >
@@ -104,7 +105,7 @@ export function TagsDialog({
             htmlFor="tags-input"
             className="block text-sm font-medium text-slate-700 dark:text-slate-200"
           >
-            添加标签
+            {t('s.0547')}
           </label>
           <input
             id="tags-input"
@@ -116,7 +117,7 @@ export function TagsDialog({
                 addTags(draft)
               }
             }}
-            placeholder="输入后按回车，可用逗号或空格分隔多个"
+            placeholder={t('s.0548')}
             className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:border-indigo-400"
           />
         </div>

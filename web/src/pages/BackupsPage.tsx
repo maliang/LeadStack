@@ -37,15 +37,16 @@ import { InlineLoading } from '../components/Loading'
 import { Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
 
+import { t } from '../i18n'
 const inputClass =
   'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100'
 
 const labelClass = 'block text-sm font-medium text-slate-700 dark:text-slate-200'
 
 const INTERVAL_PRESETS = [
-  { value: '6h', label: '6 小时' },
-  { value: '12h', label: '12 小时' },
-  { value: '24h', label: '24 小时' },
+  { value: '6h', label: t('s.0838') },
+  { value: '12h', label: t('s.0839') },
+  { value: '24h', label: t('s.0002') },
 ]
 
 const DEFAULT_SETTINGS: BackupSettings = {
@@ -129,14 +130,12 @@ export default function BackupsPage() {
       const created = await api.createBackup(createIncludeArtifacts)
       setLastCreated(created)
       toast(
-        `备份已创建：${created.name}（${formatBytes(created.size_bytes)}）${
-          created.includes_artifacts ? '，含上传制品' : ''
-        }`,
+        t('s.0840', { '0': created.name, '1': formatBytes(created.size_bytes), '2': created.includes_artifacts ? t('backups.withArtifacts') : '' }),
         'success',
       )
       await backupsQuery.refresh()
     } catch (caught) {
-      toast(errorMessage(caught, '创建备份失败'), 'error')
+      toast(errorMessage(caught, t('s.0841')), 'error')
     } finally {
       setCreating(false)
     }
@@ -154,9 +153,9 @@ export default function BackupsPage() {
       anchor.click()
       document.body.removeChild(anchor)
       window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
-      toast(`已开始下载 ${filename}`, 'success')
+      toast(t('s.0842', { '0': filename }), 'success')
     } catch (caught) {
-      toast(errorMessage(caught, '下载备份失败'), 'error')
+      toast(errorMessage(caught, t('s.0843')), 'error')
     } finally {
       setDownloading(null)
     }
@@ -173,7 +172,7 @@ export default function BackupsPage() {
           info: backup,
           loading: false,
           result: null,
-          insight: classifyBackupError(result.error ?? '校验失败'),
+          insight: classifyBackupError(result.error ?? t('s.0844')),
         })
       }
     } catch (caught) {
@@ -192,11 +191,11 @@ export default function BackupsPage() {
     setDeleteError(null)
     try {
       await api.deleteBackup(deleting.name)
-      toast(`已删除备份「${deleting.name}」`, 'success')
+      toast(t('s.0845', { '0': deleting.name }), 'success')
       setDeleting(null)
       await backupsQuery.refresh()
     } catch (caught) {
-      setDeleteError(errorMessage(caught, '删除备份失败'))
+      setDeleteError(errorMessage(caught, t('s.0846')))
     } finally {
       setDeleteLoading(false)
     }
@@ -219,7 +218,7 @@ export default function BackupsPage() {
       setRestoreStaged(staged)
       setRestoreStage('staged')
       setRestoreConfirmOpen(false)
-      toast('备份已暂存，请重启控制端后生效', 'success')
+      toast(t('s.0847'), 'success')
     } catch (caught) {
       setRestoreInsight(classifyBackupError(caught))
       setRestoreStage('risk')
@@ -232,11 +231,11 @@ export default function BackupsPage() {
   const handleSaveSettings = async () => {
     const interval = settingsForm.interval.trim()
     if (!isValidGoDuration(interval)) {
-      setSettingsError('间隔需为合法的时间长度，例如 6h、12h、30m、1h30m（单位 h/m/s）')
+      setSettingsError(t('s.0848'))
       return
     }
     if (!Number.isInteger(settingsForm.retention) || settingsForm.retention < 1) {
-      setSettingsError('保留份数需为不小于 1 的整数')
+      setSettingsError(t('s.0849'))
       return
     }
     setSavingSettings(true)
@@ -249,10 +248,10 @@ export default function BackupsPage() {
       })
       setSettingsForm(saved)
       setSettingsDirty(false)
-      toast('备份设置已保存并即时生效', 'success')
+      toast(t('s.0850'), 'success')
       void settingsQuery.refresh()
     } catch (caught) {
-      setSettingsError(errorMessage(caught, '保存备份设置失败'))
+      setSettingsError(errorMessage(caught, t('s.0851')))
     } finally {
       setSavingSettings(false)
     }
@@ -268,16 +267,15 @@ export default function BackupsPage() {
           </span>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">
-              备份加密口令必须单独保管 —— 丢了就再也解不开
+              {t('s.0852')}
             </p>
             <p className="mt-0.5 text-xs leading-relaxed text-amber-800/90 dark:text-amber-200/90">
-              口令存放在数据目录的{' '}
+              {t('s.0853')}{' '}
               <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-[11px] text-amber-900 dark:bg-amber-500/20 dark:text-amber-100">
                 backup.pass
               </code>
-              （或环境变量 <code className="font-mono text-[11px]">LEADSTACK_BACKUP_PASSPHRASE</code>
-              ）。它<strong className="font-semibold">不在备份归档里</strong>，是解密备份的唯一钥匙：
-              丢失后所有备份都无法恢复，控制端也无法替你找回。请把 backup.pass 单独保存到与备份文件不同的地方。
+              {t('s.0854')} <code className="font-mono text-[11px]">LEADSTACK_BACKUP_PASSPHRASE</code>
+              {t('s.0855')}<strong className="font-semibold">{t('s.0856')}</strong>{t('s.0857')}
             </p>
           </div>
         </div>
@@ -286,10 +284,10 @@ export default function BackupsPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-            备份与恢复
+            {t('s.0858')}
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            在线加密备份数据目录（数据库快照 / 主密钥 / known_hosts / 可选制品），恢复需重启控制端
+            {t('s.0859')}
           </p>
         </div>
         <Button
@@ -298,15 +296,15 @@ export default function BackupsPage() {
           loading={backupsQuery.loading || settingsQuery.loading}
           icon={<RefreshIcon className="h-4 w-4" />}
         >
-          刷新
+          {t('s.0689')}
         </Button>
       </div>
 
       {backupsQuery.error ? (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-          <span>加载备份列表失败：{backupsQuery.error}</span>
+          <span>{t('s.0860')}{backupsQuery.error}</span>
           <Button size="sm" variant="secondary" onClick={() => void backupsQuery.refresh()}>
-            重试
+            {t('s.0053')}
           </Button>
         </div>
       ) : null}
@@ -317,14 +315,14 @@ export default function BackupsPage() {
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
               <ArchiveIcon className="h-4 w-4 text-indigo-500" />
-              立即备份
+              {t('s.0861')}
             </h2>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              在线执行（不停止服务），使用 VACUUM INTO 导出数据库一致快照后加密打包
+              {t('s.0862')}
             </p>
           </div>
           <Button onClick={() => void handleCreate()} loading={creating} icon={<ArchiveIcon className="h-4 w-4" />}>
-            立即备份
+            {t('s.0861')}
           </Button>
         </div>
 
@@ -336,9 +334,9 @@ export default function BackupsPage() {
             className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800"
           />
           <span>
-            <span className="block text-sm text-slate-700 dark:text-slate-200">包含上传的制品文件</span>
+            <span className="block text-sm text-slate-700 dark:text-slate-200">{t('s.0863')}</span>
             <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">
-              默认关闭：制品可能很大，包含它们会让备份变慢、占用更多磁盘；只有需要连同制品一起迁移时才勾选。
+              {t('s.0864')}
             </span>
           </span>
         </label>
@@ -346,7 +344,7 @@ export default function BackupsPage() {
         {lastCreated ? (
           <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
             <CheckCircleIcon className="h-3.5 w-3.5" />
-            最近创建：{lastCreated.name}（{formatBytes(lastCreated.size_bytes)} ·{' '}
+            {t('s.0865')}{lastCreated.name}（{formatBytes(lastCreated.size_bytes)} ·{' '}
             {formatDateTime(lastCreated.created_at)}）
           </p>
         ) : null}
@@ -356,24 +354,24 @@ export default function BackupsPage() {
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">备份列表</h2>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0866')}</h2>
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
               {backups.length}
             </span>
           </div>
           <p className="text-xs text-slate-400 dark:text-slate-500">
-            归档保存在数据目录的 backups/ 下；备份文件本身已加密，可安全拷贝到别处
+            {t('s.0867')}
           </p>
         </div>
 
         {backupsQuery.loading && backupsQuery.data === null ? (
-          <InlineLoading label="正在加载备份列表…" />
+          <InlineLoading label={t('s.0868')} />
         ) : backups.length === 0 ? (
           <EmptyState
             icon={<ArchiveIcon className="h-6 w-6" />}
-            title="还没有备份"
-            description="点击上方「立即备份」创建第一份加密备份；建议同时开启下面的定时备份"
-            actionLabel="立即备份"
+            title={t('s.0869')}
+            description={t('s.0870')}
+            actionLabel={t('s.0861')}
             onAction={() => void handleCreate()}
           />
         ) : (
@@ -381,13 +379,13 @@ export default function BackupsPage() {
             <table className="w-full min-w-[1040px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs font-medium whitespace-nowrap text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                  <th scope="col" className="px-4 py-2.5 font-medium">文件名</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">创建时间</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">大小</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">含制品</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Schema 版本</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0871')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0271')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0278')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0872')}</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">{t('s.0270')}</th>
                   <th scope="col" className="px-4 py-2.5 font-medium">SHA256</th>
-                  <th scope="col" className="px-4 py-2.5 text-right font-medium">操作</th>
+                  <th scope="col" className="px-4 py-2.5 text-right font-medium">{t('s.0539')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
@@ -419,7 +417,7 @@ export default function BackupsPage() {
                             : 'bg-slate-100 text-slate-500 ring-slate-500/20 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-400/30',
                         )}
                       >
-                        {backup.includes_artifacts ? '含制品' : '不含制品'}
+                        {backup.includes_artifacts ? t('s.0872') : t('s.0873')}
                       </span>
                     </td>
                     <td className="px-4 py-3 align-top text-xs tabular-nums text-slate-600 dark:text-slate-300">
@@ -433,17 +431,17 @@ export default function BackupsPage() {
                     <td className="px-4 py-3 align-top">
                       <div className="flex items-center justify-end gap-0.5">
                         <IconButton
-                          label="下载备份"
+                          label={t('s.0874')}
                           onClick={() => void handleDownload(backup)}
                           disabled={downloading === backup.name}
                         >
                           <DownloadIcon className="h-4 w-4" />
                         </IconButton>
-                        <IconButton label="校验备份" onClick={() => void handleVerify(backup)}>
+                        <IconButton label={t('s.0875')} onClick={() => void handleVerify(backup)}>
                           <ShieldCheckIcon className="h-4 w-4" />
                         </IconButton>
                         <IconButton
-                          label="删除备份"
+                          label={t('s.0876')}
                           tone="danger"
                           onClick={() => {
                             setDeleteError(null)
@@ -468,10 +466,10 @@ export default function BackupsPage() {
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
               <UploadIcon className="h-4 w-4 text-rose-500" />
-              从备份恢复
+              {t('s.0877')}
             </h2>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              上传 <code className="font-mono">.lsbak</code> 归档 → 校验 → 暂存；重启控制端后才会真正生效
+              {t('s.0419')} <code className="font-mono">.lsbak</code> {t('s.0878')}
             </p>
           </div>
           {restoreStage !== 'idle' ? (
@@ -483,14 +481,14 @@ export default function BackupsPage() {
                 setRestoreConfirmOpen(false)
               }}
             >
-              取消本次恢复
+              {t('s.0879')}
             </Button>
           ) : null}
         </div>
 
         <div className="mt-3">
           <label htmlFor="restore-file" className={labelClass}>
-            选择备份归档文件
+            {t('s.0880')}
           </label>
           <input
             id="restore-file"
@@ -501,7 +499,7 @@ export default function BackupsPage() {
           />
           {restoreFile ? (
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              已选择：<span className="font-mono">{restoreFile.name}</span>（
+              {t('s.0881')}<span className="font-mono">{restoreFile.name}</span>（
               {formatBytes(restoreFile.size)}）
             </p>
           ) : null}
@@ -511,24 +509,22 @@ export default function BackupsPage() {
           <div className="mt-3 space-y-3">
             <div className="rounded-lg border border-rose-200 bg-rose-50 p-3.5 dark:border-rose-500/30 dark:bg-rose-500/10">
               <p className="text-sm font-semibold text-rose-800 dark:text-rose-200">
-                危险操作：恢复会覆盖当前数据，并需要重启控制端
+                {t('s.0882')}
               </p>
               <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed text-rose-800/90 dark:text-rose-200/90">
                 <li>
-                  <strong className="font-semibold">本次只是暂存</strong>：归档上传并校验后写入数据目录的
-                  .restore-pending/，<strong className="font-semibold">必须重启控制端</strong>才会真正恢复。
+                  <strong className="font-semibold">{t('s.0883')}</strong>{t('s.0884')}<strong className="font-semibold">{t('s.0885')}</strong>{t('s.0886')}
                 </li>
                 <li>
-                  重启时当前数据会被整体移动到{' '}
-                  <code className="font-mono">&lt;data_dir&gt;.pre-restore-&lt;时间戳&gt;/</code>{' '}
-                  目录保留（不会直接删除），确认恢复无误后可手动清理。
+                  {t('s.0887')}{' '}
+                  <code className="font-mono">{t('s.0888')}</code>{' '}
+                  {t('s.0889')}
                 </li>
                 <li>
-                  归档里的 leadstack.db、master.key、known_hosts（以及可选制品）会替换当前文件；
-                  恢复后若主密钥不同，需要重新配置 SSH 凭证。
+                  {t('s.0890')}
                 </li>
                 <li>
-                  恢复需要正确的解密口令（数据目录里的 backup.pass）；口令错误、归档损坏或备份版本过新都会在暂存前被拒绝。
+                  {t('s.0891')}
                 </li>
               </ul>
             </div>
@@ -544,10 +540,10 @@ export default function BackupsPage() {
                 }}
                 icon={<UploadIcon className="h-4 w-4" />}
               >
-                下一步：二次确认
+                {t('s.0892')}
               </Button>
               <Button variant="secondary" onClick={() => handleRestoreFile(null)}>
-                重新选择文件
+                {t('s.0893')}
               </Button>
             </div>
           </div>
@@ -557,25 +553,24 @@ export default function BackupsPage() {
           <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5 dark:border-emerald-500/30 dark:bg-emerald-500/10">
             <p className="flex items-center gap-2 text-sm font-semibold text-emerald-800 dark:text-emerald-200">
               <CheckCircleIcon className="h-4 w-4" />
-              已暂存，请重启控制端生效
+              {t('s.0894')}
             </p>
             <p className="mt-1 text-xs leading-relaxed text-emerald-800/90 dark:text-emerald-200/90">
-              归档已通过校验并暂存到数据目录。现在重启 LeadStack 控制端（例如{' '}
-              <code className="font-mono">systemctl restart leadstack</code> 或重新执行启动命令），
-              启动时会在打开数据库前应用恢复；恢复前的数据会保留在 pre-restore 目录。
+              {t('s.0895')}{' '}
+              <code className="font-mono">systemctl restart leadstack</code> {t('s.0896')}
             </p>
             <p className="mt-1 text-[11px] text-emerald-700/80 dark:text-emerald-300/80">
               {restoreStaged.archive_name
-                ? `暂存归档：${restoreStaged.archive_name}`
-                : '归档已暂存'}
+                ? t('s.0897', { '0': restoreStaged.archive_name })
+                : t('s.0898')}
               {restoreStaged.size_bytes ? `（${formatBytes(restoreStaged.size_bytes)}）` : ''}
               {restoreStaged.schema_version !== null ? ` · schema ${restoreStaged.schema_version}` : ''}
-              {restoreStaged.uploaded_at ? ` · 上传于 ${formatDateTime(restoreStaged.uploaded_at)}` : ''}
+              {restoreStaged.uploaded_at ? t('s.0899', { '0': formatDateTime(restoreStaged.uploaded_at) }) : ''}
               {restoreStaged.sha256 ? ` · sha256 ${truncateMiddle(restoreStaged.sha256, 14, 6)}` : ''}
-              {restoreStaged.staged_path ? ` · 暂存位置 ${restoreStaged.staged_path}` : ''}
+              {restoreStaged.staged_path ? t('s.0900', { '0': restoreStaged.staged_path }) : ''}
             </p>
             <p className="mt-2 text-[11px] text-emerald-700/70 dark:text-emerald-300/70">
-              重启完成前请勿再次上传恢复包；若需要放弃本次恢复，可在重启前删除数据目录下的 .restore-pending/。
+              {t('s.0901')}
             </p>
           </div>
         ) : null}
@@ -585,11 +580,11 @@ export default function BackupsPage() {
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">定时备份设置</h2>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0902')}</h2>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              保存后即时生效，无需重启；当前：{settingsQuery.data ? formatBackupInterval(settingsQuery.data.interval) : '加载中…'}
+              {t('s.0903')}{settingsQuery.data ? formatBackupInterval(settingsQuery.data.interval) : t('s.0425')}
               {settingsQuery.data
-                ? ` · ${settingsQuery.data.enabled ? '已启用' : '未启用'} · 保留 ${settingsQuery.data.retention} 份`
+                ? t('s.0904', { '0': settingsQuery.data.enabled ? t('common.enabled') : t('common.disabled'), '1': settingsQuery.data.retention })
                 : ''}
             </p>
           </div>
@@ -598,13 +593,13 @@ export default function BackupsPage() {
             loading={savingSettings}
             disabled={!settingsDirty}
           >
-            保存设置
+            {t('s.0905')}
           </Button>
         </div>
 
         {settingsQuery.error ? (
           <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">
-            加载设置失败：{settingsQuery.error}（可先直接修改并保存）
+            {t('s.0906')}{settingsQuery.error}{t('s.0907')}
           </p>
         ) : null}
 
@@ -612,13 +607,13 @@ export default function BackupsPage() {
           <label className="flex items-start gap-2.5 rounded-lg bg-slate-50 px-3 py-2.5 dark:bg-slate-950/60">
             <EnableSwitch
               checked={settingsForm.enabled}
-              label={settingsForm.enabled ? '停用定时备份' : '启用定时备份'}
+              label={settingsForm.enabled ? t('s.0908') : t('s.0909')}
               onChange={() => updateSettings({ enabled: !settingsForm.enabled })}
             />
             <span>
-              <span className="block text-sm text-slate-700 dark:text-slate-200">启用定时备份</span>
+              <span className="block text-sm text-slate-700 dark:text-slate-200">{t('s.0909')}</span>
               <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">
-                按间隔自动创建备份，并按保留份数清理最旧的备份（避免磁盘被占满）
+                {t('s.0910')}
               </span>
             </span>
           </label>
@@ -626,7 +621,7 @@ export default function BackupsPage() {
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <label htmlFor="backup-interval" className={labelClass}>
-                备份间隔
+                {t('s.0911')}
               </label>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {INTERVAL_PRESETS.map((preset) => (
@@ -649,7 +644,7 @@ export default function BackupsPage() {
                 id="backup-interval"
                 value={settingsForm.interval}
                 onChange={(event) => updateSettings({ interval: event.target.value })}
-                placeholder="例如 6h、12h、24h、30m、1h30m"
+                placeholder={t('s.0912')}
                 className={inputClass + ' mt-1.5 font-mono text-xs'}
               />
               <p
@@ -661,16 +656,14 @@ export default function BackupsPage() {
                 )}
               >
                 {isValidGoDuration(settingsForm.interval)
-                  ? `生效值：${formatBackupInterval(settingsForm.interval)}${
-                      intervalIsCustom ? '（自定义）' : ''
-                    }`
-                  : '格式不合法：需为 Go duration（单位 h/m/s，例如 24h、30m）'}
+                  ? t('s.0913', { '0': formatBackupInterval(settingsForm.interval), '1': intervalIsCustom ? t('backups.custom') : '' })
+                  : t('s.0914')}
               </p>
             </div>
 
             <div>
               <label htmlFor="backup-retention" className={labelClass}>
-                保留份数
+                {t('s.0915')}
               </label>
               <input
                 id="backup-retention"
@@ -683,12 +676,12 @@ export default function BackupsPage() {
                 className={inputClass + ' mt-1.5'}
               />
               <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                超出后按创建时间删除最旧的备份，建议至少保留 3 份
+                {t('s.0916')}
               </p>
             </div>
 
             <div>
-              <span className={labelClass}>定时备份是否含制品</span>
+              <span className={labelClass}>{t('s.0917')}</span>
               <label className="mt-2 flex items-start gap-2 text-sm text-slate-700 dark:text-slate-200">
                 <input
                   type="checkbox"
@@ -697,7 +690,7 @@ export default function BackupsPage() {
                   className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800"
                 />
                 <span className="text-xs text-slate-500 dark:text-slate-400">
-                  开启后每份备份都会包含上传制品，会更慢、更占磁盘
+                  {t('s.0918')}
                 </span>
               </label>
             </div>
@@ -711,16 +704,16 @@ export default function BackupsPage() {
 
           {settingsDirty ? (
             <p className="text-xs text-amber-600 dark:text-amber-400">
-              有未保存的修改，点击右上角「保存设置」后生效。
+              {t('s.0919')}
             </p>
           ) : null}
         </div>
       </section>
 
       <p className="text-xs text-slate-400 dark:text-slate-500">
-        恢复也可以不用控制台：停掉服务后用命令行{' '}
-        <code className="font-mono">leadstack restore --file &lt;归档&gt; --data-dir &lt;数据目录&gt;</code>{' '}
-        执行，同样会保留 pre-restore 目录。
+        {t('s.0920')}{' '}
+        <code className="font-mono">{t('s.0921')}</code>{' '}
+        {t('s.0922')}
       </p>
 
       <BackupVerifyDialog
@@ -734,9 +727,9 @@ export default function BackupsPage() {
 
       <ConfirmDialog
         open={deleting !== null}
-        title="删除备份"
-        description={deleting ? `归档：${deleting.name}` : undefined}
-        confirmLabel="确认删除"
+        title={t('s.0876')}
+        description={deleting ? t('s.0263', { '0': deleting.name }) : undefined}
+        confirmLabel={t('s.0295')}
         tone="danger"
         loading={deleteLoading}
         error={deleteError}
@@ -747,11 +740,11 @@ export default function BackupsPage() {
         onConfirm={() => void handleDelete()}
       >
         <p>
-          确定要删除备份
+          {t('s.0923')}
           <span className="font-semibold text-slate-900 dark:text-slate-100">
             「{deleting?.name}」
           </span>
-          吗？删除后存档文件与元数据都会移除，且不可恢复。
+          {t('s.0924')}
         </p>
       </ConfirmDialog>
 
@@ -760,8 +753,8 @@ export default function BackupsPage() {
         onClose={() => {
           if (!restoreLoading) setRestoreConfirmOpen(false)
         }}
-        title="二次确认：恢复将覆盖当前数据"
-        description={restoreFile ? `归档：${restoreFile.name}` : undefined}
+        title={t('s.0925')}
+        description={restoreFile ? t('s.0263', { '0': restoreFile.name }) : undefined}
         footer={
           <>
             <Button
@@ -769,7 +762,7 @@ export default function BackupsPage() {
               onClick={() => setRestoreConfirmOpen(false)}
               disabled={restoreLoading}
             >
-              取消
+              {t('s.0024')}
             </Button>
             <Button
               variant="danger"
@@ -777,15 +770,15 @@ export default function BackupsPage() {
               loading={restoreLoading}
               disabled={!riskAcknowledged}
             >
-              确认暂存恢复
+              {t('s.0926')}
             </Button>
           </>
         }
       >
         <div className="space-y-3 text-sm">
           <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs leading-relaxed text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
-            提交后归档会立即被暂存；<strong className="font-semibold">重启控制端时</strong>
-            才会真正覆盖数据。当前数据会被移到 pre-restore 目录保留，但恢复后若发现问题仍需人工处理。
+            {t('s.0927')}<strong className="font-semibold">{t('s.0928')}</strong>
+            {t('s.0929')}
           </div>
           <label className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-200">
             <input
@@ -795,8 +788,7 @@ export default function BackupsPage() {
               className="mt-0.5 h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-800"
             />
             <span>
-              我已了解：恢复需要<strong className="font-semibold">重启控制端</strong>才会生效，
-              且当前数据会被移动到 pre-restore 目录、被归档内容覆盖。
+              {t('s.0930')}<strong className="font-semibold">{t('s.0931')}</strong>{t('s.0932')}
             </span>
           </label>
         </div>

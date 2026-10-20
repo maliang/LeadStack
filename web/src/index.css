@@ -1,6 +1,6 @@
 @import 'tailwindcss';
 
-/* Tailwind 4：用 class 控制深色模式（html.dark），默认浅色。 */
+/* Tailwind 4：用 class 控制深色模式（html.dark），主题模式由 prefs 解析后应用。 */
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
@@ -28,5 +28,72 @@ body {
 }
 
 ::selection {
-  background-color: color-mix(in oklab, #6366f1 30%, transparent);
+  background-color: color-mix(in oklab, var(--color-indigo-500) 30%, transparent);
+}
+
+/* ---------------- 主题色（5 种）----------------
+ * Tailwind 4 的工具类引用 --color-indigo-* 变量，这里按 data-accent 覆盖整条色阶，
+ * 无需改动任何组件的 indigo 类名即可全局换色。
+ */
+html[data-accent='blue'] {
+  --color-indigo-50: var(--color-blue-50);
+  --color-indigo-100: var(--color-blue-100);
+  --color-indigo-200: var(--color-blue-200);
+  --color-indigo-300: var(--color-blue-300);
+  --color-indigo-400: var(--color-blue-400);
+  --color-indigo-500: var(--color-blue-500);
+  --color-indigo-600: var(--color-blue-600);
+  --color-indigo-700: var(--color-blue-700);
+  --color-indigo-800: var(--color-blue-800);
+  --color-indigo-900: var(--color-blue-900);
+  --color-indigo-950: var(--color-blue-950);
+}
+
+html[data-accent='cyan'] {
+  --color-indigo-50: var(--color-cyan-50);
+  --color-indigo-100: var(--color-cyan-100);
+  --color-indigo-200: var(--color-cyan-200);
+  --color-indigo-300: var(--color-cyan-300);
+  --color-indigo-400: var(--color-cyan-400);
+  --color-indigo-500: var(--color-cyan-500);
+  --color-indigo-600: var(--color-cyan-600);
+  --color-indigo-700: var(--color-cyan-700);
+  --color-indigo-800: var(--color-cyan-800);
+  --color-indigo-900: var(--color-cyan-900);
+  --color-indigo-950: var(--color-cyan-950);
+}
+
+html[data-accent='emerald'] {
+  --color-indigo-50: var(--color-emerald-50);
+  --color-indigo-100: var(--color-emerald-100);
+  --color-indigo-200: var(--color-emerald-200);
+  --color-indigo-300: var(--color-emerald-300);
+  --color-indigo-400: var(--color-emerald-400);
+  --color-indigo-500: var(--color-emerald-500);
+  --color-indigo-600: var(--color-emerald-600);
+  --color-indigo-700: var(--color-emerald-700);
+  --color-indigo-800: var(--color-emerald-800);
+  --color-indigo-900: var(--color-emerald-900);
+  --color-indigo-950: var(--color-emerald-950);
+}
+
+html[data-accent='violet'] {
+  --color-indigo-50: var(--color-violet-50);
+  --color-indigo-100: var(--color-violet-100);
+  --color-indigo-200: var(--color-violet-200);
+  --color-indigo-300: var(--color-violet-300);
+  --color-indigo-400: var(--color-violet-400);
+  --color-indigo-500: var(--color-violet-500);
+  --color-indigo-600: var(--color-violet-600);
+  --color-indigo-700: var(--color-violet-700);
+  --color-indigo-800: var(--color-violet-800);
+  --color-indigo-900: var(--color-violet-900);
+  --color-indigo-950: var(--color-violet-950);
+}
+
+/* ---------------- 密度（comfortable / compact） ---------------- */
+html[data-density='compact'] table td,
+html[data-density='compact'] table th {
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
 }

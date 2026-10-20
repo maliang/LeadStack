@@ -26,18 +26,15 @@ func validateFeishu(ch Channel) error {
 	return nil
 }
 
-// sendFeishu 发送飞书自定义机器人文本消息；配置了 secret 时按官方算法加签。
-// 加签字段 timestamp/sign 放在请求体顶层（timestamp 为秒级字符串）。
-func (c *Client) sendFeishu(ctx context.Context, ch Channel, msg Message) error {
+// buildFeishu 构造飞书文本消息请求；配置了 secret 时 timestamp/sign 放在 body 顶层。
+func (c *Client) buildFeishu(ch Channel, msg Message) (httpRequest, error) {
 	rawURL, _, _ := cfgString(ch.Config, "webhook")
 	secret, hasSecret, _ := cfgString(ch.Config, "secret")
 	scr := newScrubber(ch)
 
 	payload := map[string]any{
 		"msg_type": "text",
-		"content": map[string]any{
-			"text": renderText(msg),
-		},
+		"content":  map[string]any{"text": renderText(msg)},
 	}
 	if hasSecret {
 		ts := c.now().Unix()
@@ -46,17 +43,27 @@ func (c *Client) sendFeishu(ctx context.Context, ch Channel, msg Message) error 
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return httpRequest{}, newSendError(ch.Kind, ErrorKindInternal, 0, "", err.Error(), "")
 	}
-	respBody, err := c.do(ctx, http.MethodPost, rawURL, nil, body, c.Timeout(), scr, "飞书")
+	return httpRequest{method: http.MethodPost, url: rawURL, body: body, timeout: c.Timeout(), scr: scr}, nil
+}
+
+// sendFeishu 发送飞书自定义机器人文本消息。
+func (c *Client) sendFeishu(ctx context.Context, ch Channel, msg Message) error {
+	req, err := c.buildFeishu(ch, msg)
 	if err != nil {
 		return err
 	}
-	return checkFeishuResult(respBody, scr)
+	res, err := c.deliver(ctx, ch.Kind, req)
+	if err != nil {
+		return err
+	}
+	return checkFeishuResult(ch.Kind, res, req.scr)
 }
 
 // checkFeishuResult 处理飞书的「HTTP 200 + code/StatusCode != 0 即失败」。
-func checkFeishuResult(body []byte, scr *scrubber) error {
+func checkFeishuResult(chKind Kind, res *httpResult, scr *scrubber) error {
+	body := res.Body
 	var r struct {
 		Code          *int   `json:"code"`
 		Msg           string `json:"msg"`
@@ -76,9 +83,38 @@ func checkFeishuResult(body []byte, scr *scrubber) error {
 	if code == 0 {
 		return nil
 	}
-	detail, _ := truncateBytes(msg, errorBodyLimit)
-	if detail == "" {
-		detail, _ = truncateBytes(string(body), errorBodyLimit)
+	if msg == "" {
+		msg = snippetOf(body, &scrubber{})
 	}
-	return errors.New("notify: 飞书返回业务错误 code=" + strconv.Itoa(code) + ": " + scr.scrub(detail))
+	return newSendError(chKind, ErrorKindProvider, res.StatusCode, "code="+strconv.Itoa(code),
+		scr.scrub(msg), snippetOf(body, scr))
+}
+
+// feishuProviderCode 从响应体提取飞书业务码（Probe 展示用）。
+func feishuProviderCode(body []byte) string {
+	var r struct {
+		Code       *int `json:"code"`
+		StatusCode *int `json:"StatusCode"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return ""
+	}
+	switch {
+	case r.Code != nil:
+		return "code=" + strconv.Itoa(*r.Code)
+	case r.StatusCode != nil:
+		return "code=" + strconv.Itoa(*r.StatusCode)
+	}
+	return ""
+}
+
+// errCodeOf 提取 errcode（钉钉/企微；Probe 展示用）。
+func errCodeOf(body []byte) string {
+	var r struct {
+		ErrCode *int `json:"errcode"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil || r.ErrCode == nil {
+		return ""
+	}
+	return "errcode=" + strconv.Itoa(*r.ErrCode)
 }

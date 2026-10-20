@@ -4,6 +4,7 @@ import { errorMessage } from '../lib/errors'
 import { Button } from './Button'
 import { Modal } from './Modal'
 import { useToast } from './Toast'
+import { t } from '../i18n'
 
 interface RenameDialogProps {
   server: Server | null
@@ -29,18 +30,18 @@ export function RenameServerDialog({ server, onClose, onSaved }: RenameDialogPro
     if (!server) return
     const trimmed = name.trim()
     if (!trimmed) {
-      setError('服务器名称不能为空')
+      setError(t('s.0504'))
       return
     }
     setSaving(true)
     setError(null)
     try {
       await api.updateServer(server.id, { name: trimmed })
-      toast('服务器名称已更新', 'success')
+      toast(t('s.0505'), 'success')
       onSaved()
       onClose()
     } catch (caught) {
-      setError(errorMessage(caught, '重命名失败，请稍后重试'))
+      setError(errorMessage(caught, t('s.0506')))
     } finally {
       setSaving(false)
     }
@@ -50,22 +51,22 @@ export function RenameServerDialog({ server, onClose, onSaved }: RenameDialogPro
     <Modal
       open={server !== null}
       onClose={onClose}
-      title="重命名服务器"
-      description={server ? `当前名称：${server.name}` : undefined}
+      title={t('s.0507')}
+      description={server ? t('s.0508', { '0': server.name }) : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>
-            取消
+            {t('s.0024')}
           </Button>
           <Button type="submit" form="rename-server-form" loading={saving}>
-            保存
+            {t('s.0509')}
           </Button>
         </>
       }
     >
       <form id="rename-server-form" onSubmit={handleSubmit} className="space-y-3">
         <label htmlFor="server-name" className="block text-sm font-medium text-slate-700 dark:text-slate-200">
-          服务器名称
+          {t('s.0064')}
         </label>
         <input
           id="server-name"
@@ -73,7 +74,7 @@ export function RenameServerDialog({ server, onClose, onSaved }: RenameDialogPro
           onChange={(event) => setName(event.target.value)}
           maxLength={64}
           autoFocus
-          placeholder="例如：生产环境 · 东京 01"
+          placeholder={t('s.0510')}
           className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:border-indigo-400"
         />
         {error ? (
@@ -109,11 +110,11 @@ export function DeleteServerDialog({ server, onClose, onDeleted }: DeleteDialogP
     setError(null)
     try {
       await api.deleteServer(server.id)
-      toast(`已删除服务器「${server.name}」`, 'success')
+      toast(t('s.0511', { '0': server.name }), 'success')
       onDeleted(server)
       onClose()
     } catch (caught) {
-      setError(errorMessage(caught, '删除失败，请稍后重试'))
+      setError(errorMessage(caught, t('s.0512')))
     } finally {
       setDeleting(false)
     }
@@ -123,28 +124,28 @@ export function DeleteServerDialog({ server, onClose, onDeleted }: DeleteDialogP
     <Modal
       open={server !== null}
       onClose={onClose}
-      title="删除服务器"
+      title={t('s.0513')}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={deleting}>
-            取消
+            {t('s.0024')}
           </Button>
           <Button variant="danger" onClick={handleDelete} loading={deleting}>
-            确认删除
+            {t('s.0295')}
           </Button>
         </>
       }
     >
       <div className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
         <p>
-          确定要删除服务器{' '}
+          {t('s.0514')}{' '}
           <span className="font-semibold text-slate-900 dark:text-slate-100">
             「{server?.name}」
           </span>{' '}
-          吗？该操作不可撤销。
+          {t('s.0515')}
         </p>
         <p className="text-xs text-slate-400 dark:text-slate-500">
-          删除后 agent 将无法继续上报；如需重新接入，请生成新的接入令牌。
+          {t('s.0516')}
         </p>
         {error ? (
           <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">

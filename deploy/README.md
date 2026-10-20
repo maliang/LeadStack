@@ -63,21 +63,21 @@ make devssh     # bin/leadstack-devssh —— 仅供本地验收，绝不进发�
 make fmt-check  # gofmt -l 必须为空
 make test-race  # go test -race 覆盖 internal/api 与 internal/store
 
-# 3) 一键跑六套端到端验收（M0 → M1 → M2 → M3 → M4 → backup，日志落在 .e2e-logs/）
+# 3) 一键跑七套端到端验收（M0 → M1 → M2 → M3 → M4 → backup → ops，日志落在 .e2e-logs/）
 make test-e2e   # 等价于 make e2e
 ```
 
 `make test-e2e` 的行为：
 
-- 按序执行 `scripts/verify_m0.sh` → `verify_m1.sh` → `verify_m2.sh` → `verify_m3.sh` → `verify_m4.sh` → `verify_backup.sh`（脚本由 Lead 维护）；
-- 每个脚本的完整输出（含失败时打印的控制端/agent 日志尾部）tee 到 `.e2e-logs/verify_m0.log` … `verify_m4.log`、`verify_backup.log`；
+- 按序执行 `scripts/verify_m0.sh` → `verify_m1.sh` → `verify_m2.sh` → `verify_m3.sh` → `verify_m4.sh` → `verify_backup.sh` → `verify_ops.sh`（脚本由 Lead 维护）；
+- 每个脚本的完整输出（含失败时打印的控制端/agent 日志尾部）tee 到 `.e2e-logs/verify_m0.log` … `verify_m4.log`、`verify_backup.log`、`verify_ops.log`；
 - `TMPDIR` 被指向 `.e2e-logs/`，脚本异常中止时残留的 `leadstack*.log` 也留在那里，便于取证；
 - 某个脚本**不存在**时只打印提示并跳过（不算失败），脚本落地后自动纳入，无需改 Makefile；
-- 已存在的脚本一旦失败立即停止（不再跑后续脚本）并让 `make` 失败 —— 先用 `[1/6]`…`[6/6]` 定位到哪一档挂了；
-- 脚本按 `PORT` 环境变量选端口（`verify_m0` 默认 18777、`verify_m1` 默认 18788，M2/M3/M4/backup 见各自脚本），
+- 已存在的脚本一旦失败立即停止（不再跑后续脚本）并让 `make` 失败 —— 先用 `[1/7]`…`[7/7]` 定位到哪一档挂了；
+- 脚本按 `PORT` 环境变量选端口（`verify_m0` 默认 18777、`verify_m1` 默认 18788，M2/M3/M4/backup/ops 见各自脚本），
   与日常 `make run` 的 8080 不冲突；同时跑多套时用 `PORT=18801 make test-e2e` 之类错开。
 
-### 六个验收脚本分别验什么、大概多久
+### 七个验收脚本分别验什么、大概多久
 
 | 脚本 | 覆盖范围 | 典型耗时（本机 M1 Max） |
 |---|---|---|
@@ -87,9 +87,10 @@ make test-e2e   # 等价于 make e2e
 | `verify_m3.sh` | 告警渠道（webhook 真实收到通知、密钥不回显）、check/metric 规则触发、ack/resolved、去重与静默、`/alerts/summary` | **约 100–180 秒**（含 `for_duration` 与周期评估等待，脚本会把评估间隔压到几秒） |
 | `verify_m4.sh` | 应用/模板/制品、真实发布到 devssh 并校验产物落盘与 sha256、日志增量拉取、失败不改 `current`、回滚、并发批量、模板安全、重试、401/409 | **约 120–200 秒**（含发布轮询与回滚各一轮；SSH 通道由 devssh 承担） |
 | `verify_backup.sh` | 归档格式/加密（搜不到明文与主密钥）、列表/下载/校验、篡改与错误口令、CLI 离线恢复 + `pre-restore`、API 暂存恢复需重启、定时备份与保留策略、401/路径穿越 | **约 150–240 秒**（含两轮重启 + 定时备份等待若干轮；会自建数据目录，不碰 `./data`） |
+| `verify_ops.sh` | 审计/RBAC/API Token/分页/批量导入、Web 终端、文件上传下载、定时任务、日志/进程/端口、Agent 升级、前端 i18n 与主题 | **约 200–300 秒**（终端/文件/升级都走 devssh 真连接；前端用例耗时取决于页面加载） |
 
-`make test-e2e` 全绿时总计约 **10–15 分钟**（脚本缺失会被跳过，相应更快）。
-CI 上 M0/M1/M2/M3 为阻塞项，M4 与备份验收在稳定前为 `continue-on-error`；任一项失败都会把 `.e2e-logs/` 作为 artifact 上传。
+`make test-e2e` 全绿时总计约 **12–18 分钟**（脚本缺失会被跳过，相应更快）。
+CI 上 M0/M1/M2/M3 为阻塞项，M4、备份与运维验收在稳定前为 `continue-on-error`；任一项失败都会把 `.e2e-logs/` 作为 artifact 上传。
 
 单独跑某一个脚本：
 
@@ -100,6 +101,7 @@ PORT=19003 bash scripts/verify_m2.sh
 PORT=19004 bash scripts/verify_m3.sh
 PORT=19005 bash scripts/verify_m4.sh
 PORT=19006 bash scripts/verify_backup.sh
+PORT=19007 bash scripts/verify_ops.sh
 ```
 
 ### M3 告警相关环境变量
@@ -283,6 +285,59 @@ docker compose -f deploy/docker-compose.yml start leadstack
 | `LEADSTACK_BACKUP_PASSPHRASE` | 空 | 口令（优先于 `<data_dir>/backup.pass`）。容器部署建议用 secret/env_file 注入，别写进 compose 明文 |
 
 默认值以 `internal/config` 实现为准。
+
+## 运维能力部署注意事项（M5/M6）
+
+这一批能力（Web 终端、文件管理、定时任务、日志/进程/端口、Agent 升级、审计、用户与 RBAC）都会在**目标机**上执行命令，
+部署前请确认目标机的前置条件。
+
+### 新增环境变量
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `LEADSTACK_TERMINAL_ENABLED` | `false` | Web SSH 终端总开关。**默认关闭**；关闭时终端端点直接 403。生产建议按需临时打开，用完再关。 |
+| `LEADSTACK_CRON_TICK` | `1m` | 定时任务引擎的检查间隔（Go duration）。默认每分钟检查一次；验收脚本会压到 `1s`。调太小会频繁扫描任务表。 |
+| `LEADSTACK_AUDIT_RETENTION_DAYS` | `180` | 审计日志保留天数，随后台清扫循环清理。审计量约等于「写操作次数」，可按机房规模估算磁盘。 |
+
+### Web 终端
+
+- 目标机必须有**可用的 shell**：ssh 模式要求 sshd 允许 PTY 且该用户有登录 shell（`/bin/sh`、`/bin/bash`、`/bin/zsh` 均可）；
+  agent 模式由 agent 用 PTY 起 shell，要求 agent 进程有权限 fork（agent 默认以 root 运行）。
+- 精简容器/最小镜像常见问题：没有 `/bin/sh` → 终端直接失败；没有 `sftp-server` → 文件管理失败（见下）。
+- 会话用**一次性 ticket**（60 秒有效）换 WS，避免把 JWT 放进 URL/日志；30 分钟无操作自动断开。
+- 审计记录 `terminal.open` / `terminal.close`（含 server_id、操作者、时长）。
+
+### 文件上传/下载
+
+- ssh 模式走 **SFTP**：目标机需要 `sftp-server`（OpenSSH 默认自带；Alpine 等精简镜像可能缺失，缺失时改用 agent 模式）。
+- agent 模式走 `job.exec` + base64 分块，**单文件上限 8 MiB**，超出直接报错。
+- 路径校验拒绝 `..` 穿越出用户指定根；上传/下载/删除都会写审计。
+
+### 定时任务（cron）
+
+- 5 字段 cron（分 时 日 月 周），支持 `*` `,` `-` `*/n`；解析失败返回 400 并给出人话错误。
+- 命令在目标机上以**当前用户权限**执行：agent 模式默认是 root，SSH 模式是凭证里的用户。
+  也就是说「能建定时任务 = 能在目标机执行任意命令」，请按 RBAC 收紧（operator 及以上）。
+- `scheduled_task_runs` 保留 30 天；单任务并发默认 4。
+
+### 日志 / 进程 / 端口视图
+
+- 依赖目标机有 `tail`、`ps`、`ss`（macOS 无 `ss`，回退 `lsof -i`）。精简容器缺这些命令时该视图会返回空/报错。
+- 单次输出上限 256 KB；`grep` 在服务端过滤，不会把全量日志拉回控制端。
+
+### Agent 自升级
+
+- 目标程序需要能**写自身所在目录**（A/B 双文件替换，避免覆盖正在运行的可执行文件）；失败保留旧版本并回报原因。
+- 下载 URL 必须目标机可达且 sha256 匹配；批量升级按「当前版本筛选」，请先小范围灰度。
+- 升级后由 systemd / launchd 负责重启（模板里的 `Restart=always` / `KeepAlive` 已配好）。
+
+### 审计、用户与 RBAC
+
+- 角色三档：`admin` / `operator` / `viewer`。viewer 执行写操作返回 403；operator 不能管理用户；**禁止删除最后一个 admin**。
+- 审计记录写操作的 `action` / `actor` / `IP` / 状态码，响应中**不含**明文密码或密钥；保留期见 `LEADSTACK_AUDIT_RETENTION_DAYS`。
+- API Token（`lsk_...`）：明文**只在创建响应返回一次**，库里只存 sha256；撤销后立即 401，`last_used_at` 会更新。
+- 批量导入：每行 `host[:port]`，`#` 开头与空行忽略，按 `host:port` 去重，单次上限 500 行。
+- 分页：显式传 `limit`（1–500）时返回 `page.{next_cursor,has_more}`；不传 `limit` 仍是数组（兼容旧前端与验收脚本）。
 
 ### `bin/leadstack-devssh` 是什么
 

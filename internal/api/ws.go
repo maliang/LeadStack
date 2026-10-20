@@ -310,8 +310,15 @@ func (a *API) dispatchAgentFrame(ctx context.Context, ac *agentConn, tok *store.
 			a.logger.Warn("处理任务帧失败", "type", env.Type, "server_id", ac.getServerID(), "err", err)
 		}
 	case protocol.TypeTermData:
-		// 终端是 M3 之后的能力，收到即忽略（契约要求未识别类型不得断开连接）。
-		a.logger.Debug("暂不处理终端帧", "type", env.Type, "server_id", ac.getServerID())
+		// 终端输出：按 session_id 转发给对应的 Web 终端。
+		var data protocol.TermData
+		if len(env.Payload) > 0 {
+			if uerr := json.Unmarshal(env.Payload, &data); uerr != nil {
+				a.logger.Debug("解析 term.data 失败", "err", uerr)
+				break
+			}
+		}
+		a.routeAgentTermData(data.SessionID, data.B64)
 	default:
 		a.logger.Debug("忽略未识别的消息类型", "type", env.Type, "server_id", ac.getServerID())
 	}

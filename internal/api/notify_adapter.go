@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/maliang/leadstack/internal/alerting"
 	"github.com/maliang/leadstack/internal/notify"
@@ -49,4 +50,17 @@ func (a *NotifyAdapter) Validate(_ context.Context, kind string, config map[stri
 // Send 发送一条通知。
 func (a *NotifyAdapter) Send(ctx context.Context, ch notify.Channel, msg notify.Message) error {
 	return a.client.Send(ctx, ch, msg)
+}
+
+// classifySendError 把发送错误整理成「[分类] 原因」写进 alert_channels.last_error，
+// 便于用户区分「token 配错」和「网络不通」。
+//
+// 分类来自 internal/notify 的结构化错误（config/dns/connect/tls/timeout/auth/http/server/provider）。
+func classifySendError(text string, err error) string {
+	if err != nil {
+		if se, ok := notify.AsSendError(err); ok {
+			return fmt.Sprintf("[%s] %s", se.Kind, se.Error())
+		}
+	}
+	return text
 }

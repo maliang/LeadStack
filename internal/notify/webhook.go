@@ -58,8 +58,8 @@ func validateWebhook(ch Channel) error {
 	return nil
 }
 
-// sendWebhook 发送通用 webhook：默认 POST，支持自定义 method/headers 与 json/text 模板。
-func (c *Client) sendWebhook(ctx context.Context, ch Channel, msg Message) error {
+// buildWebhook 构造通用 webhook 请求：默认 POST，支持自定义 method/headers 与 json/text 模板。
+func (c *Client) buildWebhook(ch Channel, msg Message) (httpRequest, error) {
 	rawURL, _, _ := cfgString(ch.Config, "url")
 	method, ok, _ := cfgString(ch.Config, "method")
 	if !ok {
@@ -89,7 +89,7 @@ func (c *Client) sendWebhook(ctx context.Context, ch Channel, msg Message) error
 	} else {
 		body, err = renderJSON(msg)
 		if err != nil {
-			return err
+			return httpRequest{}, newSendError(ch.Kind, ErrorKindInternal, 0, "", err.Error(), "")
 		}
 	}
 	if method == http.MethodGet {
@@ -101,12 +101,21 @@ func (c *Client) sendWebhook(ctx context.Context, ch Channel, msg Message) error
 			"status":   statusValue(msg.Recovered),
 		})
 		if err != nil {
-			return err
+			return httpRequest{}, newSendError(ch.Kind, ErrorKindConfig, 0, "", err.Error(), "")
 		}
 		body = nil
 	}
 	scr.addURL(target)
-	_, err = c.do(ctx, method, target, headers, body, timeout, scr, "webhook")
+	return httpRequest{method: method, url: target, headers: headers, body: body, timeout: timeout, scr: scr}, nil
+}
+
+// sendWebhook 发送通用 webhook。
+func (c *Client) sendWebhook(ctx context.Context, ch Channel, msg Message) error {
+	req, err := c.buildWebhook(ch, msg)
+	if err != nil {
+		return err
+	}
+	_, err = c.deliver(ctx, ch.Kind, req)
 	return err
 }
 

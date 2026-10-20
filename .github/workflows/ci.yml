@@ -4,7 +4,9 @@
 #                 + 脚本语法/干跑校验 + make build + make devssh
 #                 -> M0/M1/M2/M3 端到端验收（阻塞）+ M4 端到端验收（稳定前允许失败）
 #                 -> 备份/恢复验收（稳定前允许失败）
+#                 -> 运维验收 verify_ops.sh（M5/M6 能力，稳定前允许失败）
 #                 -> docker 构建（前端工程就绪后）
+#                 -> goreleaser 快照构建（验证发布配置与 5 平台 × 2 二进制）
 #   tag v*     -> 上面的检查全绿后，用 goreleaser 交叉编译 5 个目标并发布 Release
 #
 # 两道硬闸门（M3 新增）：
@@ -208,10 +210,32 @@ jobs:
           TMPDIR="$PWD/.e2e-logs" bash scripts/verify_backup.sh 2>&1 | tee .e2e-logs/verify_backup.log
           exit "${PIPESTATUS[0]}"
 
+      - name: M5/M6 运维能力验收（terminal/文件/cron/审计/RBAC，稳定前允许失败）
+        id: e2e_ops
+        continue-on-error: true
+        # verify_ops.sh 会跑真实终端 WS、文件落盘、cron tick 与 agent 升级，比其它脚本慢得多
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          mkdir -p .e2e-logs
+          if [ ! -f scripts/verify_ops.sh ]; then
+            echo "scripts/verify_ops.sh 尚未就绪，跳过运维验收"
+            exit 0
+          fi
+          # verify_ops.sh 用 python3 实现最小 WebSocket 客户端；runner 自带，缺失则兜底安装
+          if ! command -v python3 >/dev/null 2>&1; then
+            echo "python3 缺失，安装中…"
+            sudo apt-get update && sudo apt-get install -y python3
+          fi
+          python3 --version
+          # verify_ops.sh 会自建数据目录、起停控制端并驱动 devssh，日志同样落 .e2e-logs/
+          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_ops.sh 2>&1 | tee .e2e-logs/verify_ops.log
+          exit "${PIPESTATUS[0]}"
+
       - name: 上传 e2e 日志（任一 e2e 失败时）
         # 注意：continue-on-error 的步骤不会让 job 变成 failure，
-        # 所以必须用 steps.<id>.outcome 兜住 M4 与备份验收，否则它们的日志会丢。
-        if: failure() || steps.e2e_m4.outcome == 'failure' || steps.e2e_backup.outcome == 'failure'
+        # 所以必须用 steps.<id>.outcome 兜住 M4 / 备份 / 运维验收，否则它们的日志会丢。
+        if: failure() || steps.e2e_m4.outcome == 'failure' || steps.e2e_backup.outcome == 'failure' || steps.e2e_ops.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: e2e-logs-${{ github.sha }}
@@ -248,7 +272,76 @@ jobs:
         run: docker build -t leadstack:ci .
 
   # ---------------------------------------------------------------------------
-  # 3) tag 发布：goreleaser 交叉编译 + GitHub Release
+  # 3) 发布配置验证：goreleaser 快照构建（PR 上就暴露 .goreleaser.yaml 问题）
+  # ---------------------------------------------------------------------------
+  release-snapshot:
+    name: goreleaser 快照构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: 前端构建（UI 内嵌前置；失败归属前端，不算发布配置问题）
+        # 单独成步：前端 tsc/vite 挂掉时，失败结论清楚写在「前端构建」这一步，
+        # 不会和「goreleaser 配置/交叉编译」的失败混在一起。
+        id: web_build
+        run: make web-embed
+
+      - name: goreleaser 配置校验
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
+      # before.hooks 仍会跑 `make web-embed`（幂等，约 2–3 秒）：
+      # 保留它是为了和 `make release-snapshot` / 正式发布完全同一条路径。
+      - name: goreleaser build --snapshot --clean
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: build --snapshot --clean
+
+      - name: 断言 5 平台 × 2 二进制（且不含 DEV-ONLY devssh）
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "dist 中的可执行产物："
+          find dist -type f \( -name 'leadstack' -o -name 'leadstack-agent' \
+            -o -name 'leadstack.exe' -o -name 'leadstack-agent.exe' \) | sort
+          count="$(find dist -type f \( -name 'leadstack' -o -name 'leadstack-agent' \
+            -o -name 'leadstack.exe' -o -name 'leadstack-agent.exe' \) | wc -l | tr -d ' ')"
+          echo "二进制数量：${count}（期望 10）"
+          if [ "${count}" != "10" ]; then
+            echo "::error::goreleaser 产物数量异常：${count} != 10"
+            exit 1
+          fi
+          if find dist -type f -name '*devssh*' | grep -q .; then
+            echo "::error::DEV-ONLY devssh 出现在发布产物中"
+            exit 1
+          fi
+          echo "断言通过：10 个发布二进制，且无 devssh"
+
+  # ---------------------------------------------------------------------------
+  # 4) tag 发布：goreleaser 交叉编译 + GitHub Release
   # ---------------------------------------------------------------------------
   release:
     name: goreleaser release

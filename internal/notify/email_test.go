@@ -12,9 +12,17 @@ import (
 )
 
 // fakeSMTP 是一个只服务于测试的最小 SMTP 服务端：读对话、记录 MAIL FROM/RCPT TO/DATA。
+// fakeSMTPConfig 用于定制假 SMTP 服务端的行为。
+type fakeSMTPConfig struct {
+	advertiseStartTLS bool
+	// mailFromReply 非空时用它代替默认的 250 响应（用于测试服务商拒绝）。
+	mailFromReply string
+}
+
 type fakeSMTP struct {
 	ln                net.Listener
 	advertiseStartTLS bool
+	mailFromReply     string
 
 	mu         sync.Mutex
 	transcript []string
@@ -24,12 +32,17 @@ type fakeSMTP struct {
 }
 
 func startFakeSMTP(t *testing.T, advertiseStartTLS bool) *fakeSMTP {
+	return startFakeSMTPWith(t, fakeSMTPConfig{advertiseStartTLS: advertiseStartTLS})
+}
+
+// startFakeSMTPWith 允许定制 SMTP 行为（例如让 MAIL FROM 被服务商拒绝）。
+func startFakeSMTPWith(t *testing.T, cfg fakeSMTPConfig) *fakeSMTP {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("监听失败: %v", err)
 	}
-	f := &fakeSMTP{ln: ln, advertiseStartTLS: advertiseStartTLS}
+	f := &fakeSMTP{ln: ln, advertiseStartTLS: cfg.advertiseStartTLS, mailFromReply: cfg.mailFromReply}
 	go f.serve()
 	t.Cleanup(func() { _ = ln.Close() })
 	return f
@@ -96,8 +109,12 @@ func (f *fakeSMTP) serve() {
 		case strings.HasPrefix(upper, "MAIL FROM"):
 			f.mu.Lock()
 			f.mailFrom = line
+			reply := f.mailFromReply
 			f.mu.Unlock()
-			send("250 2.1.0 Ok")
+			if reply == "" {
+				reply = "250 2.1.0 Ok"
+			}
+			send(reply)
 		case strings.HasPrefix(upper, "RCPT TO"):
 			f.mu.Lock()
 			f.rcpts = append(f.rcpts, line)

@@ -2,6 +2,7 @@ import type { CheckResult } from '../lib/api'
 import { cn } from '../lib/cn'
 import { formatDateTime, formatLatency } from '../lib/format'
 import { SpinnerIcon } from './Icons'
+import { t } from '../i18n'
 
 interface CheckTimelineProps {
   results: CheckResult[]
@@ -13,7 +14,7 @@ interface CheckTimelineProps {
 
 function resultTitle(result: CheckResult, serverName?: (serverId: string) => string): string {
   const parts = [formatDateTime(result.ts)]
-  parts.push(result.ok ? '成功' : '失败')
+  parts.push(result.ok ? t('s.0300') : t('s.0301'))
   if (result.latency_ms !== null) parts.push(formatLatency(result.latency_ms))
   if (result.status_code !== null) parts.push(`HTTP ${result.status_code}`)
   const name = result.server_name ?? (result.server_id && serverName ? serverName(result.server_id) : null)
@@ -31,7 +32,7 @@ export function CheckTimeline({ results, loading = false, limit = 100, serverNam
     return (
       <div className="flex h-6 items-center gap-2 text-xs text-slate-400 dark:text-slate-500">
         <SpinnerIcon className="h-3.5 w-3.5" />
-        正在加载结果…
+        {t('s.0381')}
       </div>
     )
   }
@@ -39,7 +40,7 @@ export function CheckTimeline({ results, loading = false, limit = 100, serverNam
   if (results.length === 0) {
     return (
       <div className="flex h-6 items-center rounded border border-dashed border-slate-200 px-2 text-xs text-slate-400 dark:border-slate-800 dark:text-slate-500">
-        暂无结果，等待首次执行
+        {t('s.0382')}
       </div>
     )
   }
@@ -62,7 +63,7 @@ export function CheckTimeline({ results, loading = false, limit = 100, serverNam
         ))}
       </div>
       <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
-        最近 {shown.length} 条（左侧最早，右侧最新）· 失败 {failed} 条
+        {t('s.0383')} {shown.length} {t('s.0384')} {failed} {t('s.0385')}
       </p>
     </div>
   )

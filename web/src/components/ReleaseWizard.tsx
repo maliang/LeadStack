@@ -17,12 +17,13 @@ import { ModeBadge } from './StatusBadge'
 import { Modal } from './Modal'
 import { useToast } from './Toast'
 
+import { t } from '../i18n'
 const inputClass =
   'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100'
 
 const labelClass = 'block text-sm font-medium text-slate-700 dark:text-slate-200'
 
-const STEPS = ['基本信息', '制品', '目标服务器', '确认发布'] as const
+const STEPS = [t('s.0441'), t('s.0442'), t('s.0443'), t('s.0444')] as const
 
 interface ReleaseWizardProps {
   open: boolean
@@ -123,14 +124,14 @@ export function ReleaseWizard({
             ? await api.registerUrlArtifact(artifactUrl.trim(), artifactSha.trim())
             : null
       if (!created) {
-        setError(artifactMode === 'upload' ? '请选择要上传的制品文件' : '请填写制品 URL')
+        setError(artifactMode === 'upload' ? t('s.0445') : t('s.0446'))
         return null
       }
       setArtifact(created)
-      toast(`制品已就绪${created.sha256 ? ` · sha256 ${created.sha256.slice(0, 12)}…` : ''}`, 'success')
+      toast(t('s.0447', { '0': created.sha256 ? ` · sha256 ${created.sha256.slice(0, 12)}…` : '' }), 'success')
       return created
     } catch (caught) {
-      setError(errorMessage(caught, '制品准备失败'))
+      setError(errorMessage(caught, t('s.0448')))
       return null
     } finally {
       setUploading(false)
@@ -141,15 +142,15 @@ export function ReleaseWizard({
     setError(null)
     if (step === 0) {
       if (!appId) {
-        setError('请选择应用；还没有应用请先在应用页创建')
+        setError(t('s.0449'))
         return
       }
       if (!templateId) {
-        setError('请选择模板；还没有模板请先在模板标签页创建')
+        setError(t('s.0450'))
         return
       }
       if (!/^[A-Za-z0-9._-]{1,64}$/.test(version.trim())) {
-        setError('版本号只能包含字母、数字、点、下划线、短横线，长度 1-64')
+        setError(t('s.0451'))
         return
       }
       setStep(1)
@@ -157,7 +158,7 @@ export function ReleaseWizard({
     }
     if (step === 1) {
       if (artifactMode === 'url' && !/^[0-9a-fA-F]{64}$/.test(artifactSha.trim())) {
-        setError('URL 制品必须填写 64 位十六进制 sha256（可用 shasum -a 256 <文件> 计算）')
+        setError(t('s.0452'))
         return
       }
       const prepared = artifact ? artifact : await prepareArtifact()
@@ -167,7 +168,7 @@ export function ReleaseWizard({
     }
     if (step === 2) {
       if (selected.size === 0) {
-        setError('请至少选择一台目标服务器')
+        setError(t('s.0453'))
         return
       }
       setStep(3)
@@ -176,7 +177,7 @@ export function ReleaseWizard({
 
   const handleSubmit = async () => {
     if (!app || !template || !artifact) {
-      setError('发布信息不完整，请返回上一步检查')
+      setError(t('s.0454'))
       return
     }
     setSubmitting(true)
@@ -190,11 +191,11 @@ export function ReleaseWizard({
         server_ids: [...selected],
         concurrency: Number(concurrency) || 4,
       })
-      toast(`发布 ${app.name} v${version.trim()} 已创建，正在执行`, 'success')
+      toast(t('s.0455', { '0': app.name, '1': version.trim() }), 'success')
       onCreated(response.release)
       onClose()
     } catch (caught) {
-      setError(errorMessage(caught, '创建发布失败'))
+      setError(errorMessage(caught, t('s.0456')))
     } finally {
       setSubmitting(false)
     }
@@ -203,15 +204,15 @@ export function ReleaseWizard({
   const footer = (
     <>
       <Button variant="secondary" onClick={step === 0 ? onClose : () => setStep(step - 1)} disabled={submitting}>
-        {step === 0 ? '取消' : '上一步'}
+        {step === 0 ? t('s.0024') : t('s.0027')}
       </Button>
       {step < STEPS.length - 1 ? (
         <Button onClick={() => void goNext()} loading={uploading}>
-          {step === 1 ? '准备制品并继续' : '下一步'}
+          {step === 1 ? t('s.0457') : t('s.0458')}
         </Button>
       ) : (
         <Button onClick={() => void handleSubmit()} loading={submitting}>
-          确认发布
+          {t('s.0444')}
         </Button>
       )}
     </>
@@ -221,8 +222,8 @@ export function ReleaseWizard({
     <Modal
       open={open}
       onClose={onClose}
-      title="发起发布"
-      description="选择应用与模板、准备制品、挑选目标服务器；创建后立即跳转发布详情页并可实时看日志。"
+      title={t('s.0459')}
+      description={t('s.0460')}
       size="lg"
       footer={footer}
     >
@@ -248,7 +249,7 @@ export function ReleaseWizard({
         <div className="space-y-4">
           <div>
             <label htmlFor="release-app" className={labelClass}>
-              应用
+              {t('s.0461')}
             </label>
             <select
               id="release-app"
@@ -256,7 +257,7 @@ export function ReleaseWizard({
               onChange={(event) => setAppId(event.target.value)}
               className={inputClass + ' mt-1.5'}
             >
-              <option value="">请选择应用</option>
+              <option value="">{t('s.0462')}</option>
               {apps.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}（{item.slug}）
@@ -265,13 +266,13 @@ export function ReleaseWizard({
             </select>
             {apps.length === 0 ? (
               <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                还没有应用，请先在应用页创建。
+                {t('s.0463')}
               </p>
             ) : null}
           </div>
           <div>
             <label htmlFor="release-template" className={labelClass}>
-              部署模板
+              {t('s.0464')}
             </label>
             <select
               id="release-template"
@@ -279,7 +280,7 @@ export function ReleaseWizard({
               onChange={(event) => setTemplateId(event.target.value)}
               className={inputClass + ' mt-1.5'}
             >
-              <option value="">请选择模板</option>
+              <option value="">{t('s.0465')}</option>
               {templates.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}（{item.kind}）
@@ -289,20 +290,20 @@ export function ReleaseWizard({
             {template ? (
               <p className="mt-1.5 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                 <TemplateKindBadge kind={template.kind} />
-                发布时会冻结该模板快照，之后改模板不影响本次发布。
+                {t('s.0466')}
               </p>
             ) : null}
           </div>
           <div>
             <label htmlFor="release-version" className={labelClass}>
-              版本号
+              {t('s.0467')}
             </label>
             <input
               id="release-version"
               value={version}
               onChange={(event) => setVersion(event.target.value)}
               maxLength={64}
-              placeholder="例如：1.4.2 或 2026.10.19-a1b2c3"
+              placeholder={t('s.0468')}
               className={inputClass + ' mt-1.5 font-mono text-xs'}
             />
           </div>
@@ -314,8 +315,8 @@ export function ReleaseWizard({
           <div className="flex gap-2">
             {(
               [
-                { value: 'url' as const, label: 'URL 制品' },
-                { value: 'upload' as const, label: '上传文件' },
+                { value: 'url' as const, label: t('s.0469') },
+                { value: 'upload' as const, label: t('s.0408') },
               ]
             ).map((option) => (
               <button
@@ -341,7 +342,7 @@ export function ReleaseWizard({
           {artifactMode === 'url' ? (
             <div>
               <label htmlFor="artifact-url" className={labelClass}>
-                制品下载地址
+                {t('s.0470')}
               </label>
               <input
                 id="artifact-url"
@@ -355,7 +356,7 @@ export function ReleaseWizard({
               />
               <div className="mt-3">
                 <label htmlFor="artifact-sha256" className={labelClass}>
-                  制品 SHA256
+                  {t('s.0471')}
                   <span className="ml-1 text-rose-500">*</span>
                 </label>
                 <input
@@ -365,21 +366,21 @@ export function ReleaseWizard({
                     setArtifactSha(event.target.value)
                     setArtifact(null)
                   }}
-                  placeholder="64 位十六进制，例如 e3b0c442…（macOS: shasum -a 256 <文件>；Linux: sha256sum <文件>）"
+                  placeholder={t('s.0472')}
                   className={inputClass + ' mt-1.5 font-mono text-xs'}
                 />
                 <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                  目标机下载后用它在模板里校验（{'{{ARTIFACT_SHA256}}'}）；校验不通过不会切换 current，回滚才有保障，因此后端强制要求。
+                  {t('s.0473')}{'{{ARTIFACT_SHA256}}'}{t('s.0474')}
                 </p>
               </div>
               <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                目标机部署时从这里下载；模板里用 {'{{ARTIFACT_URL}}'} 与 {'{{ARTIFACT_SHA256}}'}。
+                {t('s.0475')} {'{{ARTIFACT_URL}}'} {t('s.0476')} {'{{ARTIFACT_SHA256}}'}。
               </p>
             </div>
           ) : (
             <div>
               <label htmlFor="artifact-file" className={labelClass}>
-                上传制品文件
+                {t('s.0477')}
               </label>
               <input
                 id="artifact-file"
@@ -391,7 +392,7 @@ export function ReleaseWizard({
                 className="mt-1.5 block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 dark:text-slate-300 dark:file:bg-indigo-500/10 dark:file:text-indigo-300"
               />
               <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                上传后控制端会计算 sha256，并生成可下载地址供目标机拉取。
+                {t('s.0478')}
               </p>
             </div>
           )}
@@ -411,9 +412,9 @@ export function ReleaseWizard({
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className={labelClass}>
-              目标服务器
+              {t('s.0443')}
               <span className="ml-1.5 font-normal text-slate-400">
-                已选 {selected.size} / {servers.length}
+                {t('s.0208')} {selected.size} / {servers.length}
               </span>
             </span>
             <div className="flex items-center gap-2">
@@ -428,14 +429,14 @@ export function ReleaseWizard({
                 }
                 className="text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
               >
-                全选当前筛选（{filteredServers.length}）
+                {t('s.0373')}{filteredServers.length}）
               </button>
               <button
                 type="button"
                 onClick={() => setSelected(new Set())}
                 className="text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400"
               >
-                清空
+                {t('s.0210')}
               </button>
             </div>
           </div>
@@ -444,16 +445,16 @@ export function ReleaseWizard({
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索名称 / 主机 / 标签"
+              placeholder={t('s.0214')}
               className={inputClass + ' sm:col-span-2'}
             />
             <select
-              aria-label="按分组筛选目标服务器"
+              aria-label={t('s.0479')}
               value={pickerGroup}
               onChange={(event) => setPickerGroup(event.target.value)}
               className={inputClass}
             >
-              <option value="">全部分组</option>
+              <option value="">{t('s.0376')}</option>
               {groups.map((group) => (
                 <option key={group.name} value={group.name}>
                   {group.name}（{group.count}）
@@ -461,12 +462,12 @@ export function ReleaseWizard({
               ))}
             </select>
             <select
-              aria-label="按标签筛选目标服务器"
+              aria-label={t('s.0480')}
               value={pickerTag}
               onChange={(event) => setPickerTag(event.target.value)}
               className={inputClass}
             >
-              <option value="">全部标签</option>
+              <option value="">{t('s.0378')}</option>
               {tagOptions.map((tag) => (
                 <option key={tag} value={tag}>
                   {tag}
@@ -478,7 +479,7 @@ export function ReleaseWizard({
           <div className="max-h-56 overflow-y-auto rounded-md border border-slate-100 dark:border-slate-800/70">
             {filteredServers.length === 0 ? (
               <p className="px-3 py-4 text-center text-xs text-slate-400 dark:text-slate-500">
-                当前筛选条件下没有服务器
+                {t('s.0380')}
               </p>
             ) : (
               filteredServers.map((server) => (
@@ -516,7 +517,7 @@ export function ReleaseWizard({
 
           <div className="flex items-center gap-3">
             <label htmlFor="release-concurrency" className="text-sm text-slate-600 dark:text-slate-300">
-              并发数
+              {t('s.0481')}
             </label>
             <input
               id="release-concurrency"
@@ -526,7 +527,7 @@ export function ReleaseWizard({
               className={cn(inputClass, 'w-24')}
             />
             <span className="text-xs text-slate-400 dark:text-slate-500">
-              同时执行的服务器数量，机器多时建议 4-8，避免压满带宽
+              {t('s.0482')}
             </span>
           </div>
         </div>
@@ -535,37 +536,37 @@ export function ReleaseWizard({
       {step === 3 ? (
         <dl className="space-y-2 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800">
           <div className="flex justify-between gap-3">
-            <dt className="text-slate-500 dark:text-slate-400">应用</dt>
+            <dt className="text-slate-500 dark:text-slate-400">{t('s.0461')}</dt>
             <dd className="text-slate-800 dark:text-slate-100">
               {app ? `${app.name}（${app.slug}）` : '—'}
             </dd>
           </div>
           <div className="flex justify-between gap-3">
-            <dt className="text-slate-500 dark:text-slate-400">模板</dt>
+            <dt className="text-slate-500 dark:text-slate-400">{t('s.0483')}</dt>
             <dd className="flex items-center gap-2 text-slate-800 dark:text-slate-100">
               {template?.name ?? '—'} {template ? <TemplateKindBadge kind={template.kind} /> : null}
             </dd>
           </div>
           <div className="flex justify-between gap-3">
-            <dt className="text-slate-500 dark:text-slate-400">版本</dt>
+            <dt className="text-slate-500 dark:text-slate-400">{t('s.0484')}</dt>
             <dd className="font-mono text-slate-800 dark:text-slate-100">{version || '—'}</dd>
           </div>
           <div className="flex justify-between gap-3">
-            <dt className="text-slate-500 dark:text-slate-400">制品</dt>
+            <dt className="text-slate-500 dark:text-slate-400">{t('s.0442')}</dt>
             <dd className="flex items-center gap-2 truncate font-mono text-xs text-slate-800 dark:text-slate-100">
               {artifact ? artifact.location : '—'}
             </dd>
           </div>
           <div className="flex justify-between gap-3">
-            <dt className="text-slate-500 dark:text-slate-400">目标服务器</dt>
-            <dd className="text-slate-800 dark:text-slate-100">{selected.size} 台</dd>
+            <dt className="text-slate-500 dark:text-slate-400">{t('s.0443')}</dt>
+            <dd className="text-slate-800 dark:text-slate-100">{selected.size} {t('s.0280')}</dd>
           </div>
           <div className="flex justify-between gap-3">
-            <dt className="text-slate-500 dark:text-slate-400">并发</dt>
+            <dt className="text-slate-500 dark:text-slate-400">{t('s.0485')}</dt>
             <dd className="text-slate-800 dark:text-slate-100">{concurrency}</dd>
           </div>
           <p className="pt-1 text-xs text-slate-400 dark:text-slate-500">
-            发布会在每台机器执行模板步骤（严格串行、失败自动回滚）；创建后可立即在详情页看实时日志。
+            {t('s.0486')}
           </p>
         </dl>
       ) : null}

@@ -26,7 +26,9 @@ import (
 	"github.com/maliang/leadstack/internal/credential"
 	"github.com/maliang/leadstack/internal/jobs"
 	"github.com/maliang/leadstack/internal/notify"
+	"github.com/maliang/leadstack/internal/sshx"
 	"github.com/maliang/leadstack/internal/store"
+	"github.com/maliang/leadstack/internal/term"
 )
 
 // 构建信息，由 Makefile/-ldflags 注入。
@@ -43,6 +45,15 @@ const adminUsername = "admin"
 const sweepInterval = 5 * time.Second
 
 func main() {
+	// --version：只打印后退出，不启动服务、不初始化数据目录（Goreleaser 校验依赖）。
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version", "-version", "version":
+			fmt.Printf("leadstack %s (commit %s, built %s)\n", version, commit, date)
+			return
+		}
+	}
+
 	// 子命令分发：只认 os.Args[1] 的三个字面量，其余（含所有 -flag）保持原有「启动服务」行为。
 	if isSubcommand(os.Args[1:]) {
 		switch os.Args[1] {
@@ -166,6 +177,22 @@ func run() error {
 	}
 	routingExec := api.NewRoutingExecutor(st, dispatcher, sshExec, logger)
 
+	// M5：运维命令通道（日志/进程/端口/定时任务/agent 文件）复用同一个按 mode 路由的执行器。
+	var sftpFactory api.SFTPFactory
+	if sshExec != nil {
+		sftpFactory = sshExec
+	}
+	// M5：ssh 模式的终端会话（agent 模式由 api 内部经 WS 转发实现）。
+	termOpener, termErr := term.NewSSHOpener(term.SSHOpenerOptions{
+		Resolve: func(ctx context.Context, serverID string) (sshx.PTYOptions, error) {
+			return api.ResolveSSHPTYOptions(ctx, st, cipher, filepath.Join(cfg.DataDir, "known_hosts"), serverID)
+		},
+	})
+	if termErr != nil {
+		logger.Warn("SSH 终端通道初始化失败（终端功能将不可用）", "err", termErr)
+		termOpener = nil
+	}
+
 	// M3：通知客户端 → 渠道发送器 → 告警引擎 → 事件桥。
 	notifyClient := notify.NewClient(notify.Options{})
 	notifier := api.NewNotifyAdapter(notifyClient)
@@ -233,6 +260,9 @@ func run() error {
 		Hub:              hub,
 		Backups:          backupService,
 		MaxSchemaVersion: currentSchemaVersion,
+		RemoteExec:       routingExec,
+		SFTP:             sftpFactory,
+		TermOpener:       termOpener,
 		Alerts:           alertEngine,
 		Notifier:         notifier,
 		Deploy:           deployOrch,
@@ -260,6 +290,11 @@ func run() error {
 
 	// 把部署日志旁路接到 HubSender：agent 模式的 job.log 实时写入 release_logs。
 	srv.WireAgentLogTap(hubSender)
+
+	// 定时任务引擎（按 cron 触发，独立 goroutine）。
+	cronCtx, cancelCron := context.WithCancel(ctx)
+	defer cancelCron()
+	go srv.RunScheduledTaskEngine(cronCtx, cfg.CronTick)
 
 	// 定时备份循环（独立 goroutine，与清扫/告警解耦）。
 	backupCtx, cancelBackups := context.WithCancel(ctx)
@@ -303,6 +338,7 @@ func run() error {
 	cancelChecks()
 	cancelAlerts()
 	cancelBackups()
+	cancelCron()
 	// WebSocket 连接已被 hijack，http.Server.Shutdown 不会关闭它们，需要显式处理。
 	srv.Hub().CloseAll()
 

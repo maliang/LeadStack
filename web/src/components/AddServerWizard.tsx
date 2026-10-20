@@ -17,6 +17,7 @@ import { Modal } from './Modal'
 import { useToast } from './Toast'
 import { KeyIcon, ServerIcon } from './Icons'
 
+import { t } from '../i18n'
 type WizardMode = 'agent' | 'ssh'
 
 const inputClass =
@@ -25,21 +26,21 @@ const inputClass =
 const labelClass = 'block text-sm font-medium text-slate-700 dark:text-slate-200'
 
 const TTL_OPTIONS = [
-  { value: 3_600, label: '1 小时' },
-  { value: 86_400, label: '24 小时' },
-  { value: 604_800, label: '7 天' },
+  { value: 3_600, label: t('s.0001') },
+  { value: 86_400, label: t('s.0002') },
+  { value: 604_800, label: t('s.0003') },
 ]
 
 const HOST_KEY_POLICIES = [
-  { value: 'accept-new', label: 'accept-new（推荐）', hint: '首次连接记录主机密钥，之后不一致则拒绝' },
-  { value: 'strict', label: 'strict', hint: '只允许已记录过的主机密钥' },
-  { value: 'insecure', label: 'insecure', hint: '不校验主机密钥，仅用于临时排障' },
+  { value: 'accept-new', label: t('s.0004'), hint: t('s.0005') },
+  { value: 'strict', label: 'strict', hint: t('s.0006') },
+  { value: 'insecure', label: 'insecure', hint: t('s.0007') },
 ]
 
 const AGENT_STEPS = [
-  { title: '生成令牌', description: '一次性使用，过期自动失效' },
-  { title: '执行命令', description: '在目标服务器以 root 身份运行' },
-  { title: '等待上线', description: '10 秒内自动出现在服务器列表' },
+  { title: t('s.0008'), description: t('s.0009') },
+  { title: t('s.0010'), description: t('s.0011') },
+  { title: t('s.0012'), description: t('s.0013') },
 ]
 
 interface AddServerWizardProps {
@@ -136,7 +137,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
       setCommand(script.command)
     } catch (caught) {
       setCommand(null)
-      setCommandError(errorMessage(caught, '安装命令生成失败，请重试'))
+      setCommandError(errorMessage(caught, t('s.0014')))
     } finally {
       setCommandLoading(false)
     }
@@ -147,19 +148,19 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
     setAgentError(null)
     try {
       const created = await api.createEnrollToken({
-        note: note.trim() || '控制台接入',
+        note: note.trim() || t('s.0015'),
         ttl_s: ttl,
       })
       setToken(created)
       setChanged(true)
       if (created.token) {
-        toast('接入令牌已生成', 'success')
+        toast(t('s.0016'), 'success')
         await loadInstallScript(created.token)
       } else {
-        setAgentError('控制端未返回令牌明文，无法生成安装命令，请重新生成')
+        setAgentError(t('s.0017'))
       }
     } catch (caught) {
-      setAgentError(errorMessage(caught, '接入令牌生成失败'))
+      setAgentError(errorMessage(caught, t('s.0018')))
     } finally {
       setCreating(false)
     }
@@ -168,16 +169,16 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
   const handleCreateSshServer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!sshName.trim() || !sshHost.trim()) {
-      setSshError('请填写服务器名称与主机地址')
+      setSshError(t('s.0019'))
       return
     }
     if (!sshCredentialId) {
-      setSshError('请选择一份 SSH 凭证；没有凭证时请先新建')
+      setSshError(t('s.0020'))
       return
     }
     const port = Number(sshPort)
     if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-      setSshError('端口需为 1-65535 之间的整数')
+      setSshError(t('s.0021'))
       return
     }
     setSshSaving(true)
@@ -198,9 +199,9 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
       })
       setChanged(true)
       setCreatedServer(created)
-      toast(`服务器「${created.name}」已添加`, 'success')
+      toast(t('s.0022', { '0': created.name }), 'success')
     } catch (caught) {
-      setSshError(errorMessage(caught, '添加服务器失败'))
+      setSshError(errorMessage(caught, t('s.0023')))
     } finally {
       setSshSaving(false)
     }
@@ -209,7 +210,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
   const footer =
     mode === null ? (
       <Button variant="secondary" onClick={onClose}>
-        取消
+        {t('s.0024')}
       </Button>
     ) : mode === 'agent' ? (
       token ? (
@@ -223,29 +224,29 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
               setAgentError(null)
             }}
           >
-            重新生成
+            {t('s.0025')}
           </Button>
-          <Button onClick={handleClose}>完成</Button>
+          <Button onClick={handleClose}>{t('s.0026')}</Button>
         </>
       ) : (
         <>
           <Button variant="secondary" onClick={() => setMode(null)} disabled={creating}>
-            上一步
+            {t('s.0027')}
           </Button>
           <Button onClick={handleCreateToken} loading={creating}>
-            生成接入令牌
+            {t('s.0028')}
           </Button>
         </>
       )
     ) : createdServer ? (
-      <Button onClick={handleClose}>完成</Button>
+      <Button onClick={handleClose}>{t('s.0026')}</Button>
     ) : (
       <>
         <Button variant="secondary" onClick={() => setMode(null)} disabled={sshSaving}>
-          上一步
+          {t('s.0027')}
         </Button>
         <Button type="submit" form="ssh-server-form" loading={sshSaving}>
-          添加服务器
+          {t('s.0029')}
         </Button>
       </>
     )
@@ -255,13 +256,13 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
       <Modal
         open={open}
         onClose={handleClose}
-        title="添加服务器"
+        title={t('s.0029')}
         description={
           mode === null
-            ? '选择接入方式：Agent 常驻上报，或 SSH 免安装周期采集。'
+            ? t('s.0030')
             : mode === 'agent'
-              ? '生成一次性接入令牌，在目标机器执行安装命令即可完成接入。'
-              : '填写 SSH 连接信息，控制端将按周期免安装采集主机状态。'
+              ? t('s.0031')
+              : t('s.0032')
         }
         size="lg"
         footer={footer}
@@ -277,13 +278,13 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
                 <ServerIcon className="h-5 w-5" />
               </span>
               <span className="mt-3 block text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Agent 一键接入
+                {t('s.0033')}
               </span>
               <span className="mt-1 block text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                在目标机器执行一行安装命令。心跳 20 秒、指标 15 秒，支持远程执行与实时日志（后续版本）。
+                {t('s.0034')}
               </span>
               <span className="mt-2 inline-block rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
-                推荐
+                {t('s.0035')}
               </span>
             </button>
 
@@ -296,13 +297,13 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
                 <KeyIcon className="h-5 w-5" />
               </span>
               <span className="mt-3 block text-sm font-semibold text-slate-900 dark:text-slate-100">
-                SSH 免安装
+                {t('s.0036')}
               </span>
               <span className="mt-1 block text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                不装任何东西，控制端用凭证通过 SSH 周期采集主机信息与指标，适合托管环境。
+                {t('s.0037')}
               </span>
               <span className="mt-2 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                免安装
+                {t('s.0038')}
               </span>
             </button>
           </div>
@@ -331,20 +332,20 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label htmlFor="enroll-note" className={labelClass}>
-                    备注 <span className="font-normal text-slate-400">（可选）</span>
+                    {t('s.0039')} <span className="font-normal text-slate-400">{t('s.0040')}</span>
                   </label>
                   <input
                     id="enroll-note"
                     value={note}
                     onChange={(event) => setNote(event.target.value)}
                     maxLength={64}
-                    placeholder="例如：生产环境 / 东京节点"
+                    placeholder={t('s.0041')}
                     className={inputClass + ' mt-1.5'}
                   />
                 </div>
                 <div>
                   <label htmlFor="enroll-ttl" className={labelClass}>
-                    令牌有效期
+                    {t('s.0042')}
                   </label>
                   <select
                     id="enroll-ttl"
@@ -362,7 +363,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
               </div>
 
               <p className="text-xs text-slate-400 dark:text-slate-500">
-                令牌仅用于首次接入，生成后请立即在目标服务器执行安装命令；令牌明文只展示一次。
+                {t('s.0043')}
               </p>
 
               {agentError ? (
@@ -375,21 +376,21 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
             <div className="space-y-4">
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-3 dark:border-emerald-500/30 dark:bg-emerald-500/10">
                 <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">
-                  接入令牌已生成（仅显示一次）
+                  {t('s.0044')}
                 </p>
                 <p className="mt-0.5 text-xs text-emerald-700/80 dark:text-emerald-300/80">
-                  有效期至 {formatDateTime(token.expires_at)} · 使用后自动失效
+                  {t('s.0045')} {formatDateTime(token.expires_at)} {t('s.0046')}
                 </p>
               </div>
 
               {token.token ? (
                 <div>
-                  <p className="text-sm font-medium text-slate-700 dark:text-slate-200">接入令牌</p>
+                  <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{t('s.0047')}</p>
                   <div className="mt-1.5 flex items-start gap-2">
                     <code className="min-w-0 flex-1 break-all rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
                       {token.token}
                     </code>
-                    <CopyButton value={token.token} label="复制令牌" />
+                    <CopyButton value={token.token} label={t('s.0048')} />
                   </div>
                 </div>
               ) : null}
@@ -397,17 +398,17 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
               <div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                    安装命令
+                    {t('s.0049')}
                     <span className="ml-1.5 font-normal text-slate-400 dark:text-slate-500">
-                      （在目标服务器执行）
+                      {t('s.0050')}
                     </span>
                   </p>
-                  {command ? <CopyButton value={command} label="复制命令" /> : null}
+                  {command ? <CopyButton value={command} label={t('s.0051')} /> : null}
                 </div>
 
                 {commandLoading ? (
                   <div className="mt-1.5 rounded-md border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
-                    <InlineLoading label="正在生成安装命令…" />
+                    <InlineLoading label={t('s.0052')} />
                   </div>
                 ) : command ? (
                   <pre className="mt-1.5 overflow-x-auto rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono text-xs leading-relaxed text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
@@ -424,7 +425,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
                         variant="secondary"
                         onClick={() => void loadInstallScript(token.token!)}
                       >
-                        重试
+                        {t('s.0053')}
                       </Button>
                     ) : null}
                   </div>
@@ -433,13 +434,13 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
 
               <div className="rounded-md border border-slate-200 bg-slate-50 px-3.5 py-3 text-xs leading-relaxed text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
                 <p>
-                  命令中的控制端地址为{' '}
+                  {t('s.0054')}{' '}
                   <code className="rounded bg-white px-1 py-0.5 font-mono text-[11px] text-slate-600 dark:bg-slate-900 dark:text-slate-300">
                     {resolveControlUrl()}
                   </code>
-                  ，请确保目标机器可以访问该地址。
+                  {t('s.0055')}
                 </p>
-                <p className="mt-1">执行后无需刷新页面，服务器列表每 10 秒自动更新。</p>
+                <p className="mt-1">{t('s.0056')}</p>
               </div>
             </div>
           )
@@ -447,32 +448,32 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
           <div className="space-y-4">
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-3 dark:border-emerald-500/30 dark:bg-emerald-500/10">
               <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">
-                服务器「{createdServer.name}」已添加
+                {t('s.0057')}{createdServer.name}{t('s.0058')}
               </p>
               <p className="mt-0.5 text-xs text-emerald-700/80 dark:text-emerald-300/80">
-                控制端将在 30 秒内完成首次 SSH 采集，状态会从「未知」变为「在线」。
+                {t('s.0059')}
               </p>
             </div>
             <dl className="space-y-1.5 rounded-md border border-slate-200 bg-slate-50 px-3.5 py-3 text-xs dark:border-slate-800 dark:bg-slate-950/60">
               <div className="flex justify-between gap-3">
-                <dt className="text-slate-500 dark:text-slate-400">主机</dt>
+                <dt className="text-slate-500 dark:text-slate-400">{t('s.0060')}</dt>
                 <dd className="font-mono text-slate-700 dark:text-slate-200">
                   {createdServer.host}:{createdServer.port ?? 22}
                 </dd>
               </div>
               <div className="flex justify-between gap-3">
-                <dt className="text-slate-500 dark:text-slate-400">主机密钥策略</dt>
+                <dt className="text-slate-500 dark:text-slate-400">{t('s.0061')}</dt>
                 <dd className="text-slate-700 dark:text-slate-200">{sshPolicy}</dd>
               </div>
               {createdServer.group ? (
                 <div className="flex justify-between gap-3">
-                  <dt className="text-slate-500 dark:text-slate-400">分组</dt>
+                  <dt className="text-slate-500 dark:text-slate-400">{t('s.0062')}</dt>
                   <dd className="text-slate-700 dark:text-slate-200">{createdServer.group}</dd>
                 </div>
               ) : null}
             </dl>
             <p className="text-xs text-slate-400 dark:text-slate-500">
-              可到服务器详情页点击「测试连通性」立即验证 SSH 是否可达。
+              {t('s.0063')}
             </p>
           </div>
         ) : (
@@ -480,26 +481,26 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label htmlFor="ssh-name" className={labelClass}>
-                  服务器名称
+                  {t('s.0064')}
                 </label>
                 <input
                   id="ssh-name"
                   value={sshName}
                   onChange={(event) => setSshName(event.target.value)}
                   maxLength={64}
-                  placeholder="例如：托管机 · 香港 01"
+                  placeholder={t('s.0065')}
                   className={inputClass + ' mt-1.5'}
                 />
               </div>
               <div>
                 <label htmlFor="ssh-host" className={labelClass}>
-                  主机地址
+                  {t('s.0066')}
                 </label>
                 <input
                   id="ssh-host"
                   value={sshHost}
                   onChange={(event) => setSshHost(event.target.value)}
-                  placeholder="例如：10.0.0.12 或 example.com"
+                  placeholder={t('s.0067')}
                   className={inputClass + ' mt-1.5'}
                 />
               </div>
@@ -508,7 +509,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label htmlFor="ssh-port" className={labelClass}>
-                  SSH 端口
+                  {t('s.0068')}
                 </label>
                 <input
                   id="ssh-port"
@@ -520,7 +521,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
               </div>
               <div>
                 <label htmlFor="ssh-policy" className={labelClass}>
-                  主机密钥策略
+                  {t('s.0061')}
                 </label>
                 <select
                   id="ssh-policy"
@@ -543,19 +544,19 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
             <div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <label htmlFor="ssh-credential" className={labelClass}>
-                  SSH 凭证
+                  {t('s.0069')}
                 </label>
                 <button
                   type="button"
                   onClick={() => setCredentialDialogOpen(true)}
                   className="text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
                 >
-                  新建凭证
+                  {t('s.0070')}
                 </button>
               </div>
               {credentials.length === 0 ? (
                 <p className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-                  还没有可用凭证，请先点击「新建凭证」创建密码或私钥凭证。
+                  {t('s.0071')}
                 </p>
               ) : (
                 <select
@@ -566,7 +567,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
                 >
                   {credentials.map((credential) => (
                     <option key={credential.id} value={credential.id}>
-                      {credential.name}（{credential.kind === 'key' ? '私钥' : '密码'} ·{' '}
+                      {credential.name}（{credential.kind === 'key' ? t('s.0072') : t('s.0073')} ·{' '}
                       {credential.username}）
                     </option>
                   ))}
@@ -577,14 +578,14 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label htmlFor="ssh-group" className={labelClass}>
-                  分组 <span className="font-normal text-slate-400">（可选）</span>
+                  {t('s.0062')} <span className="font-normal text-slate-400">{t('s.0040')}</span>
                 </label>
                 <input
                   id="ssh-group"
                   value={sshGroup}
                   onChange={(event) => setSshGroup(event.target.value)}
                   list="ssh-group-options"
-                  placeholder="例如：生产环境"
+                  placeholder={t('s.0074')}
                   className={inputClass + ' mt-1.5'}
                 />
                 <datalist id="ssh-group-options">
@@ -595,13 +596,13 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
               </div>
               <div>
                 <label htmlFor="ssh-tags" className={labelClass}>
-                  标签 <span className="font-normal text-slate-400">（逗号分隔）</span>
+                  {t('s.0075')} <span className="font-normal text-slate-400">{t('s.0076')}</span>
                 </label>
                 <input
                   id="ssh-tags"
                   value={sshTags}
                   onChange={(event) => setSshTags(event.target.value)}
-                  placeholder="例如：香港, 托管"
+                  placeholder={t('s.0077')}
                   className={inputClass + ' mt-1.5'}
                 />
               </div>

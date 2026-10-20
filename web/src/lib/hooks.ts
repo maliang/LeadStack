@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { t } from '../i18n'
 
 export interface PollingQuery<T> {
   data: T | null
@@ -43,7 +44,7 @@ export function usePolling<T>(
       setUpdatedAt(Date.now())
     } catch (caught) {
       if (!mountedRef.current) return
-      setError(caught instanceof Error ? caught.message : '加载失败，请稍后重试')
+      setError(caught instanceof Error ? caught.message : t('s.0644'))
     } finally {
       inFlightRef.current = false
       if (mountedRef.current) setLoading(false)

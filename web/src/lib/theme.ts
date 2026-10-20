@@ -2,48 +2,44 @@ import { useCallback, useEffect, useState } from 'react'
 
 export type Theme = 'light' | 'dark'
 
-const THEME_STORAGE_KEY = 'leadstack_theme'
+const THEME_STORAGE_KEY = 'leadstack.theme'
 
-export function getStoredTheme(): Theme {
+function readStoredTheme(): Theme {
   try {
-    return window.localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light'
+    const raw = window.localStorage.getItem(THEME_STORAGE_KEY)
+    if (raw === 'dark' || raw === 'light') return raw
   } catch {
-    return 'light'
+    /* ignore */
   }
+  return 'light'
 }
 
-let currentTheme: Theme = getStoredTheme()
+let currentTheme: Theme = readStoredTheme()
 const listeners = new Set<(theme: Theme) => void>()
 
 export function getTheme(): Theme {
   return currentTheme
 }
 
+/** 仅应用解析后的 light/dark（主题模式由 prefs 负责），并通知图表重绘。 */
 export function applyTheme(theme: Theme): void {
   currentTheme = theme
   document.documentElement.classList.toggle('dark', theme === 'dark')
-  try {
-    window.localStorage.setItem(THEME_STORAGE_KEY, theme)
-  } catch {
-    /* ignore */
-  }
   for (const listener of listeners) listener(theme)
 }
 
-/**
- * 全局主题状态：多个组件（含 uPlot 图表）同时订阅，切换时一起重绘。
- * 首屏由 index.html 内联脚本先行应用，避免闪白。
- */
+export function onThemeChange(listener: (theme: Theme) => void): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+/** 旧接口保留：图表订阅主题变化；开关由设置面板负责。 */
 export function useTheme(): { theme: Theme; toggleTheme: () => void } {
   const [theme, setTheme] = useState<Theme>(() => getTheme())
 
-  useEffect(() => {
-    const listener = (next: Theme) => setTheme(next)
-    listeners.add(listener)
-    return () => {
-      listeners.delete(listener)
-    }
-  }, [])
+  useEffect(() => onThemeChange(setTheme), [])
 
   const toggleTheme = useCallback(() => {
     applyTheme(getTheme() === 'dark' ? 'light' : 'dark')

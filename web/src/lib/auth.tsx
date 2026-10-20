@@ -9,6 +9,7 @@ import {
 } from 'react'
 import { api, clearToken, getToken, onUnauthorized, setToken, type User } from './api'
 
+import { t } from '../i18n'
 export type AuthStatus = 'loading' | 'authenticated' | 'anonymous'
 
 interface AuthContextValue {
@@ -106,6 +107,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext)
-  if (!context) throw new Error('useAuth 必须在 <AuthProvider> 内使用')
+  if (!context) throw new Error(t('s.0594'))
   return context
 }

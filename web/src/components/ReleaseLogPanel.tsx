@@ -6,6 +6,7 @@ import { formatClockTime } from '../lib/format'
 import { Button } from './Button'
 import { ReleaseStatusBadge } from './DeployBadges'
 import { SpinnerIcon } from './Icons'
+import { t } from '../i18n'
 
 interface ReleaseLogPanelProps {
   releaseId: string
@@ -91,7 +92,7 @@ export function ReleaseLogPanel({
         }
         setError(null)
       } catch (caught) {
-        if (!cancelled) setError(errorMessage(caught, '日志拉取失败'))
+        if (!cancelled) setError(errorMessage(caught, t('s.0427')))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -165,16 +166,16 @@ export function ReleaseLogPanel({
             {streaming ? (
               <>
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
-                实时追加中（增量 after_seq，2.5s 一次）
+                {t('s.0428')}
               </>
             ) : (
-              '日志流已结束（可手动刷新）'
+              t('s.0429')
             )}
           </span>
-          <span className="tabular-nums">共 {logs.length} 条 · 最新 seq {lastSeqRef.current}</span>
+          <span className="tabular-nums">{t('s.0430')} {logs.length} {t('s.0431')} {lastSeqRef.current}</span>
           {selectedRun?.exit_code !== null && selectedRun?.exit_code !== undefined ? (
             <span className={cn('tabular-nums', selectedRun.exit_code === 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400')}>
-              退出码 {selectedRun.exit_code}
+              {t('s.0432')} {selectedRun.exit_code}
             </span>
           ) : null}
         </div>
@@ -189,10 +190,10 @@ export function ReleaseLogPanel({
               }}
               className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800"
             />
-            自动滚动
+            {t('s.0433')}
           </label>
           <Button size="sm" variant="ghost" onClick={() => void handleCopy()} disabled={logs.length === 0}>
-            复制日志
+            {t('s.0434')}
           </Button>
         </div>
       </div>
@@ -206,13 +207,13 @@ export function ReleaseLogPanel({
           }}
           className="w-full rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200"
         >
-          有 {newCount} 条新日志，点击回到底部
+          {t('s.0435')} {newCount} {t('s.0436')}
         </button>
       ) : null}
 
       {error ? (
         <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-          日志拉取失败：{error}
+          {t('s.0437')}{error}
         </p>
       ) : null}
 
@@ -224,13 +225,13 @@ export function ReleaseLogPanel({
         {loading && logs.length === 0 ? (
           <p className="flex items-center gap-2 text-slate-400">
             <SpinnerIcon className="h-3.5 w-3.5" />
-            正在拉取日志…
+            {t('s.0438')}
           </p>
         ) : logs.length === 0 ? (
           <p className="text-slate-500">
             {selectedRun
-              ? `该服务器（${selectedRun.server_name ?? selectedRun.server_id}）暂无日志；状态：${selectedRun.status}`
-              : '请选择一台服务器查看日志'}
+              ? t('s.0439', { '0': selectedRun.server_name ?? selectedRun.server_id, '1': selectedRun.status })
+              : t('s.0440')}
           </p>
         ) : (
           logs.map((entry) => (
