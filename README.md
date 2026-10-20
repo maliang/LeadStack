@@ -2,140 +2,448 @@
 
 > 多服务器 **部署** 与 **检测** 平台 —— 把 N 台服务器的「上线 + 值守」收进一个界面。
 
-Go 单二进制 + 内嵌 Web 控制台 + 轻量节点 agent，跨平台、开箱即用。
+Go 单二进制 + 内嵌 Web 控制台 + 轻量节点 agent，跨平台、开箱即用、自托管，不按节点收费。
+
+```
+接入(Agent/SSH) → 采集 → 检测 → 告警 → 部署 → 回滚 → 备份恢复
+```
 
 ---
 
-## 现在能做什么（运维 · 协作）
+## 目录
 
-- 一条命令启动控制端，浏览器登录控制台
-- **两种接入方式**：Agent 常驻（秒级指标）/ SSH 免安装（控制端主动采集，无需在目标机装任何东西）
-- **凭证托管**：密码与私钥均以 AES-256-GCM 加密落库，界面与接口都不回显密钥；主密钥 0600 存放
-- **主机信息**：主机名 / OS / 内核 / 架构 / CPU 型号与核数 / 内存 / 磁盘 / 时区 / Docker / IP 列表
-- **主动检测（5 类）**：TCP 端口存活 / HTTP 拨测（期望状态码 + 关键字）/ Ping / 进程存在 / 自定义脚本
-  - 按间隔自动调度；一键「立即执行」并对每台机器给出结果与延迟
-  - 连续失败达阈值自动置为 `down`，恢复自动回到 `up`
-  - 结果时间线保留 30 天，服务器详情页可直接看某台机器的检测历史
-- **告警（异常推送到人）**：
-  - 规则来源三类：检测项状态翻转 / 服务器上下线 / 指标阈值（`cpu.pct > 90` 这类）
-  - **持续时长**（异常要连续存在 N 秒才告警，避免抖动误报）、**去重窗口**（未恢复期间不反复打扰）、**静默**（维护期不再收新告警）
-  - **恢复通知**（服务好了会告诉你，且穿透静默）、人工确认、告警历史与事件轨迹
-  - **7 类通知渠道**：Webhook / 钉钉 / 企业微信 / 飞书 / Slack / Telegram / 邮件；每个渠道可「测试发送」
-  - 多渠道隔离：一个渠道挂了不影响其它渠道，失败原因会记录在渠道上
-- **团队协作与审计**：
-  - 三类角色：管理员 / 运维 / 只读；越权返回 403，被禁用账号立即失效
-  - **审计日志**：所有写操作自动记录（谁、何时、从哪个 IP、改了什么），敏感字段脱敏
-  - **API Token**：`lsk_` 令牌供 CI/脚本调用，明文只显示一次，可撤销与设过期
-- **浏览器内排障**：
-  - **Web SSH 终端**：直接在浏览器里上机（ssh 与 agent 两种接入都支持），终端尺寸自适应
-  - **文件管理**：浏览 / 上传 / 下载 / 删除（ssh 走 SFTP，agent 走受控通道）
-  - **日志查看**：指定路径 + 行数 + 关键字过滤，输出自动截断保护
-  - **进程与端口**：跨平台采集（含 Linux/macOS 命令差异与回退链）
-- **定时任务**：5 字段 cron + 人话预览 + 运行历史（可在任意一组服务器上执行命令）
-- **批量导入主机**：粘贴一批 `host:port` 即批量纳管（支持注释、IPv6、自动去重、逐行报错）
-- **端口可自定义**：控制台监听端口（设置页改，需重启生效）、控制台对外地址（目标机回连用）、目标机默认 SSH 端口；单台服务器的地址与端口随时可改（改完自动重测连通性）
-  - **永不把自己锁在门外**：新端口绑不上时自动回退（flag → 设置 → 环境变量 → 默认 → 临时端口），并在日志与界面告警；控制台打不开时可用 `leadstack network --listen <地址>` 离线修正，或 `leadstack --listen <地址>` 临时启动
-- **界面**：中英双语（1488 条词条）、主题三态 + 5 主题色、字号三档、密度两档，均持久化
-- **发布工程**：GoReleaser 快照发布（5 平台 10 二进制）、Docker 镜像可构建可运行
-- **批量部署与回滚**：
-  - 三类部署模板：`binary`（下载解压落位）/ `compose`（容器编排）/ `systemd`（服务单元）；模板是版本化文本，发布时冻结快照
-  - 制品来源：URL 下载（**必须提供 sha256**）/ 控制端上传（边写边算校验和）/ 容器镜像
-  - **原子发布**：每次发布写独立 `releases/<id>` 目录，成功后才原子切换 `current` 符号链接 —— 失败绝不破坏线上版本
-  - **秒级回滚**：`current` 指回上一成功版本，不重新下载
-  - **批量推送**：一次发到 N 台机器，并发上限可配；一台失败不影响其它机器
-  - **增量日志**：发布详情页按 `after_seq` 增量拉取并追加，实时看进度
-  - **重试只跑失败项**、支持取消；有发布记录的应用不允许直接删除（409）
-- **首次安装向导**：首次启动引导完成第一台机器的接入
-- **数据备份与恢复**：
-  - 在线备份（不停服），加密归档 `LSBAK1`；包含库、**凭证主密钥**、主机密钥，可选含上传制品
-  - **恢复**：控制台上传（暂存 + 重启生效）或 CLI 离线恢复；恢复前数据自动保留到 `pre-restore` 目录
-  - **定时备份**：可配间隔与保留份数
-  - ⚠️ 解密口令在 `<data_dir>/backup.pass`，**不在归档内**——必须单独保管，丢失后备份永久无法解密
-- **分组标签与批量操作**：按分组/标签/状态/接入方式筛选；批量测连通性、刷新主机信息、加标签、设分组、删除，逐台给出结果
-- **指标与历史**：CPU / 内存 / 磁盘 / 负载 / 网络 / 进程数实时展示 + 历史曲线（raw / 1m / 1h 三档，自动降采样；大范围查询自动降级）
-- agent 掉线 45 秒内自动判定离线；SSH 模式连续 3 次采集失败判离线并记录原因，恢复后自动清除错误
+- [快速开始（5 分钟）](#快速开始5-分钟)
+- [详细开始流程](#详细开始流程)
+- [常见问题](#常见问题)
+- [配置参考](#配置参考)
+- [目录结构](#目录结构)
+- [开发与验收](#开发与验收)
 
-> 告警语义：静默只抑制**新故障**通知，恢复通知仍会送达；同一故障未恢复期间只保留一条告警记录，超过去重窗口才再次提醒。
+---
 
-> 检测的执行位置：`TCP/HTTP/Ping` 由控制端直连探测（外部视角）；`进程/脚本` 在目标机执行——Agent 模式经控制端下发任务，SSH 模式走 SSH 通道，对使用者透明。
+## 快速开始（5 分钟）
 
-## 快速开始
+**前置要求**：Go 1.27+、Node 20+ 与 pnpm 10+（仅「源码构建」需要；用预编译包或 Docker 不需要）。
 
 ```bash
-# 1. 构建（需要 Go 1.22+ 与 Node 20+/pnpm）
-make build                # 产出 bin/leadstack 与 bin/leadstack-agent
+# 1. 构建（产出两个二进制，前端已内嵌进控制端）
+make build
 
-# 2. 启动控制端（首次启动会打印初始管理员密码）
+# 2. 启动控制端（首次启动会打印随机管理员密码，请记下）
 ./bin/leadstack
 
-# 3. 打开控制台
+# 3. 浏览器打开控制台并登录
 open http://127.0.0.1:8080
 ```
 
-在控制台「接入服务器」生成令牌后，在目标机器上执行：
+登录后按界面引导（或「服务器 → 接入服务器」）**接入第一台机器**，二选一：
 
 ```bash
-./bin/leadstack-agent --server http://<控制端地址>:8080 --token <接入令牌>
+# 方式 A：Agent 常驻（秒级指标）——把控制台生成的一行命令贴到目标机器执行
+curl -fsSL http://<控制端地址>:8080/install.sh | sh -s -- \
+  --server http://<控制端地址>:8080 --token <接入令牌>
+
+# 方式 B：SSH 免安装——在控制台「接入服务器 → SSH 免安装」里填凭证即可，目标机什么都不装
 ```
 
-或使用一键安装脚本（Linux systemd / macOS launchd）：
+**60 秒内**你应该看到：服务器状态变 `online`、CPU/内存/磁盘/负载出现数据、主机信息卡填充。
+
+> 想先确认一切正常？跑一次端到端验收（不需要真实服务器，自带测试用 SSH 端点）：
+> ```bash
+> make build && make devssh && bash scripts/verify_bootstrap.sh
+> ```
+
+---
+
+## 详细开始流程
+
+### 第 1 步：准备环境
+
+| 项 | 要求 |
+|---|---|
+| 控制端主机 | 一台**常驻**的 Linux / macOS / Windows 机器（1 核 1G 起）。**必须常驻**——它一停，检测与告警就停 |
+| Go | 1.27+（只在源码构建时需要） |
+| Node / pnpm | Node 20+ / pnpm 10+（只在源码构建时需要） |
+| 目标机 | Linux 为主（amd64/arm64），macOS / Windows 可用但为 Beta；需要 SSH 可达或能装 agent |
+| 网络 | 目标机需能访问控制端端口（Agent 模式为出站连接；SSH 模式为控制端主动连目标机 22 端口或自定义端口） |
+
+> ⚠️ **不要把控制端跑在会合盖休眠的笔记本上**，否则你会在"为什么没收到告警"上浪费一个晚上。
+
+### 第 2 步：安装控制端（三选一）
+
+**A. 源码构建（开发或自建）**
 
 ```bash
-curl -fsSL https://<你的地址>/install.sh | sh -s -- --server http://<控制端>:8080 --token <令牌>
+git clone <repo> && cd LeadStack-领栈
+make build          # 产出 bin/leadstack 与 bin/leadstack-agent
+make devssh         # 可选：DEV-ONLY 测试 SSH 服务，用于本地验收，不要用于生产
 ```
+
+其他常用目标：`make run`（构建并启动）、`make test`（跑测试）、`make help`（全部目标）。
+
+**B. 预编译二进制（发布包）**
+
+从 release 页面下载对应平台压缩包（5 平台：linux/darwin × amd64/arm64、windows/amd64），解压后直接运行：
+
+```bash
+./leadstack --version      # 确认版本
+./leadstack                # 启动
+```
+
+也可以用 goreleaser 自己出包：`make release-snapshot`（产物在 `dist/`）。
+
+**C. Docker**
+
+```bash
+# 只绑本机 8080；要对外访问把 ports 改成 "8080:8080" 并自行加 TLS 反代
+docker compose -f deploy/docker-compose.yml up -d --build
+docker logs leadstack | grep 初始密码     # 首次启动打印的管理员密码（仅一次）
+```
+
+`/data` 是持久化卷（数据库 + 制品 + 备份 + `master.key`），**务必保留**。
+
+### 第 3 步：首次启动与初始化
+
+```bash
+./bin/leadstack
+```
+
+首次启动会打印一段**醒目横幅**（仅这一次，之后不再出现）：
+
+```
+============================================================
+  LeadStack 控制端首次启动，已创建初始管理员
+------------------------------------------------------------
+  用户名：admin
+  初始密码：<随机生成的密码>
+  上述密码仅在本次创建时打印一次，请立即登录并妥善保存。
+============================================================
+```
+
+紧接着是三条关键日志，都值得看一眼：
+
+```
+主密钥已就绪 source=<env|file> path=…/master.key        ← 凭证加密用，务必备份
+监听地址已确定 listen=127.0.0.1:8080 source=<settings|env|default>
+HTTP 监听已就绪 active_listen=127.0.0.1:8080 web=http://127.0.0.1:8080
+```
+
+默认数据目录 `./data`：
+
+```
+data/
+├── leadstack.db      # 数据库（WAL 模式，单文件）
+├── master.key        # 凭证加密主密钥（0600）—— 丢了所有 SSH 凭证作废
+├── known_hosts       # SSH 主机密钥记录
+├── artifacts/        # 上传的部署制品
+├── backups/          # 备份归档
+└── backup.pass       # 备份加密口令（0600）—— 必须单独保管
+```
+
+常用启动参数（也可用环境变量，见[配置参考](#配置参考)）：
+
+```bash
+./bin/leadstack --listen 0.0.0.0:8080        # 让局域网可访问（生产请加 TLS 反代）
+./bin/leadstack --data-dir /var/lib/leadstack
+./bin/leadstack --admin-password '我的初始密码'   # 不想用随机密码时
+./bin/leadstack --terminal-enabled            # 启用浏览器终端（默认关闭）
+```
+
+### 第 4 步：登录控制台
+
+打开 `http://127.0.0.1:8080`，用 `admin` + 日志里的初始密码登录。
+
+**首次进入**会自动进入引导向导（欢迎 → 添加第一台服务器 → 完成），也可以跳过直接进控制台。
+登录后建议立刻到「用户管理」改掉初始密码。
+
+界面导航分四组：
+- **监控**：总览 / 服务器 / 检测 / 告警
+- **运维**：终端 / 文件 / 定时任务 / 日志 / 批量导入
+- **发布**：应用 / 发布记录
+- **系统**：凭证 / 用户 / API Token / 审计 / 备份 / 设置
+右上角菜单里的「外观设置」可切换 **主题（浅色/深色/跟随系统）· 主题色 · 字号 · 密度 · 语言（中文/English）**。
+
+### 第 5 步：接入服务器（三选一）
+
+**A. Agent 常驻（推荐，秒级指标 + 远程执行 + 终端）**
+
+1. 控制台「服务器 → 接入服务器 → Agent」→ 生成**接入令牌**；
+2. 复制生成的一行命令，在目标机器执行（需要目标机可访问控制端）；
+3. 3 秒内该机器变为 `online`。
+
+```bash
+curl -fsSL http://<控制端>:8080/install.sh | sh -s -- \
+  --server http://<控制端>:8080 --token <令牌>
+```
+安装脚本会安装到 `/usr/local/bin`、注册 systemd（Linux）或 launchd（macOS）服务。手动安装也可：
+
+```bash
+./leadstack-agent --server http://<控制端>:8080 --token <令牌>
+```
+
+**B. SSH 免安装（目标机不装任何东西）**
+
+1. 「凭证」页新建凭证（密码或私钥，AES-256-GCM 加密存储，界面不回显密钥）；
+2. 「服务器 → 接入服务器 → SSH 免安装」→ 选凭证、填主机与端口（默认取设置里的 22）、分组与标签；
+3. 保存后点「测试连通性」→ 应返回延迟、SSH banner 与主机密钥指纹；
+4. 点「刷新主机信息」→ 采集 OS/内核/CPU/内存/磁盘/时区/Docker/IP。
+
+**C. 批量导入（几十台机器用这个）**
+
+「服务器 → 批量导入」粘贴文本，支持 `host[:port]`、`#` 注释、IPv6（`[::1]:22`）、自动去重、逐行报错：
+
+```
+10.0.0.11
+10.0.0.12:2222
+# 数据库组
+db-01.internal
+```
+
+选好凭证、分组、标签后导入，结果会逐条列出成功与失败原因。
+
+> **端口**：每台机器可单独设 SSH 端口；全局默认端口在「设置 → 网络与端口」里改。建完也可以随时在服务器编辑里改地址与端口（改完会自动重测连通性并重新校验主机密钥）。
+
+### 第 6 步：建立检测
+
+「检测 → 新建检测项」，支持五类：
+
+| 类型 | 填什么 | 执行位置 |
+|---|---|---|
+| TCP 端口 | `host:port` | 控制端直连（外部视角） |
+| HTTP 拨测 | URL + 期望状态码（可选关键字、跳过证书校验） | 控制端直连 |
+| Ping | 主机名/IP | 控制端（需非特权 ICMP 权限） |
+| 进程 | 进程名 + 最少数量 | 目标机（Agent 下发 / SSH） |
+| 脚本 | shell 脚本 + 期望输出 | 目标机（Agent 下发 / SSH） |
+
+设置**间隔**（最小 10s）、**超时**、**连续失败阈值**（达到即判 `down`），并选择适用服务器。
+保存后点「立即执行」可逐台看结果；之后按间隔自动调度，结果保留 30 天，可在服务器详情「检测」标签看时间线。
+
+> 五类里最容易踩坑的是 **Ping**：非特权 ICMP 在部分环境不可用（如 macOS 非 root），此时会返回明确报错而不是假成功。生产建议优先用 TCP/HTTP 拨测。
+
+### 第 7 步：配置告警通知
+
+1. 「告警 → 渠道 → 新建渠道」：支持 **Webhook / 钉钉 / 企业微信 / 飞书 / Slack / Telegram / 邮件**；
+2. 填完点「**测试发送**」——成功会显示服务商返回；失败会显示分类原因（DNS 失败 / 连接失败 / 凭据被拒 / 服务商拒绝）并附带探测结果；
+3. 「告警 → 规则 → 新建规则」：选触发来源
+   - **检测项**：某个检测项某台机器变 `down`
+   - **服务器**：某台机器离线
+   - **指标**：如 `cpu.pct > 90`、`disk.used_pct >= 85`
+4. 设 **持续时长**（异常要连续存在 N 秒才告警，滤掉抖动）、**去重窗口**（未恢复期间不重复打扰）、**严重级别**、**渠道**；
+5. 维护窗口可用规则上的「临时静默」；`duration_s=0` 即取消静默。
+
+语义要点：**静默只抑制"新故障"通知，恢复通知仍会送达**；同一故障未恢复期间只保留一条告警，超过去重窗口才再次提醒。
+
+### 第 8 步：部署第一个应用
+
+1. **应用**：「应用 → 新建应用」（名称 + slug），部署路径为 `<部署根>/<slug>`；
+2. **模板**：`binary`（下载解压落位）/ `compose`（容器编排）/ `systemd`（服务单元），内置示例可一键填充；
+   支持 `{{ROOT}}`、`{{VERSION}}`、`{{RELEASE_DIR}}`、`{{ARTIFACT_URL}}`、`{{ARTIFACT_SHA256}}` 等占位符，并可「渲染预览」看替换结果；
+3. **制品**：填 URL（**必须提供 sha256**）或上传文件（服务端自动算校验和）；
+4. **发布**：选应用 → 模板 → 版本 → 制品 → 目标服务器（可按分组/标签全选）→ 确认；
+5. 详情页可看**逐台状态 + 实时增量日志**；失败可「重试失败项」，也可「回滚」。
+
+保证可靠性的三个设计：
+- 每次发布写独立的 `releases/<id>` 目录，**成功后才原子切换 `current` 符号链接** —— 失败绝不破坏线上；
+- **回滚是秒级的**（`current` 指回上一版本，不重新下载）；
+- sha256 校验不通过就失败，且 `current` 保持不变。
+
+> 若使用「上传型制品」，需配置**控制台对外地址**（设置 → 网络与端口），否则目标机无法回连下载。
+
+### 第 9 步：配置备份（强烈建议立刻做）
+
+「备份 → 立即备份」或让它按间隔自动备份。归档是**加密的**（`LSBAK1`），包含数据库、`master.key`、`known_hosts`，可选含制品。
+
+```bash
+# 命令行备份（服务运行中也能做，SQLite 一致性快照）
+leadstack backup --data-dir ./data --out /tmp/leadstack.lsbak
+
+# 校验
+leadstack backup verify --file /tmp/leadstack.lsbak
+
+# 离线恢复（必须先停服务）
+leadstack restore --file /tmp/leadstack.lsbak --data-dir ./data
+```
+
+> ⚠️ **`backup.pass` 是解密备份的唯一钥匙，必须与备份文件分开保管**（另一台机器/密码管理器/离线介质）。
+> 它不在归档里；丢了它，备份永久无法解密。恢复前数据会自动移到 `<data_dir>.pre-restore-<时间>/` 保留。
+
+### 第 10 步：多人协作与安全
+
+| 能力 | 说明 |
+|---|---|
+| **用户与角色** | `admin` 全部权限 / `operator` 日常运维（不可管用户、不可读审计、不可恢复备份）/ `viewer` 只读 |
+| **API Token** | 「系统 → API Token」创建 `lsk_` 令牌供 CI/脚本调用；**明文只显示一次**，可撤销、可设过期 |
+| **审计日志** | 所有写操作自动记录（谁、何时、哪个 IP、改了什么），敏感字段脱敏；保留 180 天 |
+| **凭证安全** | SSH 密码/私钥 AES-256-GCM 加密、接口不回显；主机密钥变更即拒绝连接 |
+| **终端开关** | 浏览器终端默认关闭，需 `LEADSTACK_TERMINAL_ENABLED=true` 或 `--terminal-enabled` 开启 |
+
+### 第 11 步：日常运维
+
+- **终端**：「运维 → 终端」或服务器详情 →「终端」，浏览器里直接上机（ssh 与 agent 两种接入都支持，尺寸自适应）。
+- **文件**：「运维 → 文件」，浏览/上传/下载/删除（ssh 走 SFTP，agent 走受控通道，单文件默认 ≤ 8 MiB）。
+- **日志**：「运维 → 日志」，填路径 + 行数 + 关键字过滤。
+- **进程/端口**：服务器详情 →「监控」标签，跨平台采集（Linux `ps`/`ss`，macOS `ps -ww -axo`/`lsof`，含 `ss→netstat→lsof` 回退）。
+- **定时任务**：「运维 → 定时任务」，5 字段 cron（带人话预览），可对一组服务器定时执行命令并保留运行历史。
+- **批量导入**：「运维 → 批量导入」（也可从服务器列表进入）。
+
+### 端口与网络
+
+三处端口都能改，**且保证不会把自己锁在门外**：
+
+| 改什么 | 在哪改 | 生效 |
+|---|---|---|
+| 控制台监听端口 | 设置 → 网络与端口 | **重启后生效**（界面会显示"当前生效 → 配置值"与重启命令） |
+| 控制台对外地址 | 同上（目标机回连用：安装命令、上传制品下载） | 立即生效 |
+| 目标机 SSH 端口 | 设置里改「默认端口」；单台在服务器编辑里改 | 立即生效 |
+
+**万一控制台打不开**（端口被占用/被封禁/改错了）：
+
+```bash
+leadstack network --show                      # 看 设置/环境变量/默认 三者取值
+leadstack network --listen 127.0.0.1:9090     # 离线改设置（下次启动生效）
+leadstack --listen 127.0.0.1:9090             # 临时用指定端口启动（不改配置）
+leadstack network --reset                     # 清除网络设置，回落环境变量/默认
+```
+
+启动绑定失败时会**自动回退**（命令行 → 设置 → 环境变量 → 默认 → 临时端口），并在日志和界面明确告警，不会静默退出。
+
+---
+
+## 常见问题
+
+**Q：启动后打不开 `http://127.0.0.1:8080`？**
+看启动日志里的 `active_listen`——端口可能被占用而**自动回退**到了别的地址。按日志提示的地址访问，或用上面的 `leadstack network` 修正。
+
+**Q：agent 显示离线？**
+1. 目标机能否访问控制端端口（`curl http://<控制端>:8080/healthz`）；
+2. agent 日志（systemd：`journalctl -u leadstack-agent -f`；手动运行看终端）；
+3. 接入令牌是否已过期/被用过；
+4. 控制端是否重启过（agent 会自动重连，最多退避 60s）。
+
+**Q：SSH 模式连不上？**
+「测试连通性」会给出具体原因：DNS 失败 / 连接被拒 / 认证失败 / 主机密钥不匹配。
+主机密钥不匹配通常是因为目标机重装过——到服务器编辑里改一下地址或重新确认指纹（该机旧记录会被清除）。
+
+**Q：收不到告警？**
+按顺序查：规则是否启用 → 渠道「测试发送」是否成功 → 规则的目标（服务器/检测项）是否正确 → 是否处在静默期 → 严重级别是否被过滤。审计日志里能看到规则的增改记录。
+
+**Q：发布失败了，线上没事吧？**
+没事。失败时 `current` 仍指向上一个成功版本。看发布详情的「失败步骤」与日志，修好后重试或回滚即可。
+
+**Q：备份恢复后凭证还能用吗？**
+能——归档包含 `master.key`，它与数据库是配套的。但如果用错口令或把别的机器的数据库配这个 `master.key`，凭证会解不开。
+
+**Q：忘了备份口令怎么办？**
+无解，这是加密设计的必然结果。所以务必把 `backup.pass` 与备份分开保管。
+
+**Q：能不能暴露到公网？**
+可以，但**请在前面加 TLS 反向代理**（Caddy/Nginx），并改初始密码、按需创建 `operator`/`viewer` 账号。控制台默认只监听 `127.0.0.1` 就是这个原因。
+
+---
+
+## 配置参考
+
+### 环境变量
+
+优先级：**控制台设置 > 环境变量 > 内置默认**（端口类；其余项只读环境变量）。
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `LEADSTACK_LISTEN` | `127.0.0.1:8080` | 监听地址；也可在设置页改（控制台设置优先） |
+| `LEADSTACK_DATA_DIR` | `./data` | 数据目录（数据库、主密钥、制品、备份） |
+| `LEADSTACK_ADMIN_PASSWORD` | 随机生成 | 初始管理员密码，仅首次初始化生效 |
+| `LEADSTACK_MASTER_KEY` | 无（用 `master.key`） | 64 位 hex 凭证加密主密钥 |
+| `LEADSTACK_PUBLIC_URL` | 无 | 目标机回连地址；上传型制品必填。设置页可改 |
+| `LEADSTACK_SSH_INTERVAL` | `30s` | SSH 模式采集间隔（1s–24h） |
+| `LEADSTACK_CHECK_CONCURRENCY` | `8` | 检测调度并发上限 |
+| `LEADSTACK_CHECK_INTERVAL_MIN` | `10s` | 检测项最小间隔 |
+| `LEADSTACK_ALERT_EVAL_INTERVAL` | `30s` | 告警规则评估周期 |
+| `LEADSTACK_ALERT_RETENTION_DAYS` | `90` | 已恢复告警保留天数 |
+| `LEADSTACK_AUDIT_RETENTION_DAYS` | `180` | 审计日志保留天数 |
+| `LEADSTACK_DEPLOY_ROOT` | `/opt/leadstack/apps` | 部署基础目录（实际 `<root>/<slug>`） |
+| `LEADSTACK_DEPLOY_CONCURRENCY` | `4` | 发布并发上限 |
+| `LEADSTACK_ARTIFACT_MAX_MB` | `512` | 上传制品大小上限 |
+| `LEADSTACK_BACKUP_DIR` | `<data_dir>/backups` | 备份目录 |
+| `LEADSTACK_BACKUP_INTERVAL` | `24h` | 定时备份间隔 |
+| `LEADSTACK_BACKUP_RETENTION` | `7` | 备份保留份数 |
+| `LEADSTACK_BACKUP_INCLUDE_ARTIFACTS` | `false` | 备份是否含上传制品 |
+| `LEADSTACK_BACKUP_PASSPHRASE` | 无（用 `backup.pass`） | 备份加密口令 |
+| `LEADSTACK_TERMINAL_ENABLED` | `false` | Web 终端开关 |
+| `LEADSTACK_CRON_TICK` | `1m` | 定时任务扫描间隔 |
+| `LEADSTACK_FILE_MAX_MB` | `8` | 文件传输单文件上限 |
+
+> ⚠️ `master.key` 丢失 → 已存凭证无法解密；`backup.pass` 丢失 → 备份永久无法解密。两者都要与数据目录一并备份，且**分开保管**。
+
+### 命令行
+
+```bash
+leadstack                          # 启动控制端
+leadstack --version                # 版本
+leadstack --listen 0.0.0.0:8080    # 临时指定监听地址
+leadstack network --show           # 查看网络设置（离线可用）
+leadstack network --listen <addr>  # 改监听设置（离线可用）
+leadstack network --reset          # 清除网络设置
+leadstack backup --out <file>      # 备份
+leadstack backup verify --file <f> # 校验备份
+leadstack restore --file <f> --data-dir <d>   # 离线恢复（需先停服务）
+
+leadstack-agent --server <url> --token <t>    # 节点 agent
+leadstack-agent --once            # 单次上报后退出（自测）
+```
+
+---
 
 ## 目录结构
 
 ```
-cmd/leadstack/          控制端入口
-cmd/leadstack-agent/    节点 agent 入口
-internal/               控制端实现（config/store/api/auth/webui/agent）
-pkg/protocol/           agent ↔ 控制端 消息契约
-web/                    React 控制台（构建产物内嵌进二进制）
+cmd/
+├── leadstack/          控制端入口（子命令：network / backup / restore）
+├── leadstack-agent/    节点 agent
+└── leadstack-devssh/   DEV-ONLY 测试 SSH 服务（不参与发布）
+internal/
+├── api/ store/ auth/   服务端：HTTP/WS、SQLite、鉴权与 RBAC
+├── checker/ alerting/  检测引擎、告警状态机
+├── notify/             7 类通知渠道
+├── deploy/ jobs/       部署编排、任务下发
+├── sshx/ term/         远端执行、PTY 终端、SFTP
+├── remote/ cron/       进程/端口/日志采集、cron 引擎
+├── backup/ credential/ 加密备份、凭证加密
+└── webui/              内嵌前端产物
+pkg/protocol/           agent ↔ 控制端消息契约
+web/                    React 控制台（构建后内嵌进二进制）
 deploy/                 安装脚本、systemd 单元、Docker Compose
-docs/                   计划书与接口契约
+docs/                   计划书、架构契约、交付报告
+scripts/                端到端验收脚本
 ```
 
-## 文档
+---
 
-- [产品与技术计划](docs/PLAN.md)
-- [架构与接口契约](docs/ARCHITECTURE.md) —— 改代码前必读
+## 开发与验收
 
-## 配置
+```bash
+make build          # 构建（含前端）
+make test           # Go 测试
+make fmt-check      # gofmt 闸门
+make test-race      # 竞态检测（api + store）
+make test-e2e       # 端到端验收（7 个脚本，共 228 项断言）
+make dev            # 开发模式（另开 make web-dev 走前端热更新）
+make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
+make docker-check   # Docker 构建 + 容器内健康检查 + 备份校验
+```
 
-| 环境变量 | 默认值 | 说明 |
-|---|---|---|
-| `LEADSTACK_LISTEN` | `127.0.0.1:8080` | 监听地址；**也可在控制台「设置 → 网络与端口」里改（重启生效）**，控制台设置优先于本变量 |
-| `LEADSTACK_DATA_DIR` | `./data` | 数据目录（SQLite 单文件、`master.key`、`known_hosts`） |
-| `LEADSTACK_ADMIN_PASSWORD` | 随机生成 | 初始管理员密码，仅首次初始化生效 |
-| `LEADSTACK_MASTER_KEY` | 无（用 `master.key`） | 64 位 hex 的凭证加密主密钥；给了就不读文件 |
-| `LEADSTACK_SSH_INTERVAL` | `30s` | SSH 模式采集间隔（Go duration，1s–24h） |
-| `LEADSTACK_CHECK_CONCURRENCY` | `8` | 检测调度并发上限 |
-| `LEADSTACK_CHECK_INTERVAL_MIN` | `10s` | 检测项最小间隔（防呆下限） |
-| `LEADSTACK_ALERT_EVAL_INTERVAL` | `30s` | 告警规则周期评估间隔（指标阈值与持续时长推进） |
-| `LEADSTACK_ALERT_RETENTION_DAYS` | `90` | 已恢复告警保留天数 |
-| `LEADSTACK_DEPLOY_ROOT` | `/opt/leadstack/apps` | 部署基础目录（实际路径 `<root>/<app_slug>`） |
-| `LEADSTACK_DEPLOY_CONCURRENCY` | `4` | 发布并发上限 |
-| `LEADSTACK_ARTIFACT_MAX_MB` | `512` | 上传制品大小上限 |
-| `LEADSTACK_PUBLIC_URL` | 无 | 目标机回连控制端的地址；使用「上传型制品」时必填；**也可在设置页改，改完立即生效** |
-| `LEADSTACK_BACKUP_DIR` | `<data_dir>/backups` | 备份归档输出目录 |
-| `LEADSTACK_BACKUP_INTERVAL` | `24h` | 定时备份间隔 |
-| `LEADSTACK_BACKUP_RETENTION` | `7` | 保留份数 |
-| `LEADSTACK_BACKUP_INCLUDE_ARTIFACTS` | `false` | 定时备份是否包含上传制品 |
-| `LEADSTACK_BACKUP_PASSPHRASE` | 无（用 `backup.pass`） | 归档加密口令；设置了就不用文件 |
-| `LEADSTACK_TERMINAL_ENABLED` | `false` | **Web SSH 终端开关**（默认关闭；开启后浏览器可直接上机） |
-| `LEADSTACK_AUDIT_RETENTION_DAYS` | `180` | 审计日志保留天数 |
-| `LEADSTACK_CRON_TICK` | `1m` | 定时任务扫描间隔 |
-| `LEADSTACK_FILE_MAX_MB` | `8` | 文件传输单文件上限 |
+单独跑某一套验收（需要 `make build && make devssh`）：
 
-> ⚠️ `master.key` 丢失将导致已存凭证无法解密，请与数据目录一并备份。
+```bash
+bash scripts/verify_bootstrap.sh   # 接入、指标、离线判定
+bash scripts/verify_servers.sh     # 凭证、SSH 纳管、主机信息、批量、历史
+bash scripts/verify_checks.sh      # 五类检测、两条执行通道、调度、降级
+bash scripts/verify_alerts.sh      # 渠道、firing、去重、确认、恢复、指标规则、静默
+bash scripts/verify_deploy.sh      # 发布、产物落盘校验、失败保护、回滚、批量、重试、注入防护
+bash scripts/verify_backup.sh      # 加密有效性、篡改检测、离线恢复、暂存恢复、定时与保留
+bash scripts/verify_ops.sh         # 审计、RBAC、Token、分页、导入、终端、文件、定时任务、端口
+```
 
-> 端口相关配置优先取**控制台设置**，其次才是上表环境变量。忘记改成了什么端口、或打不开控制台时：
-> ```bash
-> leadstack network --show                      # 查看设置/环境变量/默认/实际建议
-> leadstack network --listen 127.0.0.1:9090     # 离线修正（下次启动生效）
-> leadstack --listen 127.0.0.1:9090             # 临时用指定端口启动（不改配置）
-> ```
+---
 
 ## 设计原则
 
@@ -143,31 +451,18 @@ docs/                   计划书与接口契约
 2. **批量优先**：为几十到几百台设计，而不是单机面板。
 3. **部署与监控同源**：一次接入，同时具备下发应用与采集健康的能力。
 4. **安全默认**：默认只监听本地、凭证加密存储、主机密钥变更即拒绝、关键操作全审计。
+5. **永不锁死**：任何配置都不能让用户失去唯一的修复通道（端口绑定失败自动回退 + 离线 CLI）。
+
+---
+
+## 文档
+
+- [架构与接口契约](docs/ARCHITECTURE.md) —— 改代码前必读
+- [产品与技术计划](docs/PLAN.md)
+- 交付报告：[基础骨架](docs/reports/bootstrap.md) · [服务器纳管](docs/reports/server-management.md) · [监控与检测](docs/reports/monitoring.md) · [告警](docs/reports/alerting.md) · [批量部署](docs/reports/deployment.md) · [备份恢复](docs/reports/backup.md) · [运维与协作](docs/reports/ops-and-collaboration.md)
+- [发布验证记录](docs/DEPLOY-VERIFY.md)（GoReleaser / Docker 实测）
 
 ## 状态
 
-- **基础骨架已完成** —— [交付报告](docs/reports/bootstrap.md)（11/11 项验收）
-- **服务器纳管已完成** —— [交付报告](docs/reports/server-management.md)（33/33 项验收，无回归）
-- **监控与检测已完成** —— [交付报告](docs/reports/monitoring.md)（25/25 项验收，无回归）
-- **告警已完成** —— [交付报告](docs/reports/alerting.md)（29/29 项验收，无回归）
-- **批量部署已完成** —— [交付报告](docs/reports/deployment.md)（33/33 项验收，无回归）
-- **数据备份与恢复已完成** —— [交付报告](docs/reports/backup.md)（35/35 项验收）
-- **运维增强与团队协作已完成** —— [交付报告](docs/reports/ops-and-collaboration.md)（46/46 项验收）
-- **端口与网络自定义**：控制台监听 / 对外地址 / 目标机默认与单机端口，含启动回退链与离线 CLI 逃生通道（228 项验收全绿）
-- 计划书见 [docs/PLAN.md](docs/PLAN.md)
-
-端到端验收可一键复现（共 **212 项断言**）：
-
-```bash
-make build && make devssh
-bash scripts/verify_bootstrap.sh    # 11 项：接入、指标、离线判定
-bash scripts/verify_servers.sh    # 33 项：凭证、SSH 纳管、主机信息、批量、历史
-bash scripts/verify_checks.sh    # 25 项：五类检测、两条执行通道、调度、降级
-bash scripts/verify_alerts.sh    # 29 项：渠道、firing、去重、确认、恢复、指标规则、静默
-bash scripts/verify_deploy.sh    # 33 项：发布、产物落盘校验、失败保护、回滚、批量、重试、注入防护
-bash scripts/verify_backup.sh # 35 项：加密有效性、篡改检测、离线恢复、暂存恢复、定时与保留
-bash scripts/verify_ops.sh    # 46 项：审计、RBAC、Token、分页、导入、终端、文件、定时任务、日志/进程/端口
-# 或：make test-e2e
-```
-
-其它质量闸门：`make fmt-check`（gofmt）、`make test-race`（api + store 竞态检测）。
+功能已完整交付，**七套验收共 228 项断言全绿**（`make test-e2e`）。已知环境限制：
+macOS 公证 / Windows 代码签名需证书；钉钉/飞书/Slack/Telegram/邮件需你的真实凭据才能验证实际投递。
