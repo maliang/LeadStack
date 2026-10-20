@@ -33,6 +33,7 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量节点 agent，跨平台、开箱
   - **进程与端口**：跨平台采集（含 Linux/macOS 命令差异与回退链）
 - **定时任务**：5 字段 cron + 人话预览 + 运行历史（可在任意一组服务器上执行命令）
 - **批量导入主机**：粘贴一批 `host:port` 即批量纳管（支持注释、IPv6、自动去重、逐行报错）
+- **端口可自定义**：控制台监听端口（设置页改，需重启生效）、控制台对外地址（目标机回连用）、目标机默认 SSH 端口；单台服务器的地址与端口随时可改（改完自动重测连通性）
 - **界面**：中英双语（1488 条词条）、主题三态 + 5 主题色、字号三档、密度两档，均持久化
 - **发布工程**：GoReleaser 快照发布（5 平台 10 二进制）、Docker 镜像可构建可运行
 - **批量部署与回滚**：
@@ -103,7 +104,7 @@ docs/                   计划书与接口契约
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `LEADSTACK_LISTEN` | `127.0.0.1:8080` | 监听地址（公网暴露请自行加 TLS 反代） |
+| `LEADSTACK_LISTEN` | `127.0.0.1:8080` | 监听地址；**也可在控制台「设置 → 网络与端口」里改（重启生效）**，控制台设置优先于本变量 |
 | `LEADSTACK_DATA_DIR` | `./data` | 数据目录（SQLite 单文件、`master.key`、`known_hosts`） |
 | `LEADSTACK_ADMIN_PASSWORD` | 随机生成 | 初始管理员密码，仅首次初始化生效 |
 | `LEADSTACK_MASTER_KEY` | 无（用 `master.key`） | 64 位 hex 的凭证加密主密钥；给了就不读文件 |
@@ -115,7 +116,7 @@ docs/                   计划书与接口契约
 | `LEADSTACK_DEPLOY_ROOT` | `/opt/leadstack/apps` | 部署基础目录（实际路径 `<root>/<app_slug>`） |
 | `LEADSTACK_DEPLOY_CONCURRENCY` | `4` | 发布并发上限 |
 | `LEADSTACK_ARTIFACT_MAX_MB` | `512` | 上传制品大小上限 |
-| `LEADSTACK_PUBLIC_URL` | 无 | 目标机回连控制端的地址；使用「上传型制品」时必填 |
+| `LEADSTACK_PUBLIC_URL` | 无 | 目标机回连控制端的地址；使用「上传型制品」时必填；**也可在设置页改，改完立即生效** |
 | `LEADSTACK_BACKUP_DIR` | `<data_dir>/backups` | 备份归档输出目录 |
 | `LEADSTACK_BACKUP_INTERVAL` | `24h` | 定时备份间隔 |
 | `LEADSTACK_BACKUP_RETENTION` | `7` | 保留份数 |
@@ -144,6 +145,7 @@ docs/                   计划书与接口契约
 - **批量部署已完成** —— [交付报告](docs/reports/deployment.md)（33/33 项验收，无回归）
 - **数据备份与恢复已完成** —— [交付报告](docs/reports/backup.md)（35/35 项验收）
 - **运维增强与团队协作已完成** —— [交付报告](docs/reports/ops-and-collaboration.md)（46/46 项验收）
+- **端口与网络自定义**：控制台监听 / 对外地址 / 目标机默认与单机端口（221 项验收全绿）
 - 计划书见 [docs/PLAN.md](docs/PLAN.md)
 
 端到端验收可一键复现（共 **212 项断言**）：
