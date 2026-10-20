@@ -11,7 +11,7 @@ interface ModalProps {
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
-  size?: 'md' | 'lg'
+  size?: 'md' | 'lg' | 'xl'
 }
 
 export function Modal({ open, title, description, onClose, children, footer, size = 'md' }: ModalProps) {
@@ -44,7 +44,7 @@ export function Modal({ open, title, description, onClose, children, footer, siz
         aria-labelledby="modal-title"
         className={cn(
           'relative flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900 sm:rounded-xl',
-          size === 'lg' ? 'sm:max-w-2xl' : 'sm:max-w-lg',
+          size === 'xl' ? 'sm:max-w-5xl' : size === 'lg' ? 'sm:max-w-2xl' : 'sm:max-w-lg',
         )}
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-800">

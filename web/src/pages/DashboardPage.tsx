@@ -8,8 +8,9 @@ import {
   type ServerFilters,
 } from '../lib/api'
 import { useNow, usePolling } from '../lib/hooks'
+import { useReleaseRuns } from '../lib/useReleaseRuns'
 import { errorMessage } from '../lib/errors'
-import { formatClockTime, formatUptime } from '../lib/format'
+import { formatClockTime, formatRelativeTime, formatUptime } from '../lib/format'
 import { AddServerWizard } from '../components/AddServerWizard'
 import { BatchActionBar } from '../components/BatchActionBar'
 import { BatchResultDialog } from '../components/BatchResultDialog'
@@ -19,6 +20,7 @@ import {
   AlertTriangleIcon,
   BellIcon,
   ChevronRightIcon,
+  FolderIcon,
   OfflineIcon,
   PlusIcon,
   PulseIcon,
@@ -30,6 +32,7 @@ import { InlineLoading } from '../components/Loading'
 import { ServerFiltersBar } from '../components/ServerFiltersBar'
 import { DeleteServerDialog, RenameServerDialog } from '../components/ServerDialogs'
 import { ServerTable } from '../components/ServerTable'
+import { ReleaseStatusBadge } from '../components/DeployBadges'
 import { StatCard } from '../components/StatCard'
 import { TagsDialog } from '../components/TagsDialog'
 import { useToast } from '../components/Toast'
@@ -52,6 +55,12 @@ export default function DashboardPage() {
   const groupsQuery = usePolling(api.groups, 10_000)
   const checksSummaryQuery = usePolling(api.checksSummary, 10_000)
   const alertsSummaryQuery = usePolling(api.alertsSummary, 10_000)
+  const releasesQuery = usePolling(() => api.releases({ limit: 5 }), 10_000)
+  const recentRuns = useReleaseRuns(
+    (releasesQuery.data ?? []).slice(0, 5).map((release) => release.id),
+    true,
+    10_000,
+  )
   const now = useNow()
 
   const [wizardOpen, setWizardOpen] = useState(false)
@@ -127,6 +136,7 @@ export default function DashboardPage() {
         groupsQuery.refresh(),
         checksSummaryQuery.refresh(),
         alertsSummaryQuery.refresh(),
+        releasesQuery.refresh(),
       ])
     } finally {
       setRefreshing(false)
@@ -139,6 +149,7 @@ export default function DashboardPage() {
     void groupsQuery.refresh()
     void checksSummaryQuery.refresh()
     void alertsSummaryQuery.refresh()
+    void releasesQuery.refresh()
   }
 
   const runBatch = async (title: string, action: BatchAction, params?: Record<string, unknown>) => {
@@ -394,6 +405,67 @@ export default function DashboardPage() {
               </span>
             </Link>
           ))}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300">
+              <FolderIcon className="h-4.5 w-4.5" />
+            </span>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">最近发布</h2>
+              <p className="text-xs text-slate-400 dark:text-slate-500">
+                最近 5 次批量部署的状态与版本，点击进入发布详情看实时日志
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/apps"
+            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+          >
+            去应用与发布
+            <ChevronRightIcon className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+
+        <div className="mt-3 space-y-1.5">
+          {(releasesQuery.data ?? []).length === 0 ? (
+            <p className="rounded-lg bg-slate-50 px-3 py-3 text-xs text-slate-400 dark:bg-slate-950/60 dark:text-slate-500">
+              还没有发布记录：到「应用」页创建应用与模板后即可发起批量部署
+            </p>
+          ) : (
+            (releasesQuery.data ?? []).slice(0, 5).map((release) => {
+              const runs = recentRuns[release.id] ?? release.runs
+              const success = runs.filter((run) => run.status === 'success').length
+              const failed = runs.filter((run) => run.status === 'failed').length
+              const active = runs.filter(
+                (run) => run.status === 'running' || run.status === 'pending',
+              ).length
+              return (
+                <Link
+                  key={release.id}
+                  to={`/releases/${encodeURIComponent(release.id)}`}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-slate-50 px-3 py-2 transition-colors hover:bg-slate-100 dark:bg-slate-950/60 dark:hover:bg-slate-900"
+                >
+                  <ReleaseStatusBadge status={release.status} />
+                  <span className="text-sm text-slate-800 dark:text-slate-100">
+                    {release.app_name ?? '应用'}
+                  </span>
+                  <span className="font-mono text-xs text-slate-500 dark:text-slate-400">
+                    v{release.version}
+                  </span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                    成功 {success} · 失败 {failed} · 进行中 {active}
+                  </span>
+                  <span className="ml-auto text-[11px] text-slate-400 dark:text-slate-500">
+                    {formatRelativeTime(release.created_at, now)}
+                  </span>
+                </Link>
+              )
+            })
+          )}
         </div>
       </section>
 

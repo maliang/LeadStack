@@ -120,7 +120,8 @@ func run() error {
 	// M2：任务下发（agent 通道）。Hub 实现 jobs.Sender，Dispatcher 实现 checker.Executor。
 	// 先建 Hub，再建依赖它的 Dispatcher，最后把同一个 Hub 注入 API。
 	hub := api.NewHub()
-	dispatcher := jobs.NewDispatcher(api.NewHubSender(hub), jobs.Options{Logger: logger})
+	hubSender := api.NewHubSender(hub)
+	dispatcher := jobs.NewDispatcher(hubSender, jobs.Options{Logger: logger})
 
 	// M2：检测执行通道——agent 走 job 下发，ssh 走 SSH 执行通道（带连接复用）。
 	sshExec := api.NewSSHExecutor(api.SSHExecutorOptions{
@@ -162,6 +163,29 @@ func run() error {
 		OnStateChange: alertBridge.OnCheckStateChange,
 	})
 
+	// M4：部署执行通道（ssh 直连 + agent 任务下发）与异步编排器。
+	deployRunner := api.NewDeployRunner(api.DeployRunnerOptions{
+		Store:          st,
+		Cipher:         cipher,
+		Dispatcher:     dispatcher,
+		KnownHostsPath: filepath.Join(cfg.DataDir, "known_hosts"),
+		Logger:         logger,
+	})
+	deployOrch := api.NewDeployOrchestrator(api.DeployOrchestratorOptions{
+		Store:       st,
+		Runner:      deployRunner,
+		Concurrency: cfg.DeployConcurrency,
+		PublicURL:   cfg.PublicURL,
+		DeployRoot:  cfg.DeployRoot,
+		Logger:      logger,
+	})
+	if closer, ok := deployRunner.(interface{ Close() }); ok && closer != nil {
+		defer closer.Close()
+	}
+	if deployOrch != nil {
+		defer deployOrch.Close()
+	}
+
 	srv, err := api.New(api.Options{
 		Config:      cfg,
 		Store:       st,
@@ -173,6 +197,7 @@ func run() error {
 		Hub:         hub,
 		Alerts:      alertEngine,
 		Notifier:    notifier,
+		Deploy:      deployOrch,
 		Logger:      logger,
 		Version:     version,
 	})
@@ -194,6 +219,9 @@ func run() error {
 	checkCtx, cancelChecks := context.WithCancel(ctx)
 	defer cancelChecks()
 	go scheduler.Start(checkCtx)
+
+	// 把部署日志旁路接到 HubSender：agent 模式的 job.log 实时写入 release_logs。
+	srv.WireAgentLogTap(hubSender)
 
 	// 告警评估循环：服务器上下线巡检 + 指标阈值评估。
 	alertCtx, cancelAlerts := context.WithCancel(ctx)

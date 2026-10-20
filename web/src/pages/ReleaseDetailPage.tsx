@@ -1,0 +1,419 @@
+import { useMemo, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { api, type Release } from '../lib/api'
+import { usePolling } from '../lib/hooks'
+import { errorMessage } from '../lib/errors'
+import { cn } from '../lib/cn'
+import { formatDateTime, formatRelativeTime } from '../lib/format'
+import { Button } from '../components/Button'
+import { ConfirmDialog } from '../components/ConfirmDialog'
+import { ReleaseStatusBadge } from '../components/DeployBadges'
+import {
+  AlertTriangleIcon,
+  ArrowLeftIcon,
+  ClockIcon,
+  RefreshIcon,
+  RotateCcwIcon,
+} from '../components/Icons'
+import { InlineLoading } from '../components/Loading'
+import { ReleaseLogPanel } from '../components/ReleaseLogPanel'
+import { useToast } from '../components/Toast'
+
+function summarize(release: Release) {
+  const success = release.runs.filter((run) => run.status === 'success').length
+  const failed = release.runs.filter((run) => run.status === 'failed').length
+  const active = release.runs.filter(
+    (run) => run.status === 'running' || run.status === 'pending',
+  ).length
+  const canceled = release.runs.filter((run) => run.status === 'canceled').length
+  return { success, failed, active, canceled, total: release.runs.length }
+}
+
+export default function ReleaseDetailPage() {
+  const { id } = useParams<{ id: string }>()
+  const { toast } = useToast()
+
+  const [activeServerId, setActiveServerId] = useState<string>('')
+  const [actionKind, setActionKind] = useState<'retry' | 'rollback' | 'cancel' | null>(null)
+  const [actionLoading, setActionLoading] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+
+  const releaseQuery = usePolling(() => api.release(id ?? ''), 3_000, Boolean(id), id ?? '')
+  const serversQuery = usePolling(api.servers, 30_000)
+  const appsQuery = usePolling(api.apps, 30_000)
+
+  const release = releaseQuery.data
+  const streaming = release?.status === 'pending' || release?.status === 'running'
+  const appName = useMemo(() => {
+    if (!release) return '应用'
+    if (release.app_name) return release.app_name
+    const app = (appsQuery.data ?? []).find((item) => item.id === release.app_id)
+    return app?.name ?? '应用'
+  }, [release, appsQuery.data])
+  const stats = release ? summarize(release) : null
+
+  const serverNameOf = useMemo(() => {
+    const names = new Map((serversQuery.data ?? []).map((server) => [server.id, server.name]))
+    return (serverId: string) => names.get(serverId) ?? serverId
+  }, [serversQuery.data])
+
+  const handleAction = async () => {
+    if (!release || !actionKind) return
+    setActionLoading(true)
+    setActionError(null)
+    try {
+      if (actionKind === 'retry') {
+        await api.retryRelease(release.id)
+        toast('已重试失败的服务器（成功的机器不会重复执行）', 'success')
+      } else if (actionKind === 'rollback') {
+        await api.rollbackRelease(release.id)
+        toast('已发起回滚', 'success')
+      } else {
+        await api.cancelRelease(release.id)
+        toast('已取消未完成的 run', 'success')
+      }
+      setActionKind(null)
+      await releaseQuery.refresh()
+    } catch (caught) {
+      setActionError(errorMessage(caught, '操作失败'))
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  if (releaseQuery.loading && !release) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <InlineLoading label="正在加载发布详情…" />
+      </div>
+    )
+  }
+
+  if (!release) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <p className="text-sm font-medium text-slate-900 dark:text-slate-100">发布不存在或已被删除</p>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          {releaseQuery.error ?? '请返回应用列表检查。'}
+        </p>
+        <Link to="/apps" className="mt-4 inline-block">
+          <Button variant="secondary" icon={<ArrowLeftIcon className="h-4 w-4" />}>
+            返回应用列表
+          </Button>
+        </Link>
+      </div>
+    )
+  }
+
+  const duration =
+    release.started_at && release.finished_at
+      ? Math.round((release.finished_at - release.started_at) / 1000)
+      : null
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <Link
+          to={release.app_id ? `/apps/${encodeURIComponent(release.app_id)}` : '/apps'}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 transition-colors hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400"
+        >
+          <ArrowLeftIcon className="h-3.5 w-3.5" />
+          返回应用
+        </Link>
+
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h1 className="truncate text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+                {appName} · v{release.version}
+              </h1>
+              <ReleaseStatusBadge status={release.status} />
+            </div>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              创建于 {formatDateTime(release.created_at)}（{formatRelativeTime(release.created_at)}）
+              {duration !== null ? ` · 耗时 ${duration} 秒` : ''}
+              {release.created_by ? ` · 发起人 ${release.created_by}` : ''}
+            </p>
+            <p className="mt-0.5 font-mono text-[11px] text-slate-400 dark:text-slate-500">
+              release {release.id}
+              {release.artifact_id ? ` · artifact ${release.artifact_id}` : ''}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => void releaseQuery.refresh()}
+              loading={releaseQuery.loading}
+              icon={<RefreshIcon className="h-4 w-4" />}
+            >
+              刷新
+            </Button>
+            {stats && stats.failed > 0 ? (
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setActionError(null)
+                  setActionKind('retry')
+                }}
+                icon={<RotateCcwIcon className="h-4 w-4" />}
+              >
+                重试失败项（{stats.failed}）
+              </Button>
+            ) : null}
+            {stats && stats.success > 0 ? (
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setActionError(null)
+                  setActionKind('rollback')
+                }}
+              >
+                回滚
+              </Button>
+            ) : null}
+            {stats && stats.active > 0 ? (
+              <Button
+                variant="danger"
+                onClick={() => {
+                  setActionError(null)
+                  setActionKind('cancel')
+                }}
+
+              >
+                取消
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      {releaseQuery.error ? (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
+          刷新失败：{releaseQuery.error}（下方为上次成功获取的数据）
+        </div>
+      ) : null}
+
+      {streaming ? (
+        <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+          发布执行中，进度与日志每 3 秒自动刷新
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[
+          { label: '成功', value: stats?.success ?? 0, tone: 'text-emerald-600 dark:text-emerald-300' },
+          { label: '失败', value: stats?.failed ?? 0, tone: 'text-rose-600 dark:text-rose-300' },
+          { label: '进行中', value: stats?.active ?? 0, tone: 'text-blue-600 dark:text-blue-300' },
+          {
+            label: '总计（含取消）',
+            value: `${stats?.total ?? 0}${stats && stats.canceled > 0 ? ` / 取消 ${stats.canceled}` : ''}`,
+            tone: 'text-slate-700 dark:text-slate-200',
+          },
+        ].map((card) => (
+          <div
+            key={card.label}
+            className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+          >
+            <span className="block text-xs text-slate-500 dark:text-slate-400">{card.label}</span>
+            <span className={cn('mt-1 block text-xl font-semibold tabular-nums', card.tone)}>
+              {card.value}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">服务器执行情况</h2>
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            点击某一行可切换下方日志面板；失败会显示失败步骤、退出码与原因
+          </p>
+        </div>
+
+        {release.runs.length === 0 ? (
+          <p className="px-4 py-6 text-center text-xs text-slate-400 dark:text-slate-500">
+            该发布没有目标服务器记录
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1080px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-xs font-medium whitespace-nowrap text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                  <th scope="col" className="px-4 py-2.5 font-medium">服务器</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">状态</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">退出码</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">失败步骤</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">原因 / 摘要</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">耗时</th>
+                  <th scope="col" className="px-4 py-2.5 text-right font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
+                {release.runs.map((run) => {
+                  const runDuration =
+                    run.started_at && run.finished_at
+                      ? Math.round((run.finished_at - run.started_at) / 1000)
+                      : null
+                  const isActive = activeServerId === run.server_id
+                  return (
+                    <tr
+                      key={run.server_id}
+                      onClick={() => setActiveServerId(run.server_id)}
+                      className={cn(
+                        'cursor-pointer transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-900/60',
+                        isActive && 'bg-indigo-50/50 dark:bg-indigo-500/5',
+                      )}
+                    >
+                      <td className="px-4 py-3 align-top">
+                        <span className="text-sm font-medium text-slate-800 dark:text-slate-100">
+                          {run.server_name ?? serverNameOf(run.server_id)}
+                        </span>
+                        <span className="mt-0.5 block font-mono text-[11px] text-slate-400 dark:text-slate-500">
+                          {run.server_id}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        <ReleaseStatusBadge status={run.status} />
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        {run.exit_code === null ? (
+                          <span className="text-xs text-slate-400 dark:text-slate-500">—</span>
+                        ) : (
+                          <span
+                            className={cn(
+                              'font-mono text-xs',
+                              run.exit_code === 0
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-rose-600 dark:text-rose-400',
+                            )}
+                          >
+                            {run.exit_code}
+                          </span>
+                        )}
+                      </td>
+                      <td className="max-w-[180px] px-4 py-3 align-top">
+                        {run.failed_step ? (
+                          <span className="inline-flex items-center gap-1 rounded bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">
+                            <AlertTriangleIcon className="h-3 w-3" />
+                            {run.failed_step}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-400 dark:text-slate-500">—</span>
+                        )}
+                      </td>
+                      <td className="max-w-[320px] px-4 py-3 align-top">
+                        {run.message ? (
+                          <span
+                            className={cn(
+                              'block truncate text-xs',
+                              run.status === 'failed'
+                                ? 'text-rose-600 dark:text-rose-400'
+                                : 'text-slate-600 dark:text-slate-300',
+                            )}
+                            title={run.message}
+                          >
+                            {run.message}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-400 dark:text-slate-500">—</span>
+                        )}
+                        {run.prev_release_id ? (
+                          <span className="mt-0.5 block font-mono text-[11px] text-slate-400 dark:text-slate-500">
+                            上一版本 {run.prev_release_id}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3 align-top text-xs tabular-nums text-slate-600 dark:text-slate-300">
+                        {runDuration === null ? '—' : `${runDuration} 秒`}
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        <div className="flex justify-end">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setActiveServerId(run.server_id)
+                              document
+                                .getElementById('release-log-panel')
+                                ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                            }}
+                          >
+                            查看日志
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section
+        id="release-log-panel"
+        className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">实时日志</h2>
+            <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+              按 run 增量拉取（after_seq 断点续读），不整段重拉；可切换服务器，失败原因就在日志末尾
+            </p>
+          </div>
+          <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500">
+            <ClockIcon className="h-3.5 w-3.5" />
+            {release.finished_at
+              ? `结束于 ${formatDateTime(release.finished_at)}`
+              : '仍在执行中'}
+          </span>
+        </div>
+        <div className="mt-3">
+          <ReleaseLogPanel
+            releaseId={release.id}
+            runs={release.runs}
+            streaming={streaming}
+            activeServerId={activeServerId || undefined}
+            onSelectServer={setActiveServerId}
+          />
+        </div>
+      </section>
+
+      <p className="text-xs text-slate-400 dark:text-slate-500">
+        失败时控制端会按逆序执行回滚步骤；回滚 = 把 current 指回上一个成功版本，秒级生效且不会重新下载制品。
+      </p>
+
+      <ConfirmDialog
+        open={actionKind !== null}
+        title={
+          actionKind === 'retry'
+            ? '重试失败的服务器'
+            : actionKind === 'rollback'
+              ? '回滚这次发布'
+              : '取消未完成的 run'
+        }
+        description={`发布：v${release.version}`}
+        confirmLabel={actionKind === 'cancel' ? '确认取消' : '确认执行'}
+        tone={actionKind === 'cancel' ? 'danger' : 'primary'}
+        loading={actionLoading}
+        error={actionError}
+        onClose={() => {
+          setActionKind(null)
+          setActionError(null)
+        }}
+        onConfirm={() => void handleAction()}
+      >
+        {actionKind === 'retry' ? (
+          <p>只重跑 failed 的服务器（当前 {stats?.failed ?? 0} 台），成功的机器不会重复执行。</p>
+        ) : actionKind === 'rollback' ? (
+          <p>把各服务器的 current 指回上一个成功版本并重启服务，秒级完成、无需重新下载制品。</p>
+        ) : (
+          <p>终止仍在 pending / running 的 run（当前 {stats?.active ?? 0} 台），已成功的机器不受影响。</p>
+        )}
+      </ConfirmDialog>
+    </div>
+  )
+}

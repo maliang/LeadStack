@@ -18,6 +18,23 @@ web/dist
 internal/webui/dist
 .e2e-logs
 
+# ---------------------------------------------------------------------------
+# M4：制品与部署根目录绝不进镜像
+#   - 上传型制品由控制端存到数据目录内（<LEADSTACK_DATA_DIR>/artifacts，即 /data 卷），
+#     随 data 一起被上面排除；这里再显式列出常见的独立目录名，防止有人把
+#     LEADSTACK_ARTIFACT_DIR / LEADSTACK_DEPLOY_ROOT 指到仓库里。
+#   - 部署根目录（默认 /opt/leadstack/apps/<app_slug>，含 current 符号链接、
+#     releases/ 快照与 .leadstack/ 元数据）属于**目标机运行时状态**，
+#     不是镜像内容；Docker 场景应通过 volume 挂载，见 deploy/docker-compose.yml。
+# ---------------------------------------------------------------------------
+artifacts
+data/artifacts
+.deploy-root
+deploy-root
+.leadstack
+opt
+mnt
+
 # 本地数据与凭证
 *.db
 *.db-wal

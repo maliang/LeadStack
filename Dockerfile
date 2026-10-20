@@ -79,8 +79,18 @@ USER leadstack
 ENV LEADSTACK_LISTEN=0.0.0.0:8080 \
     LEADSTACK_DATA_DIR=/data
 
+# 持久化：
+#   /data —— SQLite 数据库 + 上传型制品（<data_dir>/artifacts）。制品与数据库同卷，
+#            否则容器重建后会丢失制品文件（release 记录还在，但下载会 404）。
 VOLUME ["/data"]
 EXPOSE 8080
+
+# M4 部署根目录（可选，仅当控制端自己也作为部署目标时才需要）：
+#   目标机上的 <root>/current -> releases/<ts>-<hash> 快照、.leadstack/ 元数据都属于
+#   运行时状态，**不在镜像内**（.dockerignore 已排除 artifacts/ 与各种 deploy root 目录）。
+#   容器场景请用 volume 把 LEADSTACK_DEPLOY_ROOT 挂进来，例如：
+#     docker run -v leadstack-deploy:/opt/leadstack/apps -e LEADSTACK_DEPLOY_ROOT=/opt/leadstack/apps ...
+#   或参考 deploy/docker-compose.yml 里被注释掉的 deploy-root 示例。
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1

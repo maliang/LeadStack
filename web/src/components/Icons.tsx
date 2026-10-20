@@ -324,5 +324,11 @@ export function CheckCircleIcon(props: IconProps) {
   )
 }
 
-
-
+export function RotateCcwIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M3.5 5v5h5" />
+      <path d="M4.2 10a8 8 0 1 1 1.6 5.6" />
+    </Base>
+  )
+}

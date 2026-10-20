@@ -35,6 +35,14 @@ const (
 	EnvAlertEvalInterval = "LEADSTACK_ALERT_EVAL_INTERVAL"
 	// EnvAlertRetentionDays 是已解除告警的保留天数。
 	EnvAlertRetentionDays = "LEADSTACK_ALERT_RETENTION_DAYS"
+	// EnvDeployConcurrency 是批量发布的最大并发数。
+	EnvDeployConcurrency = "LEADSTACK_DEPLOY_CONCURRENCY"
+	// EnvArtifactMaxMB 是上传制品的最大体积（MB）。
+	EnvArtifactMaxMB = "LEADSTACK_ARTIFACT_MAX_MB"
+	// EnvDeployRoot 是目标机上的部署根目录。
+	EnvDeployRoot = "LEADSTACK_DEPLOY_ROOT"
+	// EnvPublicURL 是控制端对目标机可达的基地址（upload 制品下载用）。
+	EnvPublicURL = "LEADSTACK_PUBLIC_URL"
 )
 
 // 默认值。
@@ -59,6 +67,14 @@ const (
 	DefaultAlertEvalInterval = 30 * time.Second
 	// DefaultAlertRetentionDays 是已解除告警的默认保留天数。
 	DefaultAlertRetentionDays = 90
+	// DefaultDeployConcurrency 是批量发布的默认并发上限。
+	DefaultDeployConcurrency = 4
+	// DefaultArtifactMaxMB 是上传制品的默认体积上限（MB）。
+	DefaultArtifactMaxMB = 512
+	// DefaultDeployRoot 是目标机上的默认部署根目录。
+	DefaultDeployRoot = "/opt/leadstack/apps"
+	// ArtifactsDirName 是控制端存放上传制品的目录名（位于 DataDir 下）。
+	ArtifactsDirName = "artifacts"
 	// MasterKeyFileName 是主密钥文件名（位于 DataDir 下）。
 	MasterKeyFileName = "master.key"
 	// MasterKeySize 是主密钥字节数（AES-256）。
@@ -98,6 +114,14 @@ type Config struct {
 	AlertEvalInterval time.Duration
 	// AlertRetentionDays 是已解除告警的保留天数。
 	AlertRetentionDays int
+	// DeployConcurrency 是批量发布的最大并发数。
+	DeployConcurrency int
+	// ArtifactMaxMB 是上传制品的最大体积（MB）。
+	ArtifactMaxMB int
+	// DeployRoot 是目标机上的部署根目录。
+	DeployRoot string
+	// PublicURL 是控制端对目标机可达的基地址；upload 制品部署时需要。
+	PublicURL string
 }
 
 // Load 解析配置。version 由调用方（main）传入，args 通常为 os.Args[1:]。
@@ -118,6 +142,10 @@ func Load(version string, args []string) (*Config, error) {
 	checkIntervalMin := fs.Duration("check-interval-min", defaultCheckIntervalMin(), "检测项 interval_s 的下限，如 10s（环境变量 "+EnvCheckIntervalMin+"）")
 	alertEvalInterval := fs.Duration("alert-eval-interval", defaultDurationOr(EnvAlertEvalInterval, DefaultAlertEvalInterval), "告警指标评估周期，如 30s（环境变量 "+EnvAlertEvalInterval+"）")
 	alertRetentionDays := fs.Int("alert-retention-days", envIntOr(EnvAlertRetentionDays, DefaultAlertRetentionDays), "已解除告警保留天数（环境变量 "+EnvAlertRetentionDays+"）")
+	deployConcurrency := fs.Int("deploy-concurrency", envIntOr(EnvDeployConcurrency, DefaultDeployConcurrency), "批量发布并发上限（环境变量 "+EnvDeployConcurrency+"）")
+	artifactMaxMB := fs.Int("artifact-max-mb", envIntOr(EnvArtifactMaxMB, DefaultArtifactMaxMB), "上传制品体积上限 MB（环境变量 "+EnvArtifactMaxMB+"）")
+	deployRoot := fs.String("deploy-root", envOr(EnvDeployRoot, DefaultDeployRoot), "目标机部署根目录（环境变量 "+EnvDeployRoot+"）")
+	publicURL := fs.String("public-url", strings.TrimSpace(os.Getenv(EnvPublicURL)), "控制端可达基地址，如 http://10.0.0.1:8080（环境变量 "+EnvPublicURL+"）")
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("解析命令行参数: %w", err)
 	}
@@ -135,6 +163,10 @@ func Load(version string, args []string) (*Config, error) {
 		CheckIntervalMin:   *checkIntervalMin,
 		AlertEvalInterval:  *alertEvalInterval,
 		AlertRetentionDays: *alertRetentionDays,
+		DeployConcurrency:  *deployConcurrency,
+		ArtifactMaxMB:      *artifactMaxMB,
+		DeployRoot:         strings.TrimSpace(*deployRoot),
+		PublicURL:          strings.TrimSuffix(strings.TrimSpace(*publicURL), "/"),
 	}
 
 	if cfg.Listen == "" {
@@ -167,6 +199,18 @@ func Load(version string, args []string) (*Config, error) {
 	}
 	if cfg.AlertRetentionDays < 1 || cfg.AlertRetentionDays > 3650 {
 		return nil, errors.New("配置错误: alert-retention-days 必须在 1-3650 之间")
+	}
+	if cfg.DeployConcurrency < 1 || cfg.DeployConcurrency > 64 {
+		return nil, errors.New("配置错误: deploy-concurrency 必须在 1-64 之间")
+	}
+	if cfg.ArtifactMaxMB < 1 || cfg.ArtifactMaxMB > 10240 {
+		return nil, errors.New("配置错误: artifact-max-mb 必须在 1-10240 之间")
+	}
+	if cfg.DeployRoot == "" || !strings.HasPrefix(cfg.DeployRoot, "/") {
+		return nil, errors.New("配置错误: deploy-root 必须是非空的绝对路径")
+	}
+	if cfg.PublicURL != "" && !strings.HasPrefix(cfg.PublicURL, "http://") && !strings.HasPrefix(cfg.PublicURL, "https://") {
+		return nil, errors.New("配置错误: public-url 必须以 http:// 或 https:// 开头")
 	}
 
 	if raw := strings.TrimSpace(*masterKeyHex); raw != "" {
@@ -223,6 +267,16 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// ArtifactsDir 返回上传制品的存放目录（<data-dir>/artifacts）。
+func (c *Config) ArtifactsDir() string {
+	return filepath.Join(c.DataDir, ArtifactsDirName)
+}
+
+// ArtifactMaxBytes 返回上传制品的字节上限。
+func (c *Config) ArtifactMaxBytes() int64 {
+	return int64(c.ArtifactMaxMB) << 20
 }
 
 // MasterKeyPath 返回主密钥文件路径（<data-dir>/master.key）。

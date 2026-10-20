@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -31,6 +32,32 @@ type jobFrameResult struct {
 // HubSender 把 jobs.Sender 适配到 WebSocket Hub：SendJob 直接写对应连接。
 type HubSender struct {
 	hub *Hub
+
+	mu       sync.RWMutex
+	observer func(serverID, runID string)
+}
+
+// SetSendJobObserver 注册「一次 job.exec 已下发」的观察者（用于发布日志旁路绑定 runID）。
+func (s *HubSender) SetSendJobObserver(fn func(serverID, runID string)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.observer = fn
+	s.mu.Unlock()
+}
+
+// notifyObserver 通知观察者（不存在时静默跳过）。
+func (s *HubSender) notifyObserver(serverID, runID string) {
+	if s == nil {
+		return
+	}
+	s.mu.RLock()
+	fn := s.observer
+	s.mu.RUnlock()
+	if fn != nil && runID != "" {
+		fn(serverID, runID)
+	}
 }
 
 // 编译期确认接口实现。
@@ -50,6 +77,8 @@ func (s *HubSender) SendJob(serverID string, envelope []byte) error {
 	if !ok {
 		return fmt.Errorf("发送任务到服务器 %s: %w", serverID, jobs.ErrServerOffline)
 	}
+	// 先绑定 runID（若有部署日志旁路在等待），再写帧，保证不会漏掉紧随其后的 job.log。
+	s.notifyObserver(serverID, extractRunIDFromEnvelope(envelope))
 	if err := conn.writeRaw(envelope); err != nil {
 		return fmt.Errorf("发送任务到服务器 %s: %w: %v", serverID, jobs.ErrSendFailed, err)
 	}

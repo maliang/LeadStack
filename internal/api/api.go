@@ -42,7 +42,9 @@ type Options struct {
 	// Alerts 是告警引擎端口（*alerting.Engine）；为 nil 时规则/渠道写操作不触发 Reload。
 	Alerts AlertEngine
 	// Notifier 是通知渠道端口（*NotifyAdapter）；为 nil 时渠道配置不做强校验、测试发送返回未启用。
-	Notifier  Notifier
+	Notifier Notifier
+	// Deploy 是发布编排端口；为 nil 时创建发布只落库不执行（run 保持 pending）。
+	Deploy    DeployOrchestrator
 	Version   string
 	StartedAt time.Time
 }
@@ -58,6 +60,9 @@ type API struct {
 	jobs      JobRouter
 	alerts    AlertEngine
 	notifier  Notifier
+	deploy    DeployOrchestrator
+	artifacts *artifactStore
+	logTap    *agentLogTap
 	logger    *slog.Logger
 	version   string
 	startedAt time.Time
@@ -84,6 +89,10 @@ func New(opts Options) (*API, error) {
 	if hub == nil {
 		hub = NewHub()
 	}
+	artifacts, err := newArtifactStore(opts.Config.ArtifactsDir(), opts.Config.ArtifactMaxBytes())
+	if err != nil {
+		return nil, err
+	}
 	startedAt := opts.StartedAt
 	if startedAt.IsZero() {
 		startedAt = time.Now()
@@ -102,6 +111,9 @@ func New(opts Options) (*API, error) {
 		jobs:      opts.Jobs,
 		alerts:    opts.Alerts,
 		notifier:  opts.Notifier,
+		deploy:    opts.Deploy,
+		artifacts: artifacts,
+		logTap:    newAgentLogTap(opts.Store, logger),
 		logger:    logger,
 		version:   version,
 		startedAt: startedAt,
@@ -115,6 +127,15 @@ func (a *API) Logger() *slog.Logger { return a.logger }
 
 // Hub 返回活跃 agent 连接表（供 M1 的任务下发复用）。
 func (a *API) Hub() *Hub { return a.hub }
+
+// WireAgentLogTap 把 agent 日志旁路接到 HubSender：部署任务下发时绑定 runID，
+// 之后该 run 的 job.log 帧会被实时写入 release_logs（agent 模式的流式日志）。
+func (a *API) WireAgentLogTap(sender *HubSender) {
+	if a == nil || sender == nil || a.logTap == nil {
+		return
+	}
+	sender.SetSendJobObserver(a.logTap.Bind)
+}
 
 // uptimeSeconds 返回进程已运行秒数。
 func (a *API) uptimeSeconds() int64 {

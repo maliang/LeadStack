@@ -274,3 +274,97 @@ const (
 	AlertEventNotify   = "notify"
 	AlertEventSilenced = "silenced"
 )
+
+// ------------------------------------------------ M4：批量部署 ------------------------------------------------
+
+// App 是一个被部署的业务应用。
+type App struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Slug        string  `json:"slug"`
+	Root        *string `json:"root"`
+	Description *string `json:"description"`
+	CreatedAt   int64   `json:"created_at"`
+}
+
+// DeployTemplate 是部署模板（版本化文本，发布时冻结快照）。
+type DeployTemplate struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Content   string `json:"content"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+// Artifact 是要部署的制品。
+type Artifact struct {
+	ID        string  `json:"id"`
+	Kind      string  `json:"kind"`
+	Location  string  `json:"location"`
+	SHA256    *string `json:"sha256"`
+	SizeBytes int64   `json:"size_bytes"`
+	CreatedAt int64   `json:"created_at"`
+}
+
+// Release 是一次发布的记录。
+type Release struct {
+	ID               string  `json:"id"`
+	AppID            string  `json:"app_id"`
+	TemplateID       string  `json:"template_id"`
+	Version          string  `json:"version"`
+	ArtifactID       *string `json:"artifact_id"`
+	TemplateSnapshot string  `json:"template_snapshot"`
+	Status           string  `json:"status"`
+	CreatedBy        *string `json:"created_by"`
+	CreatedAt        int64   `json:"created_at"`
+	StartedAt        *int64  `json:"started_at"`
+	FinishedAt       *int64  `json:"finished_at"`
+	Concurrency      int     `json:"concurrency"`
+}
+
+// ReleaseRun 是一次发布在某台服务器上的执行单元。
+type ReleaseRun struct {
+	ID            string  `json:"id"`
+	ReleaseID     string  `json:"release_id"`
+	ServerID      string  `json:"server_id"`
+	Status        string  `json:"status"`
+	ExitCode      *int    `json:"exit_code"`
+	Message       *string `json:"message"`
+	FailedStep    *string `json:"failed_step"`
+	PrevReleaseID *string `json:"prev_release_id"`
+	StartedAt     *int64  `json:"started_at"`
+	FinishedAt    *int64  `json:"finished_at"`
+}
+
+// ReleaseLog 是发布日志的一条分块。
+type ReleaseLog struct {
+	ReleaseRunID string `json:"release_run_id"`
+	Seq          int64  `json:"seq"`
+	TS           int64  `json:"ts"`
+	Stream       string `json:"stream"`
+	Chunk        string `json:"chunk"`
+}
+
+// 发布与执行单元的状态。
+const (
+	ReleaseStatusPending  = "pending"
+	ReleaseStatusRunning  = "running"
+	ReleaseStatusSuccess  = "success"
+	ReleaseStatusFailed   = "failed"
+	ReleaseStatusCanceled = "canceled"
+)
+
+// 制品类型。
+const (
+	ArtifactKindURL    = "url"
+	ArtifactKindUpload = "upload"
+	ArtifactKindImage  = "image"
+)
+
+// 模板类型。
+const (
+	TemplateKindCompose = "compose"
+	TemplateKindSystemd = "systemd"
+	TemplateKindBinary  = "binary"
+)

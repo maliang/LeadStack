@@ -133,6 +133,54 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return payload as T
 }
 
+/** multipart 上传（制品上传用）：与 request 相同的信封与 401 处理。 */
+async function requestMultipart<T>(
+  path: string,
+  form: FormData,
+  options: { auth?: boolean } = {},
+): Promise<T> {
+  const { auth = true } = options
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  const token = getToken()
+  if (auth && token) headers.Authorization = `Bearer ${token}`
+
+  let response: Response
+  try {
+    response = await fetch(`${API_PREFIX}${path}`, { method: 'POST', headers, body: form })
+  } catch {
+    throw new ApiError(0, 'network_error', '无法连接控制端，请确认 LeadStack 服务已启动')
+  }
+
+  const text = await response.text()
+  let payload: unknown = null
+  if (text) {
+    try {
+      payload = JSON.parse(text)
+    } catch {
+      payload = null
+    }
+  }
+
+  if (!response.ok) {
+    const envelope = payload as ErrorEnvelope | null
+    const apiError = new ApiError(
+      response.status,
+      envelope?.error?.code ?? 'http_error',
+      envelope?.error?.message ?? `请求失败（HTTP ${response.status}）`,
+    )
+    if (response.status === 401 && auth) {
+      clearToken()
+      unauthorizedHandler?.()
+    }
+    throw apiError
+  }
+
+  if (payload !== null && typeof payload === 'object' && 'data' in payload) {
+    return (payload as { data: T }).data
+  }
+  return payload as T
+}
+
 /* ------------------------------------------------------------------ */
 /* 数据类型（字段名严格对齐契约第 3 节）                                 */
 /* ------------------------------------------------------------------ */
@@ -402,6 +450,129 @@ export interface CheckResultsQuery {
   server_id?: string
   from?: number
   to?: number
+  limit?: number
+}
+
+/* ------------------------------------------------------------------ */
+/* M4：批量部署（契约第 23/24/26/27 节）                                */
+/* ------------------------------------------------------------------ */
+
+export type ReleaseStatus = 'pending' | 'running' | 'success' | 'failed' | 'canceled'
+export type TemplateKind = 'compose' | 'systemd' | 'binary'
+export type ArtifactKind = 'url' | 'upload' | 'image'
+
+export interface AppItem {
+  id: string
+  name: string
+  slug: string
+  root: string | null
+  description: string | null
+  created_at: number | null
+  /** 后端可能聚合出的统计；缺失时前端用 releases 列表本地折算 */
+  release_count: number
+  server_count: number
+  last_release: Release | null
+}
+
+export interface DeployTemplate {
+  id: string
+  name: string
+  kind: TemplateKind | string
+  content: string
+  created_at: number | null
+  updated_at: number | null
+}
+
+export interface Artifact {
+  id: string
+  kind: ArtifactKind | string
+  location: string
+  sha256: string | null
+  size_bytes: number
+  created_at: number | null
+}
+
+export interface ReleaseRun {
+  id: string
+  release_id: string
+  server_id: string
+  server_name: string | null
+  status: ReleaseStatus
+  exit_code: number | null
+  message: string | null
+  failed_step: string | null
+  prev_release_id: string | null
+  started_at: number | null
+  finished_at: number | null
+}
+
+export interface Release {
+  id: string
+  app_id: string
+  app_name: string | null
+  app_slug: string | null
+  template_id: string
+  template_name: string | null
+  version: string
+  artifact_id: string | null
+  status: ReleaseStatus
+  created_by: string | null
+  created_at: number | null
+  started_at: number | null
+  finished_at: number | null
+  concurrency: number
+  runs: ReleaseRun[]
+}
+
+export interface ReleaseLogEntry {
+  seq: number
+  ts: number | null
+  stream: string
+  chunk: string
+}
+
+/** 模板渲染预览的可用占位符（契约第 26 节）。 */
+export const TEMPLATE_PLACEHOLDERS: { name: string; description: string }[] = [
+  { name: 'APP_SLUG', description: '应用 slug（[a-z0-9-]{1,40}）' },
+  { name: 'VERSION', description: '版本号（[A-Za-z0-9._-]{1,64}）' },
+  { name: 'RELEASE_ID', description: '本次发布 ID' },
+  { name: 'ROOT', description: '部署根目录' },
+  { name: 'RELEASE_DIR', description: '<ROOT>/releases/<RELEASE_ID>' },
+  { name: 'ARTIFACT_URL', description: '制品下载地址' },
+  { name: 'ARTIFACT_SHA256', description: '制品校验和' },
+  { name: 'PREV_RELEASE_ID', description: '上一个成功发布 ID' },
+]
+
+export interface CreateAppPayload {
+  name: string
+  slug: string
+  root?: string
+  description?: string
+}
+
+export interface CreateTemplatePayload {
+  name: string
+  kind: TemplateKind
+  content: string
+}
+
+export interface CreateReleasePayload {
+  app_id: string
+  template_id: string
+  version: string
+  artifact_id: string
+  server_ids: string[]
+  concurrency?: number
+}
+
+export interface CreateReleaseResponse {
+  release: Release
+  runs: ReleaseRun[]
+}
+
+export interface ReleaseFilters {
+  app_id?: string
+  status?: ReleaseStatus | ''
   limit?: number
 }
 
@@ -984,6 +1155,123 @@ export function normalizeAlertSummary(input: unknown): AlertSummary {
   }
 }
 
+/* ---------------------- M4 部署：归一化 ---------------------- */
+
+function normalizeReleaseStatus(value: unknown): ReleaseStatus {
+  switch (value) {
+    case 'pending':
+    case 'running':
+    case 'success':
+    case 'failed':
+    case 'canceled':
+      return value
+    case 'queued':
+      return 'pending'
+    case 'cancelled':
+      return 'canceled'
+    default:
+      return 'pending'
+  }
+}
+
+export function normalizeReleaseRun(input: unknown): ReleaseRun {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: String(raw.id ?? ''),
+    release_id: toText(raw.release_id) ?? '',
+    server_id: toText(raw.server_id) ?? '',
+    server_name: toText(raw.server_name),
+    status: normalizeReleaseStatus(raw.status),
+    exit_code: toNumber(raw.exit_code),
+    message: toText(raw.message),
+    failed_step: toText(raw.failed_step),
+    prev_release_id: toText(raw.prev_release_id),
+    started_at: toNumber(raw.started_at),
+    finished_at: toNumber(raw.finished_at),
+  }
+}
+
+export function normalizeRelease(input: unknown): Release {
+  const raw = toRecord(input) ?? {}
+  const runs = extractList(raw.runs, ['runs', 'items']).map(normalizeReleaseRun)
+  return {
+    id: String(raw.id ?? ''),
+    app_id: toText(raw.app_id) ?? '',
+    app_name: toText(raw.app_name),
+    app_slug: toText(raw.app_slug),
+    template_id: toText(raw.template_id) ?? '',
+    template_name: toText(raw.template_name),
+    version: toText(raw.version) ?? '—',
+    artifact_id: toText(raw.artifact_id),
+    status: normalizeReleaseStatus(raw.status),
+    created_by: toText(raw.created_by),
+    created_at: toNumber(raw.created_at),
+    started_at: toNumber(raw.started_at),
+    finished_at: toNumber(raw.finished_at),
+    concurrency: toNumber(raw.concurrency) ?? 4,
+    runs,
+  }
+}
+
+export function normalizeApp(input: unknown): AppItem {
+  const raw = toRecord(input) ?? {}
+  const lastReleaseRaw = raw.last_release ?? raw.latest_release
+  const lastRelease = lastReleaseRaw ? normalizeRelease(lastReleaseRaw) : null
+  return {
+    id: String(raw.id ?? ''),
+    name: toText(raw.name) ?? '未命名应用',
+    slug: toText(raw.slug) ?? '',
+    root: toText(raw.root),
+    description: toText(raw.description),
+    created_at: toNumber(raw.created_at),
+    release_count: toNumber(raw.release_count ?? raw.releases_count) ?? 0,
+    server_count: toNumber(raw.server_count ?? raw.target_count) ?? 0,
+    last_release: lastRelease,
+  }
+}
+
+export function normalizeTemplate(input: unknown): DeployTemplate {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: String(raw.id ?? ''),
+    name: toText(raw.name) ?? '未命名模板',
+    kind: toText(raw.kind) ?? 'binary',
+    content: typeof raw.content === 'string' ? raw.content : '',
+    created_at: toNumber(raw.created_at),
+    updated_at: toNumber(raw.updated_at),
+  }
+}
+
+export function normalizeArtifact(input: unknown): Artifact {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: String(raw.id ?? ''),
+    kind: toText(raw.kind) ?? 'url',
+    location: toText(raw.location ?? raw.url) ?? '',
+    sha256: toText(raw.sha256),
+    size_bytes: toNumber(raw.size_bytes) ?? 0,
+    created_at: toNumber(raw.created_at),
+  }
+}
+
+export function normalizeReleaseLogs(input: unknown): ReleaseLogEntry[] {
+  return extractList(input, ['logs', 'items', 'entries'])
+    .map((item) => {
+      const raw = toRecord(item)
+      if (!raw) return null
+      const seq = toNumber(raw.seq)
+      if (seq === null) return null
+      return {
+        seq,
+        ts: toNumber(raw.ts),
+        stream: toText(raw.stream) ?? 'stdout',
+        chunk: typeof raw.chunk === 'string' ? raw.chunk : String(raw.chunk ?? ''),
+      }
+    })
+    .filter((item): item is ReleaseLogEntry => item !== null)
+    .sort((a, b) => a.seq - b.seq)
+}
+
 export function normalizeCredential(input: unknown): Credential {
   const raw = toRecord(input) ?? {}
   return {
@@ -1425,6 +1713,165 @@ export const api = {
 
   alertsSummary(): Promise<AlertSummary> {
     return request<unknown>('/alerts/summary').then(normalizeAlertSummary)
+  },
+
+  /* ---------------------- M4：批量部署（契约第 27 节） ---------------------- */
+
+  apps(): Promise<AppItem[]> {
+    return request<unknown>('/apps').then((raw) =>
+      extractList(raw, ['apps', 'items']).map(normalizeApp),
+    )
+  },
+
+  app(id: string): Promise<AppItem> {
+    return request<unknown>(`/apps/${encodeURIComponent(id)}`).then(normalizeApp)
+  },
+
+  createApp(payload: CreateAppPayload): Promise<AppItem> {
+    return request<unknown>('/apps', { method: 'POST', body: payload }).then(normalizeApp)
+  },
+
+  updateApp(id: string, payload: Partial<CreateAppPayload>): Promise<AppItem> {
+    return request<unknown>(`/apps/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: payload,
+    }).then(normalizeApp)
+  },
+
+  deleteApp(id: string): Promise<unknown> {
+    return request<unknown>(`/apps/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  templates(): Promise<DeployTemplate[]> {
+    return request<unknown>('/templates').then((raw) =>
+      extractList(raw, ['templates', 'items']).map(normalizeTemplate),
+    )
+  },
+
+  template(id: string): Promise<DeployTemplate> {
+    return request<unknown>(`/templates/${encodeURIComponent(id)}`).then(normalizeTemplate)
+  },
+
+  createTemplate(payload: CreateTemplatePayload): Promise<DeployTemplate> {
+    return request<unknown>('/templates', { method: 'POST', body: payload }).then(normalizeTemplate)
+  },
+
+  updateTemplate(id: string, payload: Partial<CreateTemplatePayload>): Promise<DeployTemplate> {
+    return request<unknown>(`/templates/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: payload,
+    }).then(normalizeTemplate)
+  },
+
+  deleteTemplate(id: string): Promise<unknown> {
+    return request<unknown>(`/templates/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  /** POST /templates/{id}/render —— 只做占位符替换预览，不执行任何命令 */
+  renderTemplate(id: string, vars: Record<string, string>): Promise<string> {
+    return request<unknown>(`/templates/${encodeURIComponent(id)}/render`, {
+      method: 'POST',
+      body: { vars },
+    }).then((raw) => toText(toRecord(raw)?.content) ?? '')
+  },
+
+  /** POST /artifacts（multipart）—— 上传制品 */
+  uploadArtifact(file: File): Promise<Artifact> {
+    const form = new FormData()
+    form.append('file', file, file.name)
+    return requestMultipart<unknown>('/artifacts', form).then(normalizeArtifact)
+  },
+
+  /**
+   * POST /artifacts —— 登记 URL 制品。
+   * 后端要求必须带 64 位十六进制 sha256（目标机下载后校验，校验不过不切换 current），缺失会 400。
+   */
+  registerUrlArtifact(url: string, sha256: string, sizeBytes?: number): Promise<Artifact> {
+    return request<unknown>('/artifacts', {
+      method: 'POST',
+      body: {
+        kind: 'url',
+        url,
+        sha256: sha256.trim().toLowerCase(),
+        size_bytes: sizeBytes,
+      },
+    }).then(normalizeArtifact)
+  },
+
+  releases(filters: ReleaseFilters = {}): Promise<Release[]> {
+    const params = new URLSearchParams()
+    if (filters.app_id) params.set('app_id', filters.app_id)
+    if (filters.status) params.set('status', filters.status)
+    if (filters.limit) params.set('limit', String(filters.limit))
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    return request<unknown>(`/releases${suffix}`).then((raw) =>
+      extractList(raw, ['releases', 'items']).map(normalizeRelease),
+    )
+  },
+
+  createRelease(payload: CreateReleasePayload): Promise<CreateReleaseResponse> {
+    return request<unknown>('/releases', { method: 'POST', body: payload }).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      const releaseRaw = record.release ?? raw
+      return {
+        release: normalizeRelease(releaseRaw),
+        runs: extractList(record.runs, ['runs']).map(normalizeReleaseRun),
+      }
+    })
+  },
+
+  /** GET /releases/{id} → {release, runs}；这里拍平成带 runs 的 Release */
+  release(id: string): Promise<Release> {
+    return request<unknown>(`/releases/${encodeURIComponent(id)}`).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      const release = normalizeRelease(record.release ?? raw)
+      const runs = extractList(record.runs, ['runs']).map(normalizeReleaseRun)
+      return runs.length > 0 ? { ...release, runs } : release
+    })
+  },
+
+  releaseRuns(id: string): Promise<ReleaseRun[]> {
+    return request<unknown>(`/releases/${encodeURIComponent(id)}/runs`).then((raw) =>
+      extractList(raw, ['runs', 'items']).map(normalizeReleaseRun),
+    )
+  },
+
+  /** GET /releases/{id}/runs/{serverID}/logs?after_seq= —— 断点续读增量日志 */
+  releaseLogs(
+    id: string,
+    serverId: string,
+    afterSeq: number,
+  ): Promise<ReleaseLogEntry[]> {
+    const params = new URLSearchParams({ after_seq: String(afterSeq) })
+    return request<unknown>(
+      `/releases/${encodeURIComponent(id)}/runs/${encodeURIComponent(serverId)}/logs?${params.toString()}`,
+    ).then(normalizeReleaseLogs)
+  },
+
+  /** POST /releases/{id}/retry —— 只重跑 failed 的 run */
+  retryRelease(id: string): Promise<CreateReleaseResponse> {
+    return request<unknown>(`/releases/${encodeURIComponent(id)}/retry`, { method: 'POST' }).then(
+      (raw) => {
+        const record = toRecord(raw) ?? {}
+        return {
+          release: normalizeRelease(record.release ?? raw),
+          runs: extractList(record.runs, ['runs']).map(normalizeReleaseRun),
+        }
+      },
+    )
+  },
+
+  /** POST /releases/{id}/rollback —— 回滚（缺省全部成功的 run） */
+  rollbackRelease(id: string, serverIds?: string[]): Promise<unknown> {
+    return request<unknown>(`/releases/${encodeURIComponent(id)}/rollback`, {
+      method: 'POST',
+      body: serverIds && serverIds.length > 0 ? { server_ids: serverIds } : {},
+    })
+  },
+
+  /** POST /releases/{id}/cancel —— 取消仍在 pending/running 的 run */
+  cancelRelease(id: string): Promise<unknown> {
+    return request<unknown>(`/releases/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
   },
 }
 

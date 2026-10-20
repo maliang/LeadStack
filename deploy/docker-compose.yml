@@ -24,8 +24,21 @@ services:
       LEADSTACK_DATA_DIR: /data
       # 不设置 ADMIN_PASSWORD 时，首次启动会随机生成管理员密码并打印到容器日志（仅一次）
       # LEADSTACK_ADMIN_PASSWORD: "请改成强密码"
+      # ---- M4 发布相关（都可选，默认值见 internal/config）----
+      # 单个发布任务的并发上限（同时向几台目标机推进）
+      # LEADSTACK_DEPLOY_CONCURRENCY: "4"
+      # 上传型制品的单文件大小上限（MB）
+      # LEADSTACK_ARTIFACT_MAX_MB: "512"
+      # 目标机上的部署根目录基路径（仅在控制端自己也作为部署目标时才需要，见下方 volumes）
+      # LEADSTACK_DEPLOY_ROOT: /opt/leadstack/apps
     volumes:
       - leadstack-data:/data
+      # 可选：控制端同时作为部署目标时（本机 devssh / binary 模板），
+      # 把目标机部署根目录挂出来，让 <root>/current -> releases/<ts>-<hash> 快照、
+      # .leadstack/ 元数据在容器重建后依然保留（否则上一版内容会随容器一起丢）。
+      # 启用方式：取消下面这行注释 + 文件末尾 `leadstack-deploy:` 的注释
+      # （两处都要改，并配合上面的 LEADSTACK_DEPLOY_ROOT）：
+      # - leadstack-deploy:/opt/leadstack/apps
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 30s
@@ -35,3 +48,5 @@ services:
 
 volumes:
   leadstack-data:
+  # M4：部署根目录卷（配合上面被注释的 volume 示例使用）
+  # leadstack-deploy:

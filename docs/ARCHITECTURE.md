@@ -798,3 +798,239 @@ CREATE TABLE alert_events(
 9. **静默**：`POST /alert-rules/{id}/silence` 后新触发仍建告警但**接收器不再收到新通知**。
 10. `GET /alerts/summary` 返回 `firing`/`by_severity` 计数；未带 token 访问 `/alert-rules` 返回 401。
 11. `scripts/verify_m0.sh`、`verify_m1.sh`、`verify_m2.sh` 仍全绿（**M3 不得回归**）。
+
+---
+
+# M4 契约（批量部署）
+
+> M4 是产品的差异化重头：**把一次发布安全地推到 N 台机器，并能在失败时干净回退**。
+> 底座已就绪：M2 的 `internal/jobs` 下发链路、agent 侧 `job.exec` 与日志分块、M1 的 SSH 执行通道。
+> M4 **不改动**这两条通道，只在其上做编排。
+
+## 23. 核心概念
+
+| 概念 | 约定 |
+|---|---|
+| **应用（app）** | 被部署的业务单元，有名字与唯一 slug。一个应用可部署到多台服务器 |
+| **发布模板（template）** | 如何部署：`compose` / `systemd` / `binary`。模板是**版本化文本**，发布时冻结快照 |
+| **制品（artifact）** | 要部署的文件或镜像：`url`（HTTP 下载）/ `upload`（控制端存储）/ `image`（容器镜像，不下载） |
+| **发布（release）** | 一次「把某个应用版本部署到某组服务器」的记录，是**一等公民**。包含版本号、模板快照、制品引用、目标服务器、状态 |
+| **发布任务（release_run）** | 发布在**单台服务器**上的执行单元。一台机器一个 run，独立状态、独立日志、独立回滚 |
+| **回滚（rollback）** | 把某台服务器恢复到**上一个成功发布**的版本（目录快照切换 / 镜像 tag 回指） |
+
+**状态机**（`release.status` / `release_run.status`）
+```
+pending → running → success
+                 ↘ failed → (可 retry / rollback)
+pending → canceled
+```
+发布整体状态由各 run 汇总：全部 success → `success`；任一 failed 且不再重试 → `failed`；仍在跑 → `running`。
+
+## 24. 目录与快照约定（回滚的基础）
+
+每个应用的部署路径 = **`<app.root base>/<app_slug>`**，其中 `app.root` 是**基础目录**（不是应用根目录）：
+- 创建应用时 `root` 留空 → 基础目录取 `LEADSTACK_DEPLOY_ROOT`（默认 `/opt/leadstack/apps`），实际路径为 `/opt/leadstack/apps/<slug>`；
+- 显式填 `root=/srv/apps` → 实际路径为 `/srv/apps/<slug>`。
+
+> ⚠️ **不要**把 `<slug>` 也写进 `root`，否则会得到 `/srv/apps/<slug>/<slug>`。UI 在创建应用时应展示「实际部署路径」提示。
+
+```
+<base>/<slug>/
+├── current -> releases/20261019-171500-a1b2c3     # 符号链接，原子切换
+├── releases/
+│   ├── 20261019-171500-a1b2c3/                    # 每次发布一个不可变目录
+│   └── 20261019-161500-d4e5f6/
+└── .leadstack/                                    # 元数据：release id、模板快照、校验和
+```
+
+**部署 = 在临时目录准备好新版本 → 原子切换 `current` 符号链接 → 重启服务。**
+**回滚 = 把 `current` 指回上一个 release 目录 → 重启服务。** 因此回滚是秒级的，不依赖重新下载。
+
+## 25. Go 包 API 契约（`deploydev` 负责 `internal/deploy`）
+
+**不得 import `internal/store` / `internal/api`**（接口注入，保证可独立单测）。
+
+```go
+type Kind string // "compose" | "systemd" | "binary"
+
+type Template struct {
+    ID      string
+    Kind    Kind
+    Content string // 渲染后的模板文本（含占位符，见 §26）
+}
+
+type Artifact struct {
+    Kind      string // "url" | "upload" | "image"
+    Location  string // url / 控制端存储 key / 镜像引用
+    SHA256    string // url/upload 必填；image 可为空
+    SizeBytes int64
+}
+
+// Step 是编排出的一个执行步骤，便于记录与排障。
+type Step struct {
+    Name    string
+    Command string
+    TimeoutS int
+    // IgnoreFailure 为 true 时该步失败不中断（用于 best-effort 清理）。
+    IgnoreFailure bool
+}
+
+// Plan 是一次部署在某台服务器上的完整执行计划。
+type Plan struct {
+    AppSlug    string
+    ReleaseID  string
+    Version    string
+    Root       string
+    Steps      []Step
+    // RollbackSteps 在失败时按逆序执行（best-effort）。
+    RollbackSteps []Step
+}
+
+// Build 根据模板 + 制品 + 目标信息编排执行计划（纯函数，不触网、不执行）。
+func Build(tmpl Template, art Artifact, p BuildParams) (Plan, error)
+
+type BuildParams struct {
+    AppSlug      string
+    ReleaseID    string
+    Version      string
+    Root         string
+    PrevReleaseID string // 上一个成功发布，用于回滚
+    Now          int64
+}
+
+// Render 渲染模板占位符（见 §26），未知占位符必须报错而不是留空。
+func Render(content string, vars map[string]string) (string, error)
+
+// Rollback 生成回滚计划（纯函数）。
+func Rollback(p Plan) (Plan, error)
+```
+
+### 25.1 执行器（`internal/deploy` 也负责）
+
+```go
+// Runner 在目标机上执行一条命令，由 backend 注入（agent → jobs.Dispatcher；ssh → sshx 包装）。
+// 与 checker.Executor 同形，但**额外提供流式日志回调**。
+type Runner interface {
+    Run(ctx context.Context, serverID, command string, timeoutS int,
+        onLog func(stream, chunk string)) (stdout, stderr string, exitCode int, err error)
+}
+
+type Executor struct{ /* ... */ }
+func NewExecutor(r Runner, opts ExecutorOptions) *Executor
+
+type ExecutorOptions struct {
+    Concurrency int // 全局并发上限，默认 4（避免同时压满所有机器）
+    Logger      *slog.Logger
+}
+
+// RunPlan 在单台服务器上执行计划，逐步回调进度与日志。
+func (e *Executor) RunPlan(ctx context.Context, serverID string, p Plan,
+    hooks Hooks) (RunOutcome, error)
+
+type Hooks struct {
+    OnStep   func(stepIndex int, name string)
+    OnLog    func(stream, chunk string)
+    OnStatus func(status string, message string)
+}
+
+type RunOutcome struct {
+    Status   string // success | failed
+    ExitCode int
+    Message  string
+    FailedStep string
+}
+```
+
+**执行语义（硬要求）**
+1. 步骤**严格串行**，任一步非 0 退出即失败（`IgnoreFailure` 除外）。
+2. 失败时**必须**按逆序执行 `RollbackSteps`（best-effort，失败只记日志）。
+3. 每个步骤的命令都必须是**幂等可重跑**的（由模板保证，`Build` 里不插入非幂等操作）。
+4. 日志通过 `Hooks.OnLog` 实时流出，**不缓冲到结束**（用户要能看见进度）。
+5. `ctx` 取消时终止当前步骤并走回滚。
+
+## 26. 模板占位符（冻结）
+
+占位符写作 `{{APP_SLUG}}`（**双花括号 + 大写下划线名**）。`Render` 同时接受 `{{.APP_SLUG}}` 这种带点前缀的写法（视作同一变量，兼容 Go template 习惯）；两种写法之外的未知占位符一律报错。
+
+| 占位符 | 含义 |
+|---|---|
+| `{{APP_SLUG}}` | 应用 slug（已校验 `[a-z0-9-]{1,40}`） |
+| `{{VERSION}}` | 版本号（已校验 `[A-Za-z0-9._-]{1,64}`） |
+| `{{RELEASE_ID}}` | 本次发布 ID |
+| `{{ROOT}}` | 部署根目录 |
+| `{{RELEASE_DIR}}` | `<ROOT>/releases/<RELEASE_ID>` |
+| `{{ARTIFACT_URL}}` | 制品下载地址 |
+| `{{ARTIFACT_SHA256}}` | 制品校验和 |
+| `{{PREV_RELEASE_ID}}` | 上一个成功发布 ID |
+
+**安全红线**：所有变量值在代入前必须校验字符集（slug/version 白名单，其余禁止 `;|&$`\` 与换行），**防止命令注入**。未知占位符 → 报错（不能静默留空，否则会部署出半成品）。
+
+## 27. REST 端点（前缀 `/api/v1`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET/POST | `/apps` | 应用列表 / 创建 `{name,slug,root?,description?}` |
+| GET/PATCH/DELETE | `/apps/{id}` | 详情 / 修改 / 删除（有 release 时 409） |
+| GET/POST | `/templates` | 模板列表 / 创建 `{name,kind,content}` |
+| GET/PATCH/DELETE | `/templates/{id}` | 详情 / 修改（已发布快照不受影响）/ 删除 |
+| POST | `/templates/{id}/render` | `{vars}` → 渲染预览 `{content}`（**不执行**，用于 UI 预览） |
+| POST | `/artifacts` | 上传制品（multipart `file` 字段）→ `{id,sha256,size_bytes}`（**sha256 由服务端计算**）；或登记 URL 制品 `{kind:"url",url,sha256,size_bytes?}` —— **`sha256` 必填**（64 位 hex，大写自动归一化），缺失或非法 → 400。理由：校验和是「失败不破坏 current、回滚有意义」的前提，必须在登记时 fail-fast |
+| GET/POST | `/releases` | 发布列表 / 创建发布（见下） |
+| GET | `/releases/{id}` | 详情 + 各 run 状态与日志摘要 |
+| GET | `/releases/{id}/runs` | 各服务器 run 列表 |
+| GET | `/releases/{id}/runs/{serverID}/logs` | `?after_seq=` 增量拉取日志（**支持断点续读**） |
+| POST | `/releases/{id}/retry` | 对失败的 run 重试（只重跑 failed 的服务器） |
+| POST | `/releases/{id}/rollback` | 回滚（`{server_ids?}` 缺省全部成功的 run） |
+| POST | `/releases/{id}/cancel` | 取消仍在 pending/running 的 run |
+
+**创建发布 body**：`{app_id,template_id,version,artifact_id,server_ids,concurrency?}`。
+**创建响应**：`{release:{...}, runs:[{server_id,status}]}` —— 立即返回，执行在后台异步进行（前端轮询进度）。
+
+**补充约定（M4 实现后冻结）**
+- **上传型制品需要目标机能访问控制端**：`upload` 制品发布时，控制端把 `<LEADSTACK_PUBLIC_URL>/api/v1/artifacts/{id}/download` 作为下载地址交给目标机。生产部署必须配置 `LEADSTACK_PUBLIC_URL`（如 `http://10.0.0.5:8080`）；不配时创建发布直接 400 并说明原因，而不是让目标机静默失败。
+- `GET /releases`（列表）**不返回 runs**，只返回 release 主体；需要进度时用 `GET /releases/{id}` 或 `/releases/{id}/runs`。
+- `retry` 会重置失败 run 的日志（seq 从 1 重新开始），成功 run 不受影响。
+- `cancel` 会把 pending/running 置 `canceled`；已完成的 run 保持原状态。
+
+## 28. 数据库迁移 `0006_deploy.sql`
+
+```sql
+CREATE TABLE apps(
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT UNIQUE NOT NULL,
+  root TEXT, description TEXT, created_at INTEGER NOT NULL);
+CREATE TABLE deploy_templates(
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+  content TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE artifacts(
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, location TEXT NOT NULL,
+  sha256 TEXT, size_bytes INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+CREATE TABLE releases(
+  id TEXT PRIMARY KEY, app_id TEXT NOT NULL, template_id TEXT NOT NULL,
+  version TEXT NOT NULL, artifact_id TEXT, template_snapshot TEXT NOT NULL,
+  status TEXT NOT NULL, created_by TEXT, created_at INTEGER NOT NULL,
+  started_at INTEGER, finished_at INTEGER, concurrency INTEGER NOT NULL DEFAULT 4);
+CREATE TABLE release_runs(
+  id TEXT PRIMARY KEY, release_id TEXT NOT NULL, server_id TEXT NOT NULL,
+  status TEXT NOT NULL, exit_code INTEGER, message TEXT, failed_step TEXT,
+  prev_release_id TEXT, started_at INTEGER, finished_at INTEGER,
+  UNIQUE(release_id, server_id));
+CREATE INDEX idx_release_runs_lookup ON release_runs(release_id, status);
+CREATE TABLE release_logs(
+  release_run_id TEXT NOT NULL, seq INTEGER NOT NULL, ts INTEGER NOT NULL,
+  stream TEXT NOT NULL, chunk TEXT NOT NULL,
+  PRIMARY KEY(release_run_id, seq)) WITHOUT ROWID;
+```
+
+## 29. M4 验收标准（`scripts/verify_m4.sh` 一键复现）
+
+1. `make build` 成功；`gofmt` 干净；`go vet ./...` 与 `go test ./...` 全绿；M0–M3 脚本仍全绿。
+2. 创建应用 + `binary` 模板 + `url` 制品（指向本机 HTTP 文件服务）→ 创建发布到 1 台 SSH 服务器 → 轮询至 `success`。
+3. **真实产物落盘**：目标机（devssh 执行）上 `<root>/current` 符号链接指向的目录里存在下载的文件，且**校验和与制品一致**。
+4. **发布日志可增量拉取**：`GET /releases/{id}/runs/{serverID}/logs?after_seq=0` 返回有序日志，再以 `after_seq=<最后一条>` 拉取不重复。
+5. **失败与回滚**：让第二次发布的制品校验和错误 → 该 run 变 `failed` 且 `current` 仍指向**上一次成功的版本**（未被破坏）。
+6. 第二次发布修正后成功 → 再 `POST /releases/{id}/rollback` → `current` 指回上一版本，且 `release_runs` 记录回滚结果。
+7. **批量并发**：一次发布到 2 台服务器（1 台真实 devssh + 1 台不可达）→ 一台 `success`、一台 `failed`，整体状态 `failed`，成功的那台**不受影响**。
+8. **模板安全**：`Render` 对未知占位符报错；含 `; rm -rf /` 的 version 被拒绝（400）；渲染预览端点不执行任何命令。
+9. **重试**：`POST /releases/{id}/retry` 只重跑 failed 的服务器，成功的 run 不重复执行。
+10. 未带 token 访问 `/apps` 返回 401；删除有 release 的应用返回 409。
+11. `scripts/verify_m0.sh` ~ `verify_m3.sh` 仍全绿（**M4 不得回归**）。

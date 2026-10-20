@@ -75,6 +75,46 @@ func (a *API) Router() http.Handler {
 				})
 			})
 
+			// ---- M4 批量部署 ----
+			r.Route("/apps", func(r chi.Router) {
+				r.Get("/", a.handleListApps)
+				r.Post("/", a.handleCreateApp)
+				r.Route("/{appID}", func(r chi.Router) {
+					r.Get("/", a.handleGetApp)
+					r.Patch("/", a.handlePatchApp)
+					r.Delete("/", a.handleDeleteApp)
+				})
+			})
+
+			r.Route("/templates", func(r chi.Router) {
+				r.Get("/", a.handleListTemplates)
+				r.Post("/", a.handleCreateTemplate)
+				r.Route("/{templateID}", func(r chi.Router) {
+					r.Get("/", a.handleGetTemplate)
+					r.Patch("/", a.handlePatchTemplate)
+					r.Delete("/", a.handleDeleteTemplate)
+					r.Post("/render", a.handleRenderTemplate)
+				})
+			})
+
+			r.Route("/artifacts", func(r chi.Router) {
+				r.Post("/", a.handleCreateArtifact)
+				r.Get("/{artifactID}/download", a.handleDownloadArtifact)
+			})
+
+			r.Route("/releases", func(r chi.Router) {
+				r.Get("/", a.handleListReleases)
+				r.Post("/", a.handleCreateRelease)
+				r.Route("/{releaseID}", func(r chi.Router) {
+					r.Get("/", a.handleGetRelease)
+					r.Get("/runs", a.handleListReleaseRuns)
+					r.Get("/runs/{serverID}/logs", a.handleReleaseLogs)
+					r.Post("/retry", a.handleRetryRelease)
+					r.Post("/rollback", a.handleRollbackRelease)
+					r.Post("/cancel", a.handleCancelRelease)
+				})
+			})
+
 			r.Route("/alerts", func(r chi.Router) {
 				// /alerts/summary 必须先于 /alerts/{alertID} 注册。
 				r.Get("/summary", a.handleAlertSummary)
