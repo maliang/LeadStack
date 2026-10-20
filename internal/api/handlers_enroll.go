@@ -171,7 +171,19 @@ func (a *API) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	base, err := normalizeServerURL(req.ServerURL)
+	// 对外地址优先级：请求体显式指定 > 设置里的 public_url（改完立即生效）> 请求 Host。
+	serverURL := strings.TrimSpace(req.ServerURL)
+	if serverURL == "" {
+		serverURL = a.publicURL(r.Context())
+	}
+	if serverURL == "" {
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		serverURL = scheme + "://" + r.Host
+	}
+	base, err := normalizeServerURL(serverURL)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
 		return

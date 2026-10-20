@@ -1387,3 +1387,53 @@ POST /servers/import
 - `sftp` 子系统（`pkg/sftp` 服务端实现）。
 
 **它仍然只是 DEV-ONLY 测试夹具**，不参与发布产物（`make cross` 有断言拦截），生产部署不会用到。扩展目的是让「终端 / 文件传输」在 ssh 通道上也有真实端到端验收端点。
+
+---
+
+## 49. 端口与网络自定义
+
+三处端口需要可由用户自定义，**全部在控制台内配置，不再依赖改环境变量**：
+
+| 项 | settings key | 作用 | 生效方式 |
+|---|---|---|---|
+| **控制台监听地址** | `network.listen` | Web/API/Agent WS 的监听地址（`host:port`，如 `0.0.0.0:8080`） | **重启控制端后生效** |
+| **控制台对外地址** | `network.public_url` | 目标机回连用的地址（生成 install.sh 命令、上传制品下载地址） | 立即生效 |
+| **目标机默认 SSH 端口** | `servers.default_ssh_port` | 新增/批量导入服务器时未填端口时的默认值（默认 22） | 立即生效 |
+| 单台目标机端口 | `servers.port` | 每台机器独立（建服时可改，**且允许事后修改**） | 立即生效 |
+
+**优先级**：settings（控制台设置）> 环境变量（`LEADSTACK_LISTEN` / `LEADSTACK_PUBLIC_URL`）> 内置默认。
+启动日志必须打印实际生效值与来源（`settings` / `env` / `default`），便于排障。
+
+### 49.1 REST
+
+```
+GET  /system/network -> {data:{
+  listen,               // 配置值（未配置时为空）
+  listen_source,        // settings | env | default
+  active_listen,        // 当前进程实际监听地址
+  public_url, public_url_source,
+  default_ssh_port, default_ssh_port_source,
+  restart_required      // true 表示配置值 ≠ 当前生效值
+}}
+PUT  /system/network -> {listen?, public_url?, default_ssh_port?}   // 校验并持久化
+POST /system/network/reset -> 清空以上配置，回落 env/默认
+```
+
+**校验规则（失败 400 且给中文原因）**
+- `listen`：形如 `host:port`；port 1–65535；host 为空或 `0.0.0.0`/`::`/具体 IP/主机名均可；**保存前尝试 bind 一次**，端口被占用 → 400 并提示换端口（避免重启后起不来）。**例外**：提交的值与当前 `active_listen` 相同时跳过探测（幂等保存，不能自己撞自己）。
+- `public_url`：必须以 `http://` 或 `https://` 开头；不能是 `0.0.0.0`/`::`（目标机连不上）；**不允许空串**（清空请用 `POST /system/network/reset`），错误文案须提示这一点。
+- `default_ssh_port`：1–65535。
+
+### 49.2 目标机端口可改
+
+`PATCH /servers/{id}` 扩展支持 `host`、`port`：允许修改（改完需重新测试连通性）；修改时若 `host:port` 变化，**清除该机的主机密钥记录**并写审计 `server.update`（detail 记录旧值→新值）。
+
+### 49.3 验收（追加到 `scripts/verify_ops.sh`）
+
+1. `GET /system/network` 返回 `listen_source`/`active_listen`/`default_ssh_port`。
+2. `PUT` 一个**被占用**的端口 → 400；`PUT` 非法 `public_url`（`ftp://x`、`0.0.0.0:8080`）→ 400；非法 `default_ssh_port` → 400。
+3. `PUT` 合法值后 `GET` 返回新值且 `restart_required=true`。
+4. **重启控制端后** `active_listen` 变为新值，`restart_required=false`（验收时用一个空闲端口重启一次验证）。
+5. `default_ssh_port=2222` 后，`POST /servers` **不传 port** → 该服务器 port 为 2222。
+6. `PATCH /servers/{id}` 改 port 成功，且 `GET` 返回新端口。
+7. 审计中存在 `system.network_update`（或等价 action）。

@@ -74,6 +74,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
   const [sshName, setSshName] = useState('')
   const [sshHost, setSshHost] = useState('')
   const [sshPort, setSshPort] = useState('22')
+  const [defaultSshPort, setDefaultSshPort] = useState(22)
   const [sshCredentialId, setSshCredentialId] = useState('')
   const [sshPolicy, setSshPolicy] = useState('accept-new')
   const [sshGroup, setSshGroup] = useState('')
@@ -97,7 +98,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
     setAgentError(null)
     setSshName('')
     setSshHost('')
-    setSshPort('22')
+    setSshPort(String(defaultSshPort))
     setSshCredentialId('')
     setSshPolicy('accept-new')
     setSshGroup('')
@@ -105,6 +106,21 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
     setSshSaving(false)
     setSshError(null)
     setCreatedServer(null)
+    let cancelled = false
+    api
+      .network()
+      .then((network) => {
+        if (cancelled) return
+        setDefaultSshPort(network.default_ssh_port)
+        setSshPort((current) => (current === '' || current === '22' ? String(network.default_ssh_port) : current))
+      })
+      .catch(() => {
+        /* 接口未就绪时保持 22 */
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   // 进入 SSH 流程时加载凭证与分组候选
@@ -458,7 +474,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
               <div className="flex justify-between gap-3">
                 <dt className="text-slate-500 dark:text-slate-400">{t('s.0060')}</dt>
                 <dd className="font-mono text-slate-700 dark:text-slate-200">
-                  {createdServer.host}:{createdServer.port ?? 22}
+                  {createdServer.host}:{createdServer.port ?? defaultSshPort}
                 </dd>
               </div>
               <div className="flex justify-between gap-3">
@@ -518,6 +534,9 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
                   inputMode="numeric"
                   className={inputClass + ' mt-1.5'}
                 />
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  {t('network.defaultPortHint', { port: defaultSshPort })}
+                </p>
               </div>
               <div>
                 <label htmlFor="ssh-policy" className={labelClass}>

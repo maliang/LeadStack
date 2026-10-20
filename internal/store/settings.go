@@ -68,3 +68,11 @@ func (s *Store) EnsureSetting(ctx context.Context, key string, gen func() (strin
 	}
 	return final, nil
 }
+
+// DeleteSetting 删除一个设置项（不存在视为成功，便于「重置」语义）。
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, key); err != nil {
+		return fmt.Errorf("删除设置 %s: %w", key, err)
+	}
+	return nil
+}

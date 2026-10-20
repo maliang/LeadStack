@@ -137,6 +137,10 @@ func (a *API) Router() http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(a.RequireRole(roleAdmin))
 
+				r.Get("/system/network", a.handleGetNetwork)
+				r.Put("/system/network", a.handlePutNetwork)
+				r.Post("/system/network/reset", a.handleResetNetwork)
+
 				r.Get("/audit-logs", a.handleListAuditLogs)
 				r.Get("/enroll-tokens", a.handleListEnrollTokens)
 				r.Post("/enroll-tokens", a.handleCreateEnrollToken)

@@ -57,7 +57,8 @@ func (a *API) handleImportServers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "text 不能为空")
 		return
 	}
-	port := 22
+	// 未显式给 default_port 时用设置里的默认 SSH 端口（改设置后立即生效）。
+	port := a.defaultSSHPortForCreate(r.Context())
 	if req.DefaultPort != nil && *req.DefaultPort > 0 {
 		port = *req.DefaultPort
 	}

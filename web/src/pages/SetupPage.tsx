@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { usePolling } from '../lib/hooks'
@@ -30,7 +30,25 @@ export default function SetupPage() {
   const [sshName, setSshName] = useState('')
   const [sshHost, setSshHost] = useState('')
   const [sshPort, setSshPort] = useState('22')
+  const [defaultSshPort, setDefaultSshPort] = useState(22)
   const [sshSaving, setSshSaving] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .network()
+      .then((network) => {
+        if (cancelled) return
+        setDefaultSshPort(network.default_ssh_port)
+        setSshPort((current) => (current === '22' ? String(network.default_ssh_port) : current))
+      })
+      .catch(() => {
+        /* 接口未就绪时保持 22 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const finish = () => {
     try {
@@ -74,7 +92,7 @@ export default function SetupPage() {
       await api.createServer({
         name: sshName.trim(),
         host: sshHost.trim(),
-        port: Number(sshPort) || 22,
+        port: Number(sshPort) || defaultSshPort,
         mode: 'ssh',
       })
       toast(t('setup.serverCreated'), 'success')
@@ -190,6 +208,9 @@ export default function SetupPage() {
                   onChange={(event) => setSshPort(event.target.value)}
                   className={inputClass + ' mt-1.5'}
                 />
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  {t('network.defaultPortHint', { port: defaultSshPort })}
+                </p>
               </div>
             </div>
             <p className="text-xs text-slate-400 dark:text-slate-500">{t('setup.sshCredentialHint')}</p>

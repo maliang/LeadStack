@@ -8,6 +8,7 @@ import { errorMessage } from '../lib/errors'
 import { usePrefs } from '../lib/prefs'
 import { Button } from '../components/Button'
 import { AppearanceSettings } from '../components/AppearanceSettings'
+import { NetworkSettingsCard } from '../components/NetworkSettingsCard'
 import { KeyIcon } from '../components/Icons'
 import { PageHeader } from '../components/PageHeader'
 import { useToast } from '../components/Toast'
@@ -57,6 +58,8 @@ export default function SettingsPage() {
   return (
     <div className="space-y-5">
       <PageHeader title={t('nav.settings')} description={t('settings.description')} />
+
+      <NetworkSettingsCard />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">

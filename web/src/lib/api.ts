@@ -71,7 +71,7 @@ export function onUnauthorized(handler: UnauthorizedHandler): () => void {
 /* ------------------------------------------------------------------ */
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
   auth?: boolean
   signal?: AbortSignal
@@ -226,6 +226,27 @@ export interface User {
 export interface LoginResult {
   token: string
   user: User
+}
+
+export type NetworkSource = 'settings' | 'env' | 'default' | string
+
+export interface NetworkConfig {
+  /** 配置值（未配置时为空） */
+  listen: string | null
+  listen_source: NetworkSource
+  /** 当前进程实际监听地址 */
+  active_listen: string
+  public_url: string | null
+  public_url_source: NetworkSource
+  default_ssh_port: number
+  default_ssh_port_source: NetworkSource
+  restart_required: boolean
+}
+
+export interface NetworkUpdatePayload {
+  listen?: string
+  public_url?: string
+  default_ssh_port?: number
 }
 
 export interface SystemInfo {
@@ -1681,6 +1702,20 @@ export function normalizeScheduledTaskRun(input: unknown): ScheduledTaskRun {
   }
 }
 
+export function normalizeNetworkConfig(input: unknown): NetworkConfig {
+  const raw = toRecord(input) ?? {}
+  return {
+    listen: toText(raw.listen),
+    listen_source: toText(raw.listen_source) ?? 'default',
+    active_listen: toText(raw.active_listen) ?? '',
+    public_url: toText(raw.public_url),
+    public_url_source: toText(raw.public_url_source) ?? 'default',
+    default_ssh_port: toNumber(raw.default_ssh_port) ?? 22,
+    default_ssh_port_source: toText(raw.default_ssh_port_source) ?? 'default',
+    restart_required: toBool(raw.restart_required),
+  }
+}
+
 export function normalizeCredential(input: unknown): Credential {
   const raw = toRecord(input) ?? {}
   return {
@@ -1773,6 +1808,8 @@ async function fetchServers(filters: ServerFilters = {}): Promise<Server[]> {
 
 export interface UpdateServerPayload {
   name?: string
+  host?: string
+  port?: number
   tags?: string[]
   group?: string | null
 }
@@ -1843,6 +1880,23 @@ export const api = {
 
   me(): Promise<User> {
     return request<User>('/auth/me')
+  },
+
+  /** GET /system/network —— 监听地址/对外地址/默认 SSH 端口（契约 §49） */
+  network(): Promise<NetworkConfig> {
+    return request<unknown>('/system/network').then(normalizeNetworkConfig)
+  },
+
+  updateNetwork(payload: NetworkUpdatePayload): Promise<NetworkConfig> {
+    return request<unknown>('/system/network', { method: 'PUT', body: payload }).then(
+      normalizeNetworkConfig,
+    )
+  },
+
+  resetNetwork(): Promise<NetworkConfig> {
+    return request<unknown>('/system/network/reset', { method: 'POST' }).then(
+      normalizeNetworkConfig,
+    )
   },
 
   systemInfo(): Promise<SystemInfo> {

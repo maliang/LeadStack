@@ -32,12 +32,13 @@ type planRunner interface {
 var _ planRunner = (*deploy.Executor)(nil)
 
 type deployOrchestrator struct {
-	st      *store.Store
-	exec    planRunner
-	logger  *slog.Logger
-	maxConc int
-	public  string
-	root    string
+	st             *store.Store
+	exec           planRunner
+	logger         *slog.Logger
+	maxConc        int
+	public         string
+	publicResolver func(ctx context.Context) (string, error)
+	root           string
 
 	buildPlanFn     func(tmpl deploy.Template, art deploy.Artifact, p deploy.BuildParams) (deploy.Plan, error)
 	buildRollbackFn func(p deploy.Plan) (deploy.Plan, error)
@@ -61,6 +62,9 @@ type DeployOrchestratorOptions struct {
 	Logger      *slog.Logger
 	// PlanRunner 可注入替身（测试用）；为 nil 时用 deploy.NewExecutor 包装 Runner。
 	PlanRunner planRunner
+	// PublicURLResolver 实时解析控制台对外地址（settings > env > default）；
+	// 为 nil 时使用 Options.PublicURL（静态值）。改设置后无需重启即生效。
+	PublicURLResolver func(ctx context.Context) (string, error)
 	// PlanBuilder / RollbackBuilder 可注入替身（测试用）；默认为 deploy.Build / deploy.Rollback。
 	PlanBuilder     func(tmpl deploy.Template, art deploy.Artifact, p deploy.BuildParams) (deploy.Plan, error)
 	RollbackBuilder func(p deploy.Plan) (deploy.Plan, error)
@@ -152,7 +156,8 @@ func newDeployOrchestrator(st *store.Store, runner DeployRunner, opts DeployOrch
 	}
 	return &deployOrchestrator{
 		st: st, exec: exec, logger: logger, maxConc: concurrency,
-		public: strings.TrimSuffix(opts.PublicURL, "/"), root: opts.DeployRoot,
+		public: strings.TrimSuffix(opts.PublicURL, "/"), publicResolver: opts.PublicURLResolver,
+		root:        opts.DeployRoot,
 		buildPlanFn: buildFn, buildRollbackFn: rollbackFn,
 		running: map[string]context.CancelFunc{},
 		rerun:   map[string]bool{},
@@ -209,29 +214,51 @@ func (o *deployOrchestrator) runRelease(ctx context.Context, releaseID string) {
 		o.logger.Warn("发布不存在，无法执行", "release_id", releaseID, "err", err)
 		return
 	}
+	// 防御性重试：retry 可能在上一轮「写状态之后、释放占位之前」重置出新的 pending run。
+	// 这里在收尾前再取一次，避免这类时序把 pending 留给没人推进的状态（最多补跑 2 轮）。
+	for round := 0; round < 3; round++ {
+		runs, err := o.st.ListReleaseRunsByStatus(ctx, releaseID, store.ReleaseStatusPending)
+		if err != nil {
+			o.logger.Warn("读取待执行发布任务失败", "release_id", releaseID, "err", err)
+			return
+		}
+		if len(runs) == 0 {
+			if round == 2 || o.noPendingAfterWait(ctx, releaseID) {
+				o.refreshReleaseStatus(ctx, releaseID)
+				return
+			}
+			continue
+		}
+		o.executeReleaseRuns(ctx, release, runs)
+	}
+	o.refreshReleaseStatus(ctx, releaseID)
+}
+
+// noPendingAfterWait 在收尾前再确认一次是否真的没有 pending run（抵消极短时序抖动）。
+func (o *deployOrchestrator) noPendingAfterWait(ctx context.Context, releaseID string) bool {
 	runs, err := o.st.ListReleaseRunsByStatus(ctx, releaseID, store.ReleaseStatusPending)
 	if err != nil {
-		o.logger.Warn("读取待执行发布任务失败", "release_id", releaseID, "err", err)
-		return
+		return true
 	}
-	if len(runs) == 0 {
-		o.refreshReleaseStatus(ctx, releaseID)
-		return
-	}
+	return len(runs) == 0
+}
+
+// executeReleaseRuns 执行一批 pending run（原有单轮执行逻辑）。
+func (o *deployOrchestrator) executeReleaseRuns(ctx context.Context, release *store.Release, runs []store.ReleaseRun) {
 
 	startedAt := store.NowMS()
-	if err := o.st.UpdateReleaseStatus(ctx, releaseID, store.ReleaseStatusRunning, &startedAt, nil); err != nil {
-		o.logger.Warn("更新发布状态失败", "release_id", releaseID, "err", err)
+	if err := o.st.UpdateReleaseStatus(ctx, release.ID, store.ReleaseStatusRunning, &startedAt, nil); err != nil {
+		o.logger.Warn("更新发布状态失败", "release_id", release.ID, "err", err)
 	}
 
 	app, err := o.st.GetApp(ctx, release.AppID)
 	if err != nil {
-		o.failAll(ctx, releaseID, "应用不存在: "+err.Error())
+		o.failAll(ctx, release.ID, "应用不存在: "+err.Error())
 		return
 	}
 	tmpl, err := o.st.GetDeployTemplate(ctx, release.TemplateID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		o.failAll(ctx, releaseID, "读取模板失败: "+err.Error())
+		o.failAll(ctx, release.ID, "读取模板失败: "+err.Error())
 		return
 	}
 
@@ -245,7 +272,7 @@ func (o *deployOrchestrator) runRelease(ctx context.Context, releaseID string) {
 	if release.ArtifactID != nil {
 		artifact, err = o.st.GetArtifact(ctx, *release.ArtifactID)
 		if err != nil {
-			o.failAll(ctx, releaseID, "制品不存在: "+err.Error())
+			o.failAll(ctx, release.ID, "制品不存在: "+err.Error())
 			return
 		}
 	}
@@ -278,7 +305,7 @@ dispatch:
 		}()
 	}
 	wg.Wait()
-	o.refreshReleaseStatus(ctx, releaseID)
+	o.refreshReleaseStatus(ctx, release.ID)
 }
 
 // runOne 在单台服务器上执行一次发布。
@@ -311,7 +338,7 @@ func (o *deployOrchestrator) runOne(ctx context.Context, release *store.Release,
 	}
 
 	root := o.resolveRoot(app)
-	plan, err := o.buildPlan(templateContent, kind, artifact, release, app, root, prev)
+	plan, err := o.buildPlan(ctx, templateContent, kind, artifact, release, app, root, prev)
 	if err != nil {
 		o.finishRun(ctx, run, store.ReleaseStatusFailed, -1, "构建执行计划失败: "+err.Error(), nil, logf)
 		return
@@ -523,7 +550,7 @@ func (o *deployOrchestrator) rollbackOne(ctx context.Context, release *store.Rel
 	}
 	basePlan, err := o.buildPlanFn(
 		deploy.Template{ID: release.TemplateID, Kind: deploy.Kind(kind), Content: tmplContent},
-		o.toDeployArtifact(artifact), params)
+		o.toDeployArtifact(ctx, artifact), params)
 	if err != nil {
 		return fmt.Errorf("构建回滚计划失败: %w", err)
 	}
@@ -643,10 +670,20 @@ func (o *deployOrchestrator) resolveRoot(app *store.App) string {
 	return base
 }
 
+// resolvePublic 返回当前生效的控制台对外地址（实时读设置，改完立即生效）。
+func (o *deployOrchestrator) resolvePublic(ctx context.Context) string {
+	if o.publicResolver != nil {
+		if value, err := o.publicResolver(ctx); err == nil && strings.TrimSpace(value) != "" {
+			return strings.TrimSuffix(strings.TrimSpace(value), "/")
+		}
+	}
+	return o.public
+}
+
 // toDeployArtifact 把存储模型转成 deploy.Artifact。
 //
 // upload 制品的 Location 必须是**绝对 http(s) URL**（契约要求），由 LEADSTACK_PUBLIC_URL 拼出。
-func (o *deployOrchestrator) toDeployArtifact(artifact *store.Artifact) deploy.Artifact {
+func (o *deployOrchestrator) toDeployArtifact(ctx context.Context, artifact *store.Artifact) deploy.Artifact {
 	if artifact == nil {
 		return deploy.Artifact{}
 	}
@@ -656,7 +693,7 @@ func (o *deployOrchestrator) toDeployArtifact(artifact *store.Artifact) deploy.A
 	}
 	switch artifact.Kind {
 	case store.ArtifactKindUpload:
-		art.Location = fmt.Sprintf("%s/api/v1/artifacts/%s/download", o.public, artifact.ID)
+		art.Location = fmt.Sprintf("%s/api/v1/artifacts/%s/download", o.resolvePublic(ctx), artifact.ID)
 	default:
 		art.Location = artifact.Location
 	}
@@ -664,10 +701,10 @@ func (o *deployOrchestrator) toDeployArtifact(artifact *store.Artifact) deploy.A
 }
 
 // buildPlan 组装 deploy.Build 的入参并生成计划。
-func (o *deployOrchestrator) buildPlan(templateContent, kind string, artifact *store.Artifact,
-	release *store.Release, app *store.App, root, prevReleaseID string) (deploy.Plan, error) {
+func (o *deployOrchestrator) buildPlan(ctx context.Context, templateContent, kind string,
+	artifact *store.Artifact, release *store.Release, app *store.App, root, prevReleaseID string) (deploy.Plan, error) {
 
-	art := o.toDeployArtifact(artifact)
+	art := o.toDeployArtifact(ctx, artifact)
 	params := deploy.BuildParams{
 		AppSlug:       app.Slug,
 		ReleaseID:     release.ID,

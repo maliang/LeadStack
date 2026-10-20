@@ -87,6 +87,9 @@ type ServerUpdate struct {
 	Group         *string
 	HostKeyPolicy *string
 	CredentialID  *string
+	// Host / Port 允许事后修改（契约 49.2）。
+	Host *string
+	Port *int
 }
 
 // UpdateServerFields 按 PATCH 语义更新服务器字段，返回更新后的记录。
@@ -111,6 +114,12 @@ func (s *Store) UpdateServerFields(ctx context.Context, id string, upd ServerUpd
 		}
 		if upd.CredentialID != nil {
 			sets = append(sets, setClause{`credential_id = ?`, nullableStr(emptyToNil(*upd.CredentialID))})
+		}
+		if upd.Host != nil {
+			sets = append(sets, setClause{`host = ?`, *upd.Host})
+		}
+		if upd.Port != nil {
+			sets = append(sets, setClause{`port = ?`, *upd.Port})
 		}
 		if len(sets) == 0 {
 			return nil

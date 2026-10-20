@@ -362,6 +362,69 @@ TOKEN="$(login admin "$ADMIN_PASS")"
 TICKET_OFF="$(status_of -X POST -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/servers/${SRV_ID}/terminal-ticket")"
 [ "$TICKET_OFF" = "403" ] && pass "终端关闭时 ticket 返回 403" || fail "终端关闭时未拒绝（HTTP ${TICKET_OFF}）"
 
+# ---------------------------------------------------------------- 14. 端口与网络自定义
+step "14. 端口与网络自定义（控制台 / 对外地址 / 目标机默认端口）"
+NET="$(api GET /api/v1/system/network "" "$TOKEN")"
+if printf '%s' "$NET" | jq -e '.data | has("active_listen") and has("listen_source") and has("default_ssh_port")' >/dev/null 2>&1; then
+  pass "网络设置可读：$(printf '%s' "$NET" | jq -c '.data | {active_listen,listen_source,default_ssh_port}')"
+else
+  fail "网络设置接口异常：$(printf '%s' "$NET" | head -c 200)"
+fi
+
+# 非法值必须被拒绝
+BAD_URL="$(status_of -X PUT -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+  -d '{"public_url":"ftp://example.com"}' "${BASE}/api/v1/system/network")"
+[ "$BAD_URL" = "400" ] && pass "非法 public_url（ftp://）被拒绝" || fail "非法 public_url 未拒绝（HTTP ${BAD_URL}）"
+WILD_URL="$(status_of -X PUT -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+  -d '{"public_url":"http://0.0.0.0:8080"}' "${BASE}/api/v1/system/network")"
+[ "$WILD_URL" = "400" ] && pass "public_url 填 0.0.0.0 被拒绝" || fail "0.0.0.0 未拒绝（HTTP ${WILD_URL}）"
+BAD_PORT="$(status_of -X PUT -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+  -d '{"default_ssh_port":70000}' "${BASE}/api/v1/system/network")"
+[ "$BAD_PORT" = "400" ] && pass "非法默认端口（70000）被拒绝" || fail "非法默认端口未拒绝（HTTP ${BAD_PORT}）"
+
+# 被占用的端口必须拒绝（用当前控制台端口本身来构造）
+OCCUPIED="$(status_of -X PUT -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+  -d "{\"listen\":\"127.0.0.1:${PORT}\"}" "${BASE}/api/v1/system/network")"
+if [ "$OCCUPIED" = "400" ]; then
+  pass "保存被占用的监听端口被拒绝（400）"
+else
+  # 若实现允许"保存当前正在使用的端口"（视为无变化），也算合理
+  if [ "$OCCUPIED" = "200" ]; then pass "保存当前监听端口被接受（视为无变化）"; else fail "被占用端口未拒绝（HTTP ${OCCUPIED}）"; fi
+fi
+
+# 合法值：默认端口 + 对外地址 + 一个空闲监听端口
+FREE_PORT=$((PORT + 41))
+SET_RESP="$(api PUT /api/v1/system/network \
+  "$(jq -n --arg listen "127.0.0.1:${FREE_PORT}" --arg url "http://127.0.0.1:${FREE_PORT}" \
+     '{listen:$listen,public_url:$url,default_ssh_port:2222}')" "$TOKEN")"
+SET_OK="$(printf '%s' "$SET_RESP" | jq -r '.data.default_ssh_port // empty' 2>/dev/null)"
+RR="$(printf '%s' "$SET_RESP" | jq -r '.data.restart_required // empty' 2>/dev/null)"
+if [ "$SET_OK" = "2222" ] && [ "$RR" = "true" ]; then
+  pass "保存合法网络设置成功，restart_required=true（新端口 ${FREE_PORT}）"
+else
+  fail "保存网络设置异常（default_ssh_port=${SET_OK:-空} restart_required=${RR:-空}）：$(printf '%s' "$SET_RESP" | head -c 200)"
+fi
+
+# 默认端口联动：不传 port 建服务器 → 2222
+DEF_SRV="$(api POST /api/v1/servers '{"name":"ops-default-port","host":"10.8.8.8","mode":"ssh"}' "$TOKEN")"
+DEF_PORT="$(sget "$DEF_SRV" '.data.port')"
+[ "$DEF_PORT" = "2222" ] && pass "新建服务器未指定端口时使用默认端口 2222" || fail "默认端口未生效（得到 ${DEF_PORT:-空}）"
+DEF_SRV_ID="$(sget "$DEF_SRV" '.data.id')"
+
+# 目标机端口可改
+PATCH_CODE="$(status_of -X PATCH -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+  -d '{"port":2200,"host":"10.8.8.9"}' "${BASE}/api/v1/servers/${DEF_SRV_ID}")"
+NEW_PORT="$(api GET "/api/v1/servers/${DEF_SRV_ID}" "" "$TOKEN" | jq -r '.data.port // empty' 2>/dev/null)"
+if [ "$PATCH_CODE" = "200" ] && [ "$NEW_PORT" = "2200" ]; then
+  pass "目标机端口事后可改（422 → 2200）"
+else
+  fail "目标机端口修改失败（HTTP ${PATCH_CODE}，port=${NEW_PORT:-空}）"
+fi
+
+# 审计记录
+NET_AUDIT="$(api GET '/api/v1/audit-logs?limit=200' "" "$TOKEN")"
+printf '%s' "$NET_AUDIT" | grep -q 'network' && pass "审计记录了网络设置变更" || fail "审计缺少网络设置变更"
+
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"

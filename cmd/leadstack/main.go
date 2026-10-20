@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -233,8 +234,13 @@ func run() error {
 		Runner:      deployRunner,
 		Concurrency: cfg.DeployConcurrency,
 		PublicURL:   cfg.PublicURL,
-		DeployRoot:  cfg.DeployRoot,
-		Logger:      logger,
+		// 实时解析 public_url：控制台改完立即生效（不用重启）。
+		PublicURLResolver: func(ctx context.Context) (string, error) {
+			value, _, err := api.ResolvePublicURL(ctx, st)
+			return value, err
+		},
+		DeployRoot: cfg.DeployRoot,
+		Logger:     logger,
 	})
 	if closer, ok := deployRunner.(interface{ Close() }); ok && closer != nil {
 		defer closer.Close()
@@ -242,6 +248,25 @@ func run() error {
 	if deployOrch != nil {
 		defer deployOrch.Close()
 	}
+
+	// 监听地址：settings > 环境变量 > 默认（契约 §49）。配置存在库里，因此必须在开库之后、建监听之前解析。
+	listenAddr, listenSource, err := api.ResolveNetworkListen(ctx, st, cfg.Listen)
+	if err != nil {
+		return fmt.Errorf("解析监听地址失败: %w", err)
+	}
+	logger.Info("监听地址已确定", "listen", listenAddr, "source", listenSource)
+
+	// 先绑定端口：绑定失败立刻报错，绝不"起来了但没在听"。
+	listener, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		hint := "请检查端口是否被占用"
+		if listenSource == "settings" {
+			hint += "；当前值来自控制台设置（network.listen），可调用 POST /api/v1/system/network/reset 清除后回落到环境变量/默认"
+		}
+		return fmt.Errorf("无法监听 %s（来源 %s）: %w；%s", listenAddr, listenSource, err, hint)
+	}
+	activeListen := listener.Addr().String()
+	logger.Info("HTTP 监听已就绪", "active_listen", activeListen, "web", "http://"+activeListen)
 
 	// 备份：备份服务（口令解析与归档格式由 internal/backup 负责）。
 	backupService, err := api.NewBackupService(cfg, logger)
@@ -263,6 +288,7 @@ func run() error {
 		RemoteExec:       routingExec,
 		SFTP:             sftpFactory,
 		TermOpener:       termOpener,
+		ActiveListen:     activeListen,
 		Alerts:           alertEngine,
 		Notifier:         notifier,
 		Deploy:           deployOrch,
@@ -307,7 +333,7 @@ func run() error {
 	go alertBridge.Run(alertCtx, cfg.AlertEvalInterval)
 
 	httpSrv := &http.Server{
-		Addr:              cfg.Listen,
+		Addr:              activeListen,
 		Handler:           srv.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -317,10 +343,9 @@ func run() error {
 
 	serveErr := make(chan error, 1)
 	go func() {
-		logger.Info("HTTP 服务已就绪", "addr", cfg.Listen, "web", "http://"+cfg.Listen)
-		err := httpSrv.ListenAndServe()
+		err := httpSrv.Serve(listener)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErr <- fmt.Errorf("监听 %s: %w", cfg.Listen, err)
+			serveErr <- fmt.Errorf("监听 %s: %w", activeListen, err)
 			return
 		}
 		serveErr <- nil

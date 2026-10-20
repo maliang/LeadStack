@@ -23,7 +23,7 @@ interface ServerTableProps {
   selected: Set<string>
   onToggle: (id: string) => void
   onToggleAll: (checked: boolean) => void
-  onRename: (server: Server) => void
+  onEdit: (server: Server) => void
   onDelete: (server: Server) => void
   onEditTags: (server: Server) => void
 }
@@ -87,7 +87,7 @@ export function ServerTable({
   selected,
   onToggle,
   onToggleAll,
-  onRename,
+  onEdit,
   onDelete,
   onEditTags,
 }: ServerTableProps) {
@@ -236,7 +236,7 @@ export function ServerTable({
                     <IconButton label={t('s.0544')} onClick={() => onEditTags(server)}>
                       <TagIcon className="h-4 w-4" />
                     </IconButton>
-                    <IconButton label={t('s.0545')} onClick={() => onRename(server)}>
+                    <IconButton label={t('server.edit.action')} onClick={() => onEdit(server)}>
                       <PencilIcon className="h-4 w-4" />
                     </IconButton>
                     <IconButton label={t('s.0513')} tone="danger" onClick={() => onDelete(server)}>

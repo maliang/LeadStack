@@ -61,6 +61,8 @@ const (
 	EnvCronTick = "LEADSTACK_CRON_TICK"
 	// EnvFileMaxMB 是文件上传的单文件上限（MB）。
 	EnvFileMaxMB = "LEADSTACK_FILE_MAX_MB"
+	// EnvDefaultSSHPort 是新建服务器时的默认 SSH 端口。
+	EnvDefaultSSHPort = "LEADSTACK_DEFAULT_SSH_PORT"
 )
 
 // 默认值。
@@ -105,6 +107,7 @@ const (
 	DefaultCronTick = time.Minute
 	// DefaultFileMaxMB 是文件上传默认上限（MB）。
 	DefaultFileMaxMB = 8
+
 	// MasterKeyFileName 是主密钥文件名（位于 DataDir 下）。
 	MasterKeyFileName = "master.key"
 	// MasterKeySize 是主密钥字节数（AES-256）。

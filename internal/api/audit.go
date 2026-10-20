@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -192,6 +193,49 @@ var auditResourceIDParams = []string{
 	"appID", "templateID", "releaseID", "userID", "tokenID", "taskID", "artifactID", "name",
 }
 
+// auditOverride 让 handler 覆盖自动审计的 action/detail（例如记录改端口的旧值→新值）。
+type auditOverride struct {
+	mu     sync.Mutex
+	action string
+	detail string
+	set    bool
+}
+
+// set 记录覆盖值。
+func (o *auditOverride) setValues(action, detail string) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.action = action
+	o.detail = detail
+	o.set = true
+	o.mu.Unlock()
+}
+
+// get 读取覆盖值。
+func (o *auditOverride) get() (string, string, bool) {
+	if o == nil {
+		return "", "", false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.action, o.detail, o.set
+}
+
+// auditOverrideCtxKey 是 auditOverride 的上下文键。
+type auditOverrideCtxKey struct{}
+
+// setAuditDetail 由 handler 调用，覆盖本次写操作的审计 action 与 detail。
+func (a *API) setAuditDetail(r *http.Request, action, detail string) {
+	if r == nil {
+		return
+	}
+	if override, ok := r.Context().Value(auditOverrideCtxKey{}).(*auditOverride); ok {
+		override.setValues(action, detail)
+	}
+}
+
 // auditMiddleware 自动记录写操作的审计日志（GET/HEAD 不记录）。
 //
 // 记录时机在 handler 返回之后：此时能拿到最终状态码、路由模式与调用者身份。
@@ -208,7 +252,10 @@ func (a *API) auditMiddleware(next http.Handler) http.Handler {
 
 		// 注入 holder：内层认证成功后会把调用者身份回填，供这里记录。
 		holder := &actorHolder{}
-		r = r.WithContext(context.WithValue(r.Context(), actorHolderCtxKey{}, holder))
+		override := &auditOverride{}
+		ctx := context.WithValue(r.Context(), actorHolderCtxKey{}, holder)
+		ctx = context.WithValue(ctx, auditOverrideCtxKey{}, override)
+		r = r.WithContext(ctx)
 
 		rec := &statusRecorder{ResponseWriter: w}
 		next.ServeHTTP(rec, r)
@@ -221,6 +268,15 @@ func (a *API) auditMiddleware(next http.Handler) http.Handler {
 		action := auditActionTable[method+" "+pattern]
 		if action == "" {
 			action = fallbackAuditAction(method, pattern)
+		}
+		// handler 可覆盖 action/detail（例如记录旧值→新值）。
+		if overrideAction, overrideDetail, ok := override.get(); ok {
+			if overrideAction != "" {
+				action = overrideAction
+			}
+			if overrideDetail != "" {
+				detail = &overrideDetail
+			}
 		}
 		if action == "" {
 			return

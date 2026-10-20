@@ -31,7 +31,7 @@ import {
 } from '../components/Icons'
 import { InlineLoading } from '../components/Loading'
 import { ServerFiltersBar } from '../components/ServerFiltersBar'
-import { DeleteServerDialog, RenameServerDialog } from '../components/ServerDialogs'
+import { DeleteServerDialog, EditServerDialog } from '../components/ServerDialogs'
 import { ServerTable } from '../components/ServerTable'
 import { ReleaseStatusBadge } from '../components/DeployBadges'
 import { StatCard } from '../components/StatCard'
@@ -671,7 +671,7 @@ export default function DashboardPage() {
             onToggleAll={(checked) =>
               setSelected(checked ? new Set(servers.map((server) => server.id)) : new Set())
             }
-            onRename={(server) => setRenaming(server)}
+            onEdit={(server) => setRenaming(server)}
             onDelete={(server) => setDeleting(server)}
             onEditTags={(server) => {
               setTagError(null)
@@ -690,7 +690,7 @@ export default function DashboardPage() {
         onClose={() => setWizardOpen(false)}
         onFinished={handleChanged}
       />
-      <RenameServerDialog
+      <EditServerDialog
         server={renaming}
         onClose={() => setRenaming(null)}
         onSaved={handleChanged}

@@ -1,47 +1,97 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, type Server } from '../lib/api'
 import { errorMessage } from '../lib/errors'
+import { validateServerHost, parsePort } from '../lib/network'
+import { formatLatency } from '../lib/format'
 import { Button } from './Button'
 import { Modal } from './Modal'
 import { useToast } from './Toast'
+import { AlertTriangleIcon } from './Icons'
 import { t } from '../i18n'
 
-interface RenameDialogProps {
+interface EditServerDialogProps {
   server: Server | null
   onClose: () => void
   onSaved: () => void
 }
 
-export function RenameServerDialog({ server, onClose, onSaved }: RenameDialogProps) {
+interface FieldErrors {
+  name?: string
+  host?: string
+  port?: string
+  form?: string
+}
+
+/** 编辑服务器：名称、主机地址、端口；改地址后自动重新测试连通性。 */
+export function EditServerDialog({ server, onClose, onSaved }: EditServerDialogProps) {
   const { toast } = useToast()
   const [name, setName] = useState('')
+  const [host, setHost] = useState('')
+  const [port, setPort] = useState('')
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [errors, setErrors] = useState<FieldErrors>({})
 
   useEffect(() => {
     if (!server) return
     setName(server.name)
-    setError(null)
+    setHost(server.host)
+    setPort(server.port === null ? '' : String(server.port))
+    setErrors({})
     setSaving(false)
   }, [server])
+
+  const addressChanged =
+    server !== null &&
+    (host.trim() !== server.host || (parsePort(port) ?? null) !== server.port)
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!server) return
-    const trimmed = name.trim()
-    if (!trimmed) {
-      setError(t('s.0504'))
-      return
-    }
+    const next: FieldErrors = {}
+    const trimmedName = name.trim()
+    if (!trimmedName) next.name = 'server.edit.errorNameRequired'
+    const hostError = validateServerHost(host)
+    if (hostError) next.host = hostError
+    const parsedPort = parsePort(port)
+    if (parsedPort === null) next.port = 'network.error.portRange'
+    setErrors(next)
+    if (Object.keys(next).length > 0) return
+
     setSaving(true)
-    setError(null)
     try {
-      await api.updateServer(server.id, { name: trimmed })
-      toast(t('s.0505'), 'success')
+      await api.updateServer(server.id, {
+        name: trimmedName,
+        host: host.trim(),
+        port: parsedPort ?? 22,
+      })
+      toast(t('server.edit.saved'), 'success')
       onSaved()
       onClose()
+      if (addressChanged) {
+        toast(t('server.edit.retesting'), 'info')
+        void (async () => {
+          try {
+            const result = await api.testConnection(server.id)
+            if (result.ok) {
+              toast(
+                t('server.edit.testOk', {
+                  latency: formatLatency(result.latency_ms),
+                }),
+                'success',
+              )
+            } else {
+              toast(
+                t('server.edit.testFailed', { error: result.error ?? t('server.edit.noReason') }),
+                'error',
+              )
+            }
+          } catch (caught) {
+            toast(errorMessage(caught, t('server.edit.testFailedGeneric')), 'error')
+          }
+        })()
+      }
     } catch (caught) {
-      setError(errorMessage(caught, t('s.0506')))
+      setErrors({ form: errorMessage(caught, t('server.edit.saveFailed')) })
     } finally {
       setSaving(false)
     }
@@ -51,35 +101,119 @@ export function RenameServerDialog({ server, onClose, onSaved }: RenameDialogPro
     <Modal
       open={server !== null}
       onClose={onClose}
-      title={t('s.0507')}
-      description={server ? t('s.0508', { '0': server.name }) : undefined}
+      title={t('server.edit.title')}
+      description={server ? t('server.edit.description', { name: server.name }) : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>
-            {t('s.0024')}
+            {t('common.cancel')}
           </Button>
-          <Button type="submit" form="rename-server-form" loading={saving}>
-            {t('s.0509')}
+          <Button type="submit" form="edit-server-form" loading={saving}>
+            {t('common.save')}
           </Button>
         </>
       }
     >
-      <form id="rename-server-form" onSubmit={handleSubmit} className="space-y-3">
-        <label htmlFor="server-name" className="block text-sm font-medium text-slate-700 dark:text-slate-200">
-          {t('s.0064')}
-        </label>
-        <input
-          id="server-name"
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          maxLength={64}
-          autoFocus
-          placeholder={t('s.0510')}
-          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:border-indigo-400"
-        />
-        {error ? (
+      <form id="edit-server-form" onSubmit={handleSubmit} className="space-y-3">
+        <div>
+          <label
+            htmlFor="server-name"
+            className="block text-sm font-medium text-slate-700 dark:text-slate-200"
+          >
+            {t('server.edit.name')}
+          </label>
+          <input
+            id="server-name"
+            value={name}
+            onChange={(event) => {
+              setName(event.target.value)
+              if (errors.name) setErrors({ ...errors, name: undefined })
+            }}
+            maxLength={64}
+            autoFocus
+            placeholder={t('s.0510')}
+            className={
+              'mt-1 w-full rounded-md border bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:ring-2 dark:bg-slate-950 dark:text-slate-100 ' +
+              (errors.name
+                ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-500/20 dark:border-rose-500'
+                : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-500/20 dark:border-slate-700')
+            }
+          />
+          {errors.name ? (
+            <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{t(errors.name)}</p>
+          ) : null}
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px]">
+          <div>
+            <label
+              htmlFor="server-host"
+              className="block text-sm font-medium text-slate-700 dark:text-slate-200"
+            >
+              {t('server.edit.host')}
+            </label>
+            <input
+              id="server-host"
+              value={host}
+              onChange={(event) => {
+                setHost(event.target.value)
+                if (errors.host) setErrors({ ...errors, host: undefined })
+              }}
+              placeholder="10.0.0.12"
+              className={
+                'mt-1 w-full rounded-md border bg-white px-3 py-2 font-mono text-xs text-slate-900 shadow-sm outline-none transition focus:ring-2 dark:bg-slate-950 dark:text-slate-100 ' +
+                (errors.host
+                  ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-500/20 dark:border-rose-500'
+                  : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-500/20 dark:border-slate-700')
+              }
+            />
+            {errors.host ? (
+              <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{t(errors.host)}</p>
+            ) : null}
+          </div>
+          <div>
+            <label
+              htmlFor="server-port"
+              className="block text-sm font-medium text-slate-700 dark:text-slate-200"
+            >
+              {t('server.edit.port')}
+            </label>
+            <input
+              id="server-port"
+              value={port}
+              onChange={(event) => {
+                setPort(event.target.value)
+                if (errors.port) setErrors({ ...errors, port: undefined })
+              }}
+              inputMode="numeric"
+              className={
+                'mt-1 w-full rounded-md border bg-white px-3 py-2 font-mono text-xs text-slate-900 shadow-sm outline-none transition focus:ring-2 dark:bg-slate-950 dark:text-slate-100 ' +
+                (errors.port
+                  ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-500/20 dark:border-rose-500'
+                  : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-500/20 dark:border-slate-700')
+              }
+            />
+            {errors.port ? (
+              <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{t(errors.port)}</p>
+            ) : null}
+          </div>
+        </div>
+
+        {addressChanged ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-500/10">
+            <p className="flex items-center gap-1.5 text-xs font-medium text-amber-900 dark:text-amber-200">
+              <AlertTriangleIcon className="h-3.5 w-3.5" />
+              {t('server.edit.addressWarning')}
+            </p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-amber-800/90 dark:text-amber-200/80">
+              {t('server.edit.addressWarningHint')}
+            </p>
+          </div>
+        ) : null}
+
+        {errors.form ? (
           <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-            {error}
+            {errors.form}
           </p>
         ) : null}
       </form>
@@ -144,9 +278,7 @@ export function DeleteServerDialog({ server, onClose, onDeleted }: DeleteDialogP
           </span>{' '}
           {t('s.0515')}
         </p>
-        <p className="text-xs text-slate-400 dark:text-slate-500">
-          {t('s.0516')}
-        </p>
+        <p className="text-xs text-slate-400 dark:text-slate-500">{t('s.0516')}</p>
         {error ? (
           <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
             {error}

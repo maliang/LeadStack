@@ -143,6 +143,8 @@ func newTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("构造 API 失败: %v", err)
 	}
 	srv := httptest.NewServer(a.Router())
+	// 让 /system/network 的 active_listen 对齐测试服务器的真实地址。
+	a.activeListen = srv.Listener.Addr().String()
 	t.Cleanup(srv.Close)
 
 	return &testEnv{

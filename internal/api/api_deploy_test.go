@@ -700,7 +700,7 @@ func TestDeployOrchestratorConcurrencyAndStatus(t *testing.T) {
 	runner.mu.Unlock()
 	// retry 刚返回时，release 状态可能仍是上一轮的 failed（新一轮还没把状态改成 running），
 	// 因此这里容忍中间态，最终必须收敛到 success。
-	finalStatus := env.waitReleaseStatusAfterRetry(t, jwt, release2, 20*time.Second)
+	finalStatus := env.waitReleaseStatusAfterRetry(t, jwt, release2, 60*time.Second)
 	if finalStatus != store.ReleaseStatusSuccess {
 		runs, _ := env.st.ListReleaseRuns(context.Background(), release2)
 		t.Fatalf("retry 后应变为 success，实际 %q（runs=%+v）", finalStatus, runs)

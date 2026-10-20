@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { api, type Credential, type ImportServersResult } from '../lib/api'
 import { usePolling } from '../lib/hooks'
 import { useI18n } from '../i18n'
@@ -57,6 +57,25 @@ export default function ImportPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ImportServersResult | null>(null)
+
+  // 默认端口取自控制台设置（契约 §49），读取失败时回退 22
+  const networkSyncedRef = useRef(false)
+  useEffect(() => {
+    let cancelled = false
+    api
+      .network()
+      .then((network) => {
+        if (cancelled || networkSyncedRef.current) return
+        networkSyncedRef.current = true
+        setDefaultPort(String(network.default_ssh_port))
+      })
+      .catch(() => {
+        networkSyncedRef.current = true
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const parsed = useMemo(() => parseText(text, Number(defaultPort) || 22), [text, defaultPort])
   const validCount = parsed.filter((line) => !line.duplicated && line.note !== 'invalid').length
@@ -129,6 +148,9 @@ export default function ImportPage() {
                 className={inputClass + ' mt-1.5'}
                 inputMode="numeric"
               />
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                {t('network.defaultPortHint', { port: Number(defaultPort) || 22 })}
+              </p>
             </div>
             <div>
               <label htmlFor="import-mode" className={labelClass}>

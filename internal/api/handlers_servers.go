@@ -69,6 +69,9 @@ type patchServerRequest struct {
 	Group         *string   `json:"group"`
 	HostKeyPolicy *string   `json:"host_key_policy"`
 	CredentialID  *string   `json:"credential_id"`
+	// Host / Port 允许事后修改（契约 49.2）：改完需重新测试连通性。
+	Host *string `json:"host"`
+	Port *int    `json:"port"`
 }
 
 // handleListServers 处理 GET /api/v1/servers，支持 ?group=&tag=&status=&mode= 过滤。
@@ -176,7 +179,8 @@ func (a *API) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
 		return
 	}
-	port := 22
+	// 未显式给端口时用设置里的默认 SSH 端口（servers.default_ssh_port，默认 22）。
+	port := a.defaultSSHPortForCreate(r.Context())
 	if req.Port != nil {
 		port = *req.Port
 	}
@@ -276,9 +280,10 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Name == nil && req.Tags == nil && req.Group == nil &&
-		req.HostKeyPolicy == nil && req.CredentialID == nil {
+		req.HostKeyPolicy == nil && req.CredentialID == nil &&
+		req.Host == nil && req.Port == nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument,
-			"至少需要提供 name/tags/group/host_key_policy/credential_id 之一")
+			"至少需要提供 name/tags/group/host_key_policy/credential_id/host/port 之一")
 		return
 	}
 
@@ -341,12 +346,51 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 		credentialID = &cid // 空字符串表示解绑
 	}
 
+	// host/port：允许事后修改（契约 49.2）。
+	current, err := a.st.GetServer(ctx, id)
+	if err != nil {
+		a.writeStoreError(w, r, err)
+		return
+	}
+	var hostPtr *string
+	if req.Host != nil {
+		h := strings.TrimSpace(*req.Host)
+		if err := validateText("host", h, maxServerHostRunes, true); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		hostPtr = &h
+	}
+	var portPtr *int
+	if req.Port != nil {
+		if err := ValidatePort(*req.Port); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, "port "+err.Error())
+			return
+		}
+		portPtr = req.Port
+	}
+	oldHost, oldPort := current.Host, current.Port
+	newHost, newPort := oldHost, oldPort
+	if hostPtr != nil {
+		newHost = *hostPtr
+	}
+	if portPtr != nil {
+		newPort = *portPtr
+	}
+	endpointChanged := newHost != oldHost || newPort != oldPort
+	if endpointChanged {
+		// host:port 变了，旧主机密钥不再可信：清掉该机记录，下次连接重新学习/校验。
+		a.forgetKnownHost(ctx, id, oldHost, oldPort)
+	}
+
 	srv, err := a.st.UpdateServerFields(ctx, id, store.ServerUpdate{
 		Name:          name,
 		TagsJSON:      tagsJSON,
 		Group:         group,
 		HostKeyPolicy: policy,
 		CredentialID:  credentialID,
+		Host:          hostPtr,
+		Port:          portPtr,
 	})
 	if err != nil {
 		a.writeStoreError(w, r, err)
@@ -361,6 +405,14 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.internalError(w, r, err)
 		return
+	}
+	if endpointChanged {
+		detail := fmt.Sprintf(`{"old":{"host":%q,"port":%d},"new":{"host":%q,"port":%d},"host_key_cleared":true}`,
+			oldHost, oldPort, newHost, newPort)
+		a.setAuditDetail(r, "server.update", detail)
+		a.logger.Info("服务器地址已变更，已清除旧主机密钥",
+			"server_id", id, "old", fmt.Sprintf("%s:%d", oldHost, oldPort),
+			"new", fmt.Sprintf("%s:%d", newHost, newPort))
 	}
 	writeData(w, http.StatusOK, toServerPayload(*srv, a.nowMS(), metrics[id], hostInfoRaw(hostInfos, id)))
 }

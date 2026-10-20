@@ -58,8 +58,10 @@ type Options struct {
 	SFTP SFTPFactory
 	// TermOpener 是 ssh 终端通道（internal/term 的 SSHOpener）。
 	TermOpener term.Opener
-	Version    string
-	StartedAt  time.Time
+	// ActiveListen 是当前进程实际监听的地址（由 cmd 在 net.Listen 之后注入）。
+	ActiveListen string
+	Version      string
+	StartedAt    time.Time
 }
 
 // API 汇聚处理器的所有依赖。
@@ -81,6 +83,7 @@ type API struct {
 	remoteExec       RemoteExecutor
 	sftp             SFTPFactory
 	termOpener       term.Opener
+	activeListen     string
 	termTickets      sync.Map // ticket → *terminalTicket
 	agentTerms       sync.Map // sessionID → *agentTermSession
 	// backupWake 用于「设置变更后立即重排定时备份」，容量 1 的非阻塞信号。
