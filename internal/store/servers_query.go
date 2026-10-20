@@ -104,7 +104,7 @@ func parseTagsJSON(raw string) []string {
 // EffectiveStatus 计算服务器的对外状态。
 //
 //   - mode=ssh：以采集器维护的 status 列为准（连续失败 3 次才判 offline，见契约第 10 节）；
-//   - mode=agent：由 last_seen_at 按 45 秒阈值实时推导（M0 行为，保持兼容）。
+//   - mode=agent：由 last_seen_at 按 45 秒阈值实时推导（基础 行为，保持兼容）。
 func EffectiveStatus(srv Server, nowMS int64) string {
 	if srv.Mode == ModeSSH {
 		switch srv.Status {

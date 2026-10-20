@@ -17,7 +17,7 @@ import (
 // 因此 OS 来源按优先级取：
 //  1. spec.Params["os"]（"linux" / "darwin" / "windows"，大小写不敏感）—— 由 backend 按
 //     servers.os 传下来，跨 OS 纳管（控制端 Linux 管 Windows 机器）时必须用它；
-//  2. 缺省沿用控制端 GOOS（本变量），兼容 M2 已有检测项。
+//  2. 缺省沿用控制端 GOOS（本变量），兼容 检测 已有检测项。
 //
 // 注意：这是**不改 Executor 接口**的前提下实现的（改了会打挂 backend 与 internal/jobs）。
 var processGOOS = runtime.GOOS

@@ -1332,7 +1332,7 @@ const enUS: Record<string, string> = {
   's.1126': 'No data in this range',
   's.1127': 'Charts refresh every 30 seconds; switch Raw / 1 min / 1 hour for different aggregation.',
   's.1128': 'Remote terminal and batch deployment arrive in a later release',
-  's.1129': 'M1 covers credentials, SSH connectivity tests, host info and metric history; the web terminal, task dispatch and deploy templates come in later milestones.',
+  's.1129': '纳管 covers credentials, SSH connectivity tests, host info and metric history; the web terminal, task dispatch and deploy templates come in later milestones.',
   'schedules.command': 'Command',
   'schedules.commandWarning': 'Runs with agent/SSH privileges on targets. Make sure it is idempotent and safe.',
   'schedules.concurrency': 'Concurrency',

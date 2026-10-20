@@ -24,7 +24,7 @@ services:
       LEADSTACK_DATA_DIR: /data
       # 不设置 ADMIN_PASSWORD 时，首次启动会随机生成管理员密码并打印到容器日志（仅一次）
       # LEADSTACK_ADMIN_PASSWORD: "请改成强密码"
-      # ---- M4 发布相关（都可选，默认值见 internal/config）----
+      # ---- 部署 发布相关（都可选，默认值见 internal/config）----
       # 单个发布任务的并发上限（同时向几台目标机推进）
       # LEADSTACK_DEPLOY_CONCURRENCY: "4"
       # 上传型制品的单文件大小上限（MB）
@@ -61,5 +61,5 @@ services:
 
 volumes:
   leadstack-data:
-  # M4：部署根目录卷（配合上面被注释的 volume 示例使用）
+  # 部署：部署根目录卷（配合上面被注释的 volume 示例使用）
   # leadstack-deploy:

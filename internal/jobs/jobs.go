@@ -1,7 +1,7 @@
 // Package jobs 实现控制端向 agent 下发命令任务并收集结果的链路
 // （契约见 docs/ARCHITECTURE.md 第 14.2 节）。
 //
-// 它同时提供 checker.Executor 所需的 Exec 语义，因此 M2 的 process/script 检测
+// 它同时提供 checker.Executor 所需的 Exec 语义，因此 检测 的 process/script 检测
 // 可以直接把 *Dispatcher 注入 checker.Deps.Exec。
 //
 // 设计要点：

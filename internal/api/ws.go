@@ -300,7 +300,7 @@ func (a *API) dispatchAgentFrame(ctx context.Context, ac *agentConn, tok *store.
 	case protocol.TypeHostInfo:
 		err = a.onAgentHostInfo(handleCtx, ac, tok, remoteHost, env)
 	case protocol.TypeJobAck, protocol.TypeJobLog, protocol.TypeJobDone:
-		// M2：任务帧真正转给下发器（jobs.Dispatcher），agent 模式的 process/script 检测依赖此链路。
+		// 检测：任务帧真正转给下发器（jobs.Dispatcher），agent 模式的 process/script 检测依赖此链路。
 		result, err := a.dispatchJobFrame(ac.getServerID(), env)
 		if err == nil && result.Handled {
 			a.logger.Debug("已处理任务帧", "type", env.Type, "server_id", ac.getServerID(), "run_id", result.RunID)

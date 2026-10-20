@@ -4,7 +4,7 @@
 #   make build-go   只构建两个 Go 二进制（跳过前端，前端未就绪时也能用）
 #   make cross      交叉编译 5 个目标到 dist/
 #   make devssh     DEV-ONLY 测试 SSH 服务（仅本地验收用，**绝不进发布产物**）
-#   make test-e2e   按序跑 scripts/verify_m0..m4.sh、verify_backup.sh、verify_ops.sh（缺失自动跳过）
+#   make test-e2e   按序跑 scripts/verify_bootstrap..m4.sh、verify_backup.sh、verify_ops.sh（缺失自动跳过）
 #   make fmt-check  gofmt 闸门：有未格式化文件即失败
 #   make test-race  go test -race（internal/api、internal/store 并发状态机）
 #   make help       查看全部目标
@@ -49,7 +49,7 @@ CROSS_TARGETS := linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64
 BINARIES := leadstack leadstack-agent
 # e2e 验收脚本的日志目录（各 verify_m*.sh 的 stdout+诊断都落在这里）
 E2E_LOG_DIR ?= .e2e-logs
-# go test -race 的包范围：至少覆盖并发面最大的 api 与 store（M3 告警状态机在此）
+# go test -race 的包范围：至少覆盖并发面最大的 api 与 store（告警 告警状态机在此）
 RACE_PKGS ?= ./internal/api/... ./internal/store/...
 
 .PHONY: help all build build-go web web-install web-embed webui-placeholder \
@@ -71,7 +71,7 @@ all: build ## 等价于 build
 build: web-embed build-go ## 一条命令产出内嵌 UI 的 bin/leadstack 与 bin/leadstack-agent
 
 # 已知限制：build-go 跳过前端，因此不会内嵌 install.sh，此时控制端 GET /install.sh 会 404
-# （内嵌 UI 也只是占位页）。需要完整可用的交付物请用 `make build`；M1 会把安装脚本改为正式 embed。
+# （内嵌 UI 也只是占位页）。需要完整可用的交付物请用 `make build`；纳管 会把安装脚本改为正式 embed。
 build-go: webui-placeholder ## 只构建 Go 二进制（跳过前端）
 	@mkdir -p $(BIN_DIR)
 	@printf '>> go build CGO_ENABLED=0 VERSION=%s COMMIT=%s\n' '$(VERSION)' '$(COMMIT)'
@@ -200,12 +200,12 @@ devssh: ## 构建 DEV-ONLY 测试 SSH 服务到 bin/leadstack-devssh（不参与
 	CGO_ENABLED=0 $(GO) build $(GOFLAGS_BUILD) -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/leadstack-devssh $(CMD_DEVSSH)
 
 # 验收脚本清单（按序执行；由 lead 维护，缺失时自动跳过，落地后无需改 Makefile）
-E2E_SCRIPTS := verify_m0 verify_m1 verify_m2 verify_m3 verify_m4 verify_backup verify_ops
+E2E_SCRIPTS := verify_bootstrap verify_servers verify_checks verify_alerts verify_deploy verify_backup verify_ops
 
-# 依次跑 M0/M1/M2 验收脚本；输出（含脚本内部打印的控制端/agent 日志尾部）tee 到 $(E2E_LOG_DIR)/，
+# 依次跑 基础/纳管/检测 验收脚本；输出（含脚本内部打印的控制端/agent 日志尾部）tee 到 $(E2E_LOG_DIR)/，
 # CI 失败时把该目录作为 artifact 上传。某个脚本缺失时打印提示并跳过（不算失败）；
 # 任一已存在的脚本失败 → 立即停止（不再跑后续脚本）并让 make 失败。
-test-e2e: ## 端到端验收：按序 verify_m0..m4 → backup → ops（前置：make build && make devssh）
+test-e2e: ## 端到端验收：按序 verify_bootstrap..m4 → backup → ops（前置：make build && make devssh）
 	@mkdir -p $(E2E_LOG_DIR)
 	@printf '>> 前置产物：bin/leadstack、bin/leadstack-agent（make build）+ bin/leadstack-devssh（make devssh）\n'
 	@set -eu; scripts='$(E2E_SCRIPTS)'; total=0; i=0; \

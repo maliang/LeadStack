@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# LeadStack M2 端到端验收（Lead 所有）
+# LeadStack 检测 端到端验收（Lead 所有）
 #
-# 覆盖 docs/ARCHITECTURE.md 第 17 节 M2 验收标准。
-# 用法：make build && make devssh && bash scripts/verify_m2.sh
+# 覆盖 docs/ARCHITECTURE.md 第 17 节 监控检测验收标准。
+# 用法：make build && make devssh && bash scripts/verify_checks.sh
 #
 # 写法约束（踩过的坑，勿改）：**不要**把带 \" 转义的 JSON 放进两层嵌套的 "$( )" 里，
 # bash 3.2 会把参数拆坏。所有请求都先落到变量，再用 jget 取值（两步式）。
@@ -51,7 +51,7 @@ check_status() { # <check_id> <token>
 }
 run_field() { # <check_id> <token> <field>
   # 注意：不能用 `// empty` —— jq 的 `//` 会把布尔 false 当 falsey 一并丢弃，
-  # 导致 ok=false 被读成空串（M2 集成时踩过）。这里只把 null 归一成空串。
+  # 导致 ok=false 被读成空串（检测 集成时踩过）。这里只把 null 归一成空串。
   local resp val
   resp="$(api POST "/api/v1/checks/$1/run" "" "$2")"
   val="$(printf '%s' "$resp" | jq -r ".data.results[0].$3" 2>/dev/null)"

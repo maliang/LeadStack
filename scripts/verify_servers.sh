@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# LeadStack M1 端到端验收（Lead 所有）
+# LeadStack 纳管 端到端验收（Lead 所有）
 #
-# 覆盖 docs/ARCHITECTURE.md 第 12 节 M1 验收标准。
-# 用法：make build && make devssh && bash scripts/verify_m1.sh
+# 覆盖 docs/ARCHITECTURE.md 第 12 节 服务器纳管验收标准。
+# 用法：make build && make devssh && bash scripts/verify_servers.sh
 #
 # 本机没有 sshd，SSH 路径使用 bin/leadstack-devssh（DEV-ONLY 测试端点）驱动。
 set -uo pipefail

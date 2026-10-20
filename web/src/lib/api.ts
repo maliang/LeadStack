@@ -233,7 +233,7 @@ export interface SystemInfo {
   uptime_s: number
   server_count: number
   online_count: number
-  /** M6：首次安装向导是否需要引导 */
+  /** 协作：首次安装向导是否需要引导 */
   needs_setup?: boolean
 }
 
@@ -282,7 +282,7 @@ export interface Server {
   tags: string[]
   metrics_summary: MetricsSummary | null
   created_at: number | null
-  /** M1 扩展字段（契约第 10 节） */
+  /** 纳管 扩展字段（契约第 10 节） */
   group: string | null
   credential_id: string | null
   last_error: string | null
@@ -380,7 +380,7 @@ export interface InstallScript {
 }
 
 /* ------------------------------------------------------------------ */
-/* M2：检测（契约第 13/15 节）                                          */
+/* 检测：检测（契约第 13/15 节）                                          */
 /* ------------------------------------------------------------------ */
 
 export type CheckKind = 'tcp' | 'http' | 'ping' | 'process' | 'script'
@@ -486,7 +486,7 @@ export interface CheckResultsQuery {
 }
 
 /* ------------------------------------------------------------------ */
-/* M4：批量部署（契约第 23/24/26/27 节）                                */
+/* 部署：批量部署（契约第 23/24/26/27 节）                                */
 /* ------------------------------------------------------------------ */
 
 export type ReleaseStatus = 'pending' | 'running' | 'success' | 'failed' | 'canceled'
@@ -672,7 +672,7 @@ export interface BackupDownload {
 
 
 /* ------------------------------------------------------------------ */
-/* M5/M6：审计 / 用户 / API Token / 定时任务 / 导入 / 终端 / 文件 / 日志 */
+/* 运维与协作：审计 / 用户 / API Token / 定时任务 / 导入 / 终端 / 文件 / 日志 */
 /* ------------------------------------------------------------------ */
 
 export interface PageInfo {
@@ -838,7 +838,7 @@ export interface SetupStatus {
 }
 
 /* ------------------------------------------------------------------ */
-/* M3：告警（契约第 18/20 节）                                          */
+/* 告警：告警（契约第 18/20 节）                                          */
 /* ------------------------------------------------------------------ */
 
 export type AlertSeverity = 'critical' | 'warning' | 'info'
@@ -993,7 +993,7 @@ function toText(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null
 }
 
-// 指标 key 以协议点分命名为准（契约 3.1），同时兼容 M0 期间出现过的下划线别名。
+// 指标 key 以协议点分命名为准（契约 3.1），同时兼容 基础 期间出现过的下划线别名。
 export const METRIC_KEYS = {
   cpu: ['cpu.pct', 'cpu_pct', 'cpu', 'cpu_percent'],
   mem: ['mem.used_pct', 'mem_used_pct', 'mem.pct', 'mem', 'mem_percent', 'memory_used_pct'],
@@ -1110,7 +1110,7 @@ function normalizeMetricSeries(input: unknown): MetricSeries {
   return { metric: toText(raw.metric) ?? '', points }
 }
 
-/* ---------------------- M2 检测：归一化 ---------------------- */
+/* ---------------------- 检测 检测：归一化 ---------------------- */
 
 function toBool(value: unknown, fallback = false): boolean {
   if (typeof value === 'boolean') return value
@@ -1263,7 +1263,7 @@ export function normalizeCheckResults(input: unknown): CheckResult[] {
     .filter((item): item is CheckResult => item !== null)
 }
 
-/* ---------------------- M3 告警：归一化 ---------------------- */
+/* ---------------------- 告警 告警：归一化 ---------------------- */
 
 function toStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
@@ -1416,7 +1416,7 @@ export function normalizeAlertSummary(input: unknown): AlertSummary {
   }
 }
 
-/* ---------------------- M4 部署：归一化 ---------------------- */
+/* ---------------------- 部署 部署：归一化 ---------------------- */
 
 function normalizeReleaseStatus(value: unknown): ReleaseStatus {
   switch (value) {
@@ -1600,7 +1600,7 @@ export function normalizeRestoreStagedResult(input: unknown): RestoreStagedResul
   }
 }
 
-/* ---------------------- M5/M6：归一化 ---------------------- */
+/* ---------------------- 运维与协作：归一化 ---------------------- */
 
 export function normalizeAuditLog(input: unknown): AuditLogEntry {
   const raw = toRecord(input) ?? {}
@@ -1742,7 +1742,7 @@ async function fetchServers(filters: ServerFilters = {}): Promise<Server[]> {
   const raw = await request<unknown>(`/servers${suffix}`)
   const list = Array.isArray(raw) ? raw.map(normalizeServer) : []
 
-  // 最多补拉 20 台，避免对控制端造成请求风暴（M1 列表已带指标，通常不触发）。
+  // 最多补拉 20 台，避免对控制端造成请求风暴（纳管 列表已带指标，通常不触发）。
   const missing = list
     .filter((server) => server.id !== '' && server.metrics_summary === null)
     .slice(0, 20)
@@ -1777,7 +1777,7 @@ export interface UpdateServerPayload {
   group?: string | null
 }
 
-/** POST /servers 请求体（M1 扩展字段，契约第 10 节）。 */
+/** POST /servers 请求体（纳管 扩展字段，契约第 10 节）。 */
 export interface CreateServerPayload {
   name: string
   host: string
@@ -1953,7 +1953,7 @@ export const api = {
     return request<InstallScript>('/agent/install-script', { method: 'POST', body: payload })
   },
 
-  /* ---------------------- M2：检测（契约第 15 节） ---------------------- */
+  /* ---------------------- 检测：检测（契约第 15 节） ---------------------- */
 
   /** GET /checks —— 含目标服务器数、最近结果、当前状态、24h 可用率 */
   checks(): Promise<CheckItem[]> {
@@ -2020,7 +2020,7 @@ export const api = {
     )
   },
 
-  /* ---------------------- M3：告警（契约第 20 节） ---------------------- */
+  /* ---------------------- 告警：告警（契约第 20 节） ---------------------- */
 
   alertRules(): Promise<AlertRule[]> {
     return request<unknown>('/alert-rules').then((raw) =>
@@ -2124,7 +2124,7 @@ export const api = {
     return request<unknown>('/alerts/summary').then(normalizeAlertSummary)
   },
 
-  /* ---------------------- M4：批量部署（契约第 27 节） ---------------------- */
+  /* ---------------------- 部署：批量部署（契约第 27 节） ---------------------- */
 
   apps(): Promise<AppItem[]> {
     return request<unknown>('/apps').then((raw) =>
@@ -2353,7 +2353,7 @@ export const api = {
     )
   },
 
-  /* ---------------------- M5/M6：运维增强（契约第 36–45 节） ---------------------- */
+  /* ---------------------- 运维与协作：运维增强（契约第 36–45 节） ---------------------- */
 
   auditLogs(filters: AuditFilters = {}): Promise<Paged<AuditLogEntry>> {
     const params = new URLSearchParams()

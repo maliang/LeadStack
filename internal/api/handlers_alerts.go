@@ -498,7 +498,7 @@ func (a *API) handleDeleteAlertChannel(w http.ResponseWriter, r *http.Request) {
 
 // handleTestAlertChannel 处理 POST /api/v1/alert-channels/{id}/test。
 //
-// 约定（lead §M3 对齐事项 2）：HTTP 恒 200，结果放 {data:{ok,error?}}；渠道不存在仍 404。
+// 约定（lead 告警 对齐事项 2）：HTTP 恒 200，结果放 {data:{ok,error?}}；渠道不存在仍 404。
 func (a *API) handleTestAlertChannel(w http.ResponseWriter, r *http.Request) {
 	channel, err := a.loadAlertChannel(w, r)
 	if err != nil {

@@ -1,7 +1,7 @@
 // Command leadstack-devssh 启动一个测试专用 SSH 服务。
 //
 // 它只用于开发与端到端验收（本机没有 sshd），**禁止用于生产环境**。
-// 命令行契约见 docs/ARCHITECTURE.md 第 8.4 节与 M1 任务说明：
+// 命令行契约见 docs/ARCHITECTURE.md 第 8.4 节与 纳管 任务说明：
 //
 //	leadstack-devssh --addr 127.0.0.1:0 --user devuser --password devpass \
 //	                 --authorized-key-file <path> --port-file <path>

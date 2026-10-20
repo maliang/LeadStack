@@ -16,7 +16,7 @@
 #      打开方式：取消 notarize 段注释，并在 CI 里注入上述 secrets。
 #   2) Windows 代码签名：需要 EV 代码签名证书（signtool / azure-code-signing）。
 #      打开方式：取消 signs 段注释，并在 CI 里注入证书。
-#   3) Linux 包（nfpms: deb/rpm/apk）暂不做，M0 只发 tar.gz/zip。
+#   3) Linux 包（nfpms: deb/rpm/apk）暂不做，基础 只发 tar.gz/zip。
 #   在证书就绪前，release 流程必须保持「无签名也能成功」。
 
 version: 2
@@ -52,7 +52,7 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     ignore:
-      # M0 不需要 windows/arm64
+      # 基础 不需要 windows/arm64
       - goos: windows
         goarch: arm64
     mod_timestamp: "{{ .CommitTimestamp }}"

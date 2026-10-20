@@ -17,14 +17,14 @@ pnpm --dir web preview          # 预览构建产物
 
 - `vite.config.ts` 中 `base: './'`：产物必须使用相对路径资源，才能被 embed 后在任意子路径下同端口提供。
 - 路由使用 `HashRouter`：地址形如 `http://<host>:8080/#/servers/<id>`，避免子路径下的资源相对路径问题。
-- 接口契约见 `docs/ARCHITECTURE.md` 第 3 节（M0）与第 10 节（M1 新增端点），统一响应
+- 接口契约见 `docs/ARCHITECTURE.md` 第 3 节（基础）与第 10 节（纳管 新增端点），统一响应
   `{"data":...}` / `{"error":{code,message}}`，所有时间戳为 Unix 毫秒。字段名以契约为准，前端不做重命名。
 - 依赖克制：运行时仅 `react` / `react-dom` / `react-router-dom` / `uplot`（唯一图表库）；
   轮询用自写 `src/lib/hooks.ts`，不引数据请求库。
 - 深色模式用 `html.dark` 类切换（Tailwind 4 `@custom-variant dark`），默认浅色，选择存 `localStorage`。
   首屏前由 `index.html` 内联脚本应用，避免闪白；图表跟随主题重绘。
 
-## 页面与能力（M0 + M1 + M2 + M3 + M4 + 备份）
+## 页面与能力（基础 + 纳管 + 检测 + 告警 + 部署 + 备份）
 
 | 路由 | 说明 |
 |---|---|
@@ -67,7 +67,7 @@ src/
 ├── App.tsx                 路由装配（/login、/、/checks、/alerts、/apps、/apps/:id、/releases/:id、/backups、/credentials、/servers/:id）
 ├── main.tsx                HashRouter + 挂载
 ├── lib/
-│   ├── api.ts              REST 客户端、契约类型、响应归一化（含 M2 检测）
+│   ├── api.ts              REST 客户端、契约类型、响应归一化（含 检测 检测）
 │   ├── auth.tsx            登录态 Context（token 存 localStorage，401 自动登出）
 │   ├── hooks.ts            usePolling（默认 10s，支持 key 触发重取）、useNow
 │   ├── format.ts           相对时间、字节、延迟、指纹、指标中文名
@@ -84,7 +84,7 @@ src/
 ## 与后端字段的兼容兜底
 
 1. **metrics_summary key**：以契约 3.1 的点分命名为准（`cpu.pct` / `mem.used.pct` / `mem.used_bytes` /
-   `disk.used.pct` / `load.1` / `uptime_s`）。M0 期间后端曾返回下划线别名（`disk.used_pct`、
+   `disk.used.pct` / `load.1` / `uptime_s`）。基础 期间后端曾返回下划线别名（`disk.used_pct`、
    `mem_used_pct`），前端两种都认，缺失显示「—」不报错。
 2. **列表指标**：列表项若缺 `metrics_summary`，对最多 20 台并发补拉 `GET /servers/{id}`；当前后端列表
    已直接返回该字段，兜底不再触发。

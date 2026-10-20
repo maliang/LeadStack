@@ -17,7 +17,7 @@ const (
 	codeConflict        = "conflict"
 	codeInvalidArgument = "invalid_argument"
 	codeInternal        = "internal"
-	// codeSchemaTooNew 表示备份由更新版本创建（M4.5 §33 契约新增）。
+	// codeSchemaTooNew 表示备份由更新版本创建（备份 §33 契约新增）。
 	codeSchemaTooNew = "schema_too_new"
 )
 

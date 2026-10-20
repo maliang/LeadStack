@@ -1,4 +1,4 @@
-// Package deploy 实现 LeadStack M4 的部署编排核心：
+// Package deploy 实现 LeadStack 部署 的部署编排核心：
 // 模板渲染（Render）、执行计划编排（Build）、回滚计划（Rollback）与执行器（Executor）。
 //
 // 契约见 docs/ARCHITECTURE.md 第 23/24/25/26 节（签名与占位符已冻结）。

@@ -53,7 +53,7 @@ type Engine struct {
 	// 【已知限制 · 有意为之】pending 是**纯内存态**，不落库：
 	// 控制端重启后，尚未满足 for_duration 的计时会丢失，异常若仍在持续则从重启后重新计时。
 	// 这是可接受的行为——重启本身就可能错过异常窗口，为它引入 pending 持久化（需要改
-	// alerts 相关 schema）不划算。Lead 已将此写入 M3 已知限制。
+	// alerts 相关 schema）不划算。Lead 已将此写入 告警 已知限制。
 	mu      sync.Mutex
 	pending map[string]*pendingEntry
 }
@@ -681,7 +681,7 @@ func buildAlert(r Rule, obs observation) Alert {
 	}
 }
 
-// alertTitle 标题必须含规则名与服务器名（M3 验收第 4 条要求）。
+// alertTitle 标题必须含规则名与服务器名（告警 验收第 4 条要求）。
 func alertTitle(r Rule, obs observation) string {
 	server := obs.serverName
 	if server == "" {

@@ -79,7 +79,7 @@ func TestChecksAuthAndCRUD(t *testing.T) {
 		t.Fatalf("列表内容不正确: %+v", list.Data)
 	}
 	if !strings.Contains(string(raw), `"server_count"`) || !strings.Contains(string(raw), `"state"`) {
-		t.Fatalf("列表项应同时带 server_count 与 state（前端 M2 约定）: %s", raw)
+		t.Fatalf("列表项应同时带 server_count 与 state（前端 检测 约定）: %s", raw)
 	}
 
 	// 详情 / 404
@@ -457,7 +457,7 @@ func TestMetricsDegradeLargeRawRange(t *testing.T) {
 	}
 }
 
-// TestJobFrameRouting 覆盖 M2 关键链路：job.ack/job.log/job.done 真正转给下发器，断开时 FailServer。
+// TestJobFrameRouting 覆盖 检测 关键链路：job.ack/job.log/job.done 真正转给下发器，断开时 FailServer。
 func TestJobFrameRouting(t *testing.T) {
 	env := newTestEnv(t)
 	jwt := env.login()
@@ -545,7 +545,7 @@ func TestJobFrameRouting(t *testing.T) {
 	}
 }
 
-// TestJobFramesIgnoredWithoutRouter 校验未装配下发器时保持 M0 行为（忽略但不断连）。
+// TestJobFramesIgnoredWithoutRouter 校验未装配下发器时保持 基础 行为（忽略但不断连）。
 func TestJobFramesIgnoredWithoutRouter(t *testing.T) {
 	env := newTestEnv(t)
 	jwt := env.login()

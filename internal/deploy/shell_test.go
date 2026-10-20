@@ -559,7 +559,7 @@ func TestChinesePathRealShell(t *testing.T) {
 }
 
 // TestBinaryPlanWithChineseRootRealEndToEnd 用**中文部署根**跑完整 binary 发布：
-// 这正是本地仓库路径含「领栈」时 M4 失败的那个场景。
+// 这正是本地仓库路径含「领栈」时 部署 失败的那个场景。
 func TestBinaryPlanWithChineseRootRealEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("真实执行用例在 -short 下跳过")

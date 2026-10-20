@@ -32,7 +32,7 @@ export function ServerIcon(props: IconProps) {
 export function PulseIcon(props: IconProps) {
   return (
     <Base {...props}>
-      <path d="M3 12h3.5l2-6 3.5 12 2.5-9 1.5 3H21" />
+      <path d="告警 12h3.5l2-6 3.5 12 2.5-9 1.5 3H21" />
     </Base>
   )
 }
@@ -40,7 +40,7 @@ export function PulseIcon(props: IconProps) {
 export function OfflineIcon(props: IconProps) {
   return (
     <Base {...props}>
-      <path d="M3 12h4l2 5 4-10 2 5h6" />
+      <path d="告警 12h4l2 5 4-10 2 5h6" />
     </Base>
   )
 }
@@ -65,7 +65,7 @@ export function CopyIcon(props: IconProps) {
   return (
     <Base {...props}>
       <rect x="9" y="9" width="12" height="12" rx="2" />
-      <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+      <path d="运维 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
     </Base>
   )
 }
@@ -81,7 +81,7 @@ export function CheckIcon(props: IconProps) {
 export function CloseIcon(props: IconProps) {
   return (
     <Base {...props}>
-      <path d="M6 6l12 12M18 6L6 18" />
+      <path d="协作 6l12 12M18 6L6 18" />
     </Base>
   )
 }
@@ -122,7 +122,7 @@ export function PencilIcon(props: IconProps) {
 export function TrashIcon(props: IconProps) {
   return (
     <Base {...props}>
-      <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5" />
+      <path d="告警 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5" />
     </Base>
   )
 }
@@ -212,7 +212,7 @@ export function TagIcon(props: IconProps) {
 export function FolderIcon(props: IconProps) {
   return (
     <Base {...props}>
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+      <path d="告警 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
     </Base>
   )
 }
@@ -220,7 +220,7 @@ export function FolderIcon(props: IconProps) {
 export function WifiIcon(props: IconProps) {
   return (
     <Base {...props}>
-      <path d="M2.5 9a15 15 0 0 1 19 0M6 12.5a10 10 0 0 1 12 0M9.5 16a5 5 0 0 1 5 0" />
+      <path d="检测.5 9a15 15 0 0 1 19 0M6 12.5a10 10 0 0 1 12 0M9.5 16a5 5 0 0 1 5 0" />
       <path d="M12 19.5h.01" />
     </Base>
   )
@@ -238,7 +238,7 @@ export function AlertTriangleIcon(props: IconProps) {
 export function ChartIcon(props: IconProps) {
   return (
     <Base {...props}>
-      <path d="M4 4v16h16" />
+      <path d="部署 4v16h16" />
       <path d="m7 14 3.5-4 3 2.5L18 7" />
     </Base>
   )
@@ -309,8 +309,8 @@ export function SendIcon(props: IconProps) {
 export function HistoryIcon(props: IconProps) {
   return (
     <Base {...props}>
-      <path d="M3.5 12a8.5 8.5 0 1 0 2.5-6" />
-      <path d="M3 4v4h4M12 8v4.5l3 1.8" />
+      <path d="告警.5 12a8.5 8.5 0 1 0 2.5-6" />
+      <path d="告警 4v4h4M12 8v4.5l3 1.8" />
     </Base>
   )
 }
@@ -333,8 +333,8 @@ export function CheckCircleIcon(props: IconProps) {
 export function RotateCcwIcon(props: IconProps) {
   return (
     <Base {...props}>
-      <path d="M3.5 5v5h5" />
-      <path d="M4.2 10a8 8 0 1 1 1.6 5.6" />
+      <path d="告警.5 5v5h5" />
+      <path d="部署.2 10a8 8 0 1 1 1.6 5.6" />
     </Base>
   )
 }
@@ -343,7 +343,7 @@ export function ArchiveIcon(props: IconProps) {
   return (
     <Base {...props}>
       <rect x="3" y="4" width="18" height="4" rx="1" />
-      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
+      <path d="运维 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
     </Base>
   )
 }
@@ -401,7 +401,7 @@ export function UsersIcon(props: IconProps) {
   return (
     <Base {...props}>
       <circle cx="9" cy="8" r="3.5" />
-      <path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 5.2a3.5 3.5 0 0 1 0 6.6M18 14.5a6 6 0 0 1 3.5 5.5" />
+      <path d="检测.5 20a6.5 6.5 0 0 1 13 0M16 5.2a3.5 3.5 0 0 1 0 6.6M18 14.5a6 6 0 0 1 3.5 5.5" />
     </Base>
   )
 }
@@ -418,7 +418,7 @@ export function SettingsIcon(props: IconProps) {
 export function MenuIcon(props: IconProps) {
   return (
     <Base {...props}>
-      <path d="M4 6h16M4 12h16M4 18h16" />
+      <path d="部署 6h16M4 12h16M4 18h16" />
     </Base>
   )
 }
@@ -435,7 +435,7 @@ export function GlobeIcon(props: IconProps) {
   return (
     <Base {...props}>
       <circle cx="12" cy="12" r="9" />
-      <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
+      <path d="告警 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
     </Base>
   )
 }
@@ -452,7 +452,7 @@ export function PaletteIcon(props: IconProps) {
 export function TypeIcon(props: IconProps) {
   return (
     <Base {...props}>
-      <path d="M4 6V4h16v2M9 20h6M12 4v16" />
+      <path d="部署 6V4h16v2M9 20h6M12 4v16" />
     </Base>
   )
 }

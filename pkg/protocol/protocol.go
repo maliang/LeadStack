@@ -29,7 +29,7 @@ const (
 	TypeTermClose  = "term.close"
 )
 
-// 指标名（点分层级）。M0 只要求前 5 个。
+// 指标名（点分层级）。基础 只要求前 5 个。
 const (
 	MetricCPUPct     = "cpu.pct"
 	MetricMemUsedPct = "mem.used_pct"
@@ -126,7 +126,7 @@ type HostInfo struct {
 // JobExec 是控制端下发的任务。
 type JobExec struct {
 	RunID    string `json:"run_id"`
-	Kind     string `json:"kind"` // M0 固定 "command"
+	Kind     string `json:"kind"` // 基础 固定 "command"
 	Command  string `json:"command"`
 	TimeoutS int    `json:"timeout_s"`
 }

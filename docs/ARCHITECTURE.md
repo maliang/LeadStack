@@ -1,4 +1,4 @@
-# LeadStack 架构与接口契约 v1（M0 冻结）
+# LeadStack 架构与接口契约 v1（已冻结）
 
 > 本文件是并行开发的唯一事实来源。**任何改动必须先改本文件再改代码。**
 > 模块路径：`github.com/maliang/leadstack`
@@ -84,7 +84,7 @@ LeadStack-领栈/
 
 ## 4. Agent WebSocket 协议（`/agent/ws`）
 
-握手：`Authorization: Bearer <enroll-token>`（HTTP Header，M0 用；M1 升级为 mTLS 客户端证书）。
+握手：`Authorization: Bearer <enroll-token>`（HTTP Header，基础 用；纳管 升级为 mTLS 客户端证书）。
 连接建立后服务端回 `hello_ack`，此后双向收发。所有帧为 **JSON 文本**，信封固定：
 
 ```json
@@ -103,7 +103,7 @@ LeadStack-领栈/
 | `job.done` | `{run_id, exit_code, error?}` |
 | `term.data` | `{session_id, b64}` |
 
-指标命名（点分层级，固定集合，M0 只做前 5 个）：`cpu.pct`、`mem.used_pct`、`mem.used_bytes`、`load.1`、`disk.used_pct`、`net.rx_bytes`、`net.tx_bytes`、`proc.count`。
+指标命名（点分层级，固定集合，基础 只做前 5 个）：`cpu.pct`、`mem.used_pct`、`mem.used_bytes`、`load.1`、`disk.used_pct`、`net.rx_bytes`、`net.tx_bytes`、`proc.count`。
 
 ### 4.2 控制端 → agent
 
@@ -123,7 +123,7 @@ LeadStack-领栈/
 
 ---
 
-## 5. 数据库 schema v1（M0 迁移 `0001_init.sql`）
+## 5. 数据库 schema v1（初始迁移 `0001_init.sql`）
 
 ```sql
 schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
@@ -145,7 +145,7 @@ ID 用 UUID v4 字符串；时间戳统一 **Unix 毫秒整数**；迁移用内�
 
 ---
 
-## 6. M0 验收标准（必须全部可演示）
+## 6. 基础能力验收标准（必须全部可演示）
 
 1. `make build` 在无网络环境下产出 `bin/leadstack` 与 `bin/leadstack-agent` 两个二进制。
 2. `./bin/leadstack` 启动后打印初始管理员密码，浏览器打开 `http://127.0.0.1:8080` 出现登录页，登录成功进入控制台。
@@ -164,9 +164,9 @@ ID 用 UUID v4 字符串；时间戳统一 **Unix 毫秒整数**；迁移用内�
 
 ---
 
-# M1 契约（服务器纳管）
+# 服务器纳管契约
 
-> M1 在 M0 基础上补齐：**SSH 凭证管理 · 连通性测试 · 主机信息 · Agentless 采集 · 分组标签与批量操作 · 指标历史与降采样**。
+> 纳管 在 基础 基础上补齐：**SSH 凭证管理 · 连通性测试 · 主机信息 · Agentless 采集 · 分组标签与批量操作 · 指标历史与降采样**。
 > 本节所有签名与字段均已冻结，实现方不得自行改名；确有必要请先报告 lead。
 
 ## 8. Go 包 API 契约（`sshmgr` 交付，`backend` 消费）
@@ -289,7 +289,7 @@ func (s *Server) Addr() string
 func (s *Server) Close() error
 ```
 
-`cmd/leadstack-devssh` 以固定端口与固定账号启动它，启动横幅必须显式打印 `DEV-ONLY` 警告，供 `scripts/verify_m1.sh` 驱动真实 HTTP API。
+`cmd/leadstack-devssh` 以固定端口与固定账号启动它，启动横幅必须显式打印 `DEV-ONLY` 警告，供 `scripts/verify_servers.sh` 驱动真实 HTTP API。
 
 ## 9. 协议扩展（`pkg/protocol`）
 
@@ -326,7 +326,7 @@ type HostInfo struct { // 字段与 hostinfo.Info 一一对应，json tag 相同
 | POST | `/servers/{id}/refresh-host-info` | 通过 SSH 采集并落库 → `host_info` |
 | POST | `/servers/batch` | `{ids,action,params?}`，action ∈ `test-connection`/`refresh-host-info`/`add-tags`/`set-group`/`delete` → `{results:[{id,ok,error?}],summary:{ok,failed}}` |
 | GET | `/servers/{id}/metrics` | `?from=<ms>&to=<ms>&step=raw\|1m\|1h` → `{series:[{metric,points:[{ts,value}]}],step}` |
-| GET | `/groups` | 由 servers 聚合出的分组名与数量（M1 不建独立表） |
+| GET | `/groups` | 由 servers 聚合出的分组名与数量（纳管 不建独立表） |
 
 **`POST /servers` 扩展字段**：`credential_id`、`mode`（`agent`/`ssh`）、`group`、`tags`、`host_key_policy`。
 **`GET /servers` 扩展**：支持 `?group=&tag=&status=&mode=` 过滤；每项新增 `mode`、`group`、`credential_id`、`last_error`、`host_info`（无则 `null`）。
@@ -360,7 +360,7 @@ CREATE TABLE metrics_rollup(
 
 保留策略：原始指标 7 天；`1m` 汇总 30 天；`1h` 汇总 1 年。降采样任务随清扫循环运行，每次最多处理 5000 行。
 
-## 12. M1 验收标准（`scripts/verify_m1.sh` 一键复现）
+## 12. 服务器纳管验收标准（`scripts/verify_servers.sh` 一键复现）
 
 1. `make build` 成功；`go vet ./...` 与 `go test ./...` 全绿。
 2. 创建 SSH 私钥凭证 → 列表接口响应中**不出现**任何密钥明文（以原始私钥片段做反向断言）。
@@ -371,14 +371,14 @@ CREATE TABLE metrics_rollup(
 7. 批量 `add-tags` + `test-connection` 对 2 台机器返回逐台结果与汇总。
 8. `?group=` 过滤生效；agent 模式服务器上报 `host_info` 后详情可见主机信息。
 9. 未带 token 访问 `/credentials` 返回 401；被引用的凭证删除返回 409。
-10. `scripts/verify_m0.sh` 仍全绿（**M1 不得回归 M0**）。
+10. `scripts/verify_bootstrap.sh` 仍全绿（**纳管 不得回归 基础**）。
 
 ---
 
-# M2 契约（监控与检测）
+# 监控与检测契约
 
-> M2 补齐「**主动检测**」：检测项（端口/HTTP/Ping/进程/脚本）· 调度与结果时间线 · 检测视图 · 大范围指标查询降级。
-> 并按计划为 M3 告警准备数据（连续失败计数与状态起止时间）。
+> 检测 补齐「**主动检测**」：检测项（端口/HTTP/Ping/进程/脚本）· 调度与结果时间线 · 检测视图 · 大范围指标查询降级。
+> 并按计划为 告警 告警准备数据（连续失败计数与状态起止时间）。
 
 ## 13. 检测模型与执行位置
 
@@ -392,7 +392,7 @@ CREATE TABLE metrics_rollup(
 
 **Executor 决定目标机执行通道**：agent 模式 → 控制端下发 job（`internal/jobs`）；ssh 模式 → SSH `Run`。两种模式对检测层完全透明。
 
-**M2 已知限制（记录在案）**：`process`/`script` 的命令由**控制端**生成，`process` 分支按控制端 `GOOS` 选择实现（POSIX `ps+awk` / Windows `tasklist`）。因此**跨 OS 纳管**（例如 Linux 控制端纳管 Windows 目标）时 process 检测会走错分支。`Executor` 接口当前不带目标机 OS；M3/M4 若要支持跨 OS 检测，需要在此接口上扩展 OS 字段（属于破坏性变更，届时同步更新本节）。
+**检测 已知限制（记录在案）**：`process`/`script` 的命令由**控制端**生成，`process` 分支按控制端 `GOOS` 选择实现（POSIX `ps+awk` / Windows `tasklist`）。因此**跨 OS 纳管**（例如 Linux 控制端纳管 Windows 目标）时 process 检测会走错分支。`Executor` 接口当前不带目标机 OS；告警/部署 若要支持跨 OS 检测，需要在此接口上扩展 OS 字段（属于破坏性变更，届时同步更新本节）。
 
 ## 14. Go 包 API 契约（`checkdev` 交付，`backend`/`agentdev` 消费）
 
@@ -447,7 +447,7 @@ type Deps struct {
     Store            Store
     Exec             Executor
     Concurrency      int           // 默认 8
-    OnStateChange    func(checkID, serverID string, ok bool, since int64) // 可选，M3 告警挂这里
+    OnStateChange    func(checkID, serverID string, ok bool, since int64) // 可选，告警 告警挂这里
 }
 
 type Scheduler struct{ /* ... */ }
@@ -459,7 +459,7 @@ func (s *Scheduler) RunOnce(ctx context.Context, checkID, serverID string) Resul
 
 ### 14.2 `internal/jobs` —— 控制端任务下发（`agentdev` 负责）
 
-M0 只做了 agent 侧的 job.exec 接收，**控制端还没有下发能力**，M2 补上。
+基础 只做了 agent 侧的 job.exec 接收，**控制端还没有下发能力**，检测 补上。
 
 ```go
 // Sender 由 backend 的 WS Hub 实现：把一条 job.exec 发给指定服务器。
@@ -503,9 +503,9 @@ func (d *Dispatcher) FailServer(serverID string, cause error) // 连接断开时
 
 **创建 body**：`{name,kind,target,interval_s,timeout_s,params?,server_ids?}`。
 **状态口径**：`down` = 最近一次失败且连续失败次数 ≥ `params.fail_threshold`（默认 3）；否则 `up`；无结果为 `unknown`。
-**指标查询降级（M2 附带）**：`GET /servers/{id}/metrics` 当 `step=raw` 且时间跨度 > 6 小时时**自动降级**为 `1m` 并在响应 `step` 字段返回实际值（不再返回超大原始序列）。
+**指标查询降级（检测 附带）**：`GET /servers/{id}/metrics` 当 `step=raw` 且时间跨度 > 6 小时时**自动降级**为 `1m` 并在响应 `step` 字段返回实际值（不再返回超大原始序列）。
 
-### 15.1 响应字段（M2 冻结，前端按此实现）
+### 15.1 响应字段（检测 冻结，前端按此实现）
 
 `GET /checks` 每项：
 ```json
@@ -549,9 +549,9 @@ CREATE TABLE check_state(
 
 保留：`check_results` 保留 30 天（随清扫循环清理）。
 
-## 17. M2 验收标准（`scripts/verify_m2.sh` 一键复现）
+## 17. 监控检测验收标准（`scripts/verify_checks.sh` 一键复现）
 
-1. `make build` 成功；`go vet ./...` 与 `go test ./...` 全绿；M0/M1 两个脚本仍全绿。
+1. `make build` 成功；`go vet ./...` 与 `go test ./...` 全绿；基础/纳管 两个脚本仍全绿。
 2. 创建 `tcp` 检测项指向 devssh 端口、`http` 检测项指向控制端自身 `/healthz`，各应用 1 台服务器 → `POST /checks/{id}/run` 返回 `ok=true` 且 `latency_ms` 有值。
 3. 创建指向不可达端口的 `tcp` 检测项 → 立即执行 `ok=false` 且有 message；间隔 10s 连续执行后状态变 `down`。
 4. `http` 检测项对 `/healthz` 校验 `expect_status=200` 通过；指向不存在路径且 `expect_status=200` → `ok=false`。
@@ -560,14 +560,14 @@ CREATE TABLE check_state(
 7. `GET /checks/{id}/results` 返回时间线；`GET /servers/{id}/checks` 返回该机器检测项与状态。
 8. 指标大范围查询：`step=raw` 且跨度 > 6h 时响应 `step` 变为 `1m`。
 9. 未带 token 访问 `/checks` 返回 401。
-10. `scripts/verify_m0.sh` 与 `scripts/verify_m1.sh` 仍全绿（**M2 不得回归**）。
+10. `scripts/verify_bootstrap.sh` 与 `scripts/verify_servers.sh` 仍全绿（**检测 不得回归**）。
 
 ---
 
-# M3 契约（告警）
+# 告警契约
 
-> M3 补齐「**异常推送到人**」：规则引擎 · 持续时长与去重 · 静默与确认 · 7 类通知渠道 · 告警历史。
-> 触发源有三类：检测项状态翻转、服务器上下线、指标阈值。M2 的 `check_state` 与 `Deps.OnStateChange` 就是天然挂载点。
+> 告警 补齐「**异常推送到人**」：规则引擎 · 持续时长与去重 · 静默与确认 · 7 类通知渠道 · 告警历史。
+> 触发源有三类：检测项状态翻转、服务器上下线、指标阈值。检测 的 `check_state` 与 `Deps.OnStateChange` 就是天然挂载点。
 
 ## 18. 告警模型
 
@@ -580,7 +580,7 @@ CREATE TABLE check_state(
 | `acked` | 人工确认，只改变展示与后续通知策略，**不代表恢复** |
 | 恢复 | 异常解除 → 状态置 `resolved` + 发送一次恢复通知（与故障通知走同一渠道） |
 
-### 18.1 语义细则（M3 实现后冻结，均为 Lead 裁决）
+### 18.1 语义细则（告警 实现后冻结，均为 Lead 裁决）
 
 - **静默只抑制 firing 通知，恢复通知必须穿透静默**。理由：静默的语义是"别再告诉我新故障"，不是"别告诉我已经好了"；恢复是降噪信息而非噪声。
 - **多规则命中同一 `dedup_key` 时，严重级别最高者为主规则**（`critical` > `warning` > `info`，同级按 `Rule.ID` 升序）。渠道与去重窗口都跟主规则走。理由：若按 ID 排序，用户同时配了 warning 与 critical 时 critical 可能永远发不出去。
@@ -736,7 +736,7 @@ func (c *Client) Send(ctx context.Context, ch Channel, msg Message) error
 | `telegram` | `bot_token`、`chat_id` | `parse_mode`、`api_base`（**测试/代理用**，默认 `https://api.telegram.org`） |
 | `email` | `smtp_host`、`from`、`to`(数组) | `smtp_port`(默认 587)、`username`、`password`、`tls`(`starttls`/`ssl`/`none`，默认 starttls) |
 
-**M6 补充（冻结）**
+**协作 补充（冻结）**
 - `Client.Probe(ctx, ch) (ProbeResult, error)`：与 `Send` 使用**完全相同**的请求构造，服务商任意应答（含 4xx/5xx/业务码）都算「可达」；只有 DNS/连接/TLS/超时/取消返回分类错误。用于「测试连通性」。
 - `ErrorKind`：`config|dns|connect|tls|timeout|canceled|auth|http|server|provider|internal`，带 `Label()`（中文，可直接写入 `alert_channels.last_error`）、`Category()`（`config|network|provider`）、`Retryable()`。`Send` 返回 `*SendError`，用 `AsSendError`/`KindOf` 取值。
 - **重试**：仅 `timeout` 与 `server`(5xx) 重试，默认 2 次指数退避（总 <10s）；4xx/鉴权/业务错误不重试；ctx 取消立即停止。
@@ -761,7 +761,7 @@ func (c *Client) Send(ctx context.Context, ch Channel, msg Message) error
 | GET | `/alerts/summary` | `{firing,acked,resolved_24h,by_severity:{critical,warning,info}}` |
 
 **规则 body**：`{name,enabled,source,check_ids?,server_ids?,groups?,tags?,metric?,comparator?,threshold?,for_duration_s,severity,dedup_window_s,channel_ids}`。
-**渠道 body**：`{name,kind,enabled,config:{...}}`；`config` 落库前用 `credential.Cipher` 加密（复用 M1 主密钥）。
+**渠道 body**：`{name,kind,enabled,config:{...}}`；`config` 落库前用 `credential.Cipher` 加密（复用 纳管 主密钥）。
 
 ## 21. 数据库迁移 `0005_alerts.sql`
 
@@ -792,9 +792,9 @@ CREATE TABLE alert_events(
   kind TEXT NOT NULL, ts INTEGER NOT NULL, detail TEXT);
 ```
 
-## 22. M3 验收标准（`scripts/verify_m3.sh` 一键复现）
+## 22. 告警验收标准（`scripts/verify_alerts.sh` 一键复现）
 
-1. `make build` 成功；`go vet ./...` 与 `go test ./...` 全绿；M0/M1/M2 脚本仍全绿。
+1. `make build` 成功；`go vet ./...` 与 `go test ./...` 全绿；基础/纳管/检测 脚本仍全绿。
 2. 创建 `webhook` 渠道指向**本机 HTTP 接收器**，`POST /alert-channels/{id}/test` → `ok=true` 且接收器**真实收到**一次 POST。
 3. 渠道列表接口**不返回**配置中的密钥明文（以原始 token/secret 片段反向断言）。
 4. 创建 `source=check` 规则（`for_duration_s=0`、severity=critical、绑定上述渠道与目标检测项）→ 制造失败检测项 → 60 秒内 `/alerts` 出现 `firing`，且接收器收到告警通知（标题含规则名/服务器名）。
@@ -804,15 +804,15 @@ CREATE TABLE alert_events(
 8. **指标规则**：`source=metric`（如 `cpu.pct > 0`）在周期评估后产生 `firing` 告警。
 9. **静默**：`POST /alert-rules/{id}/silence` 后新触发仍建告警但**接收器不再收到新通知**。
 10. `GET /alerts/summary` 返回 `firing`/`by_severity` 计数；未带 token 访问 `/alert-rules` 返回 401。
-11. `scripts/verify_m0.sh`、`verify_m1.sh`、`verify_m2.sh` 仍全绿（**M3 不得回归**）。
+11. `scripts/verify_bootstrap.sh`、`verify_servers.sh`、`verify_checks.sh` 仍全绿（**告警 不得回归**）。
 
 ---
 
-# M4 契约（批量部署）
+# 批量部署契约
 
-> M4 是产品的差异化重头：**把一次发布安全地推到 N 台机器，并能在失败时干净回退**。
-> 底座已就绪：M2 的 `internal/jobs` 下发链路、agent 侧 `job.exec` 与日志分块、M1 的 SSH 执行通道。
-> M4 **不改动**这两条通道，只在其上做编排。
+> 部署 是产品的差异化重头：**把一次发布安全地推到 N 台机器，并能在失败时干净回退**。
+> 底座已就绪：检测 的 `internal/jobs` 下发链路、agent 侧 `job.exec` 与日志分块、纳管 的 SSH 执行通道。
+> 部署 **不改动**这两条通道，只在其上做编排。
 
 ## 23. 核心概念
 
@@ -995,7 +995,7 @@ type RunOutcome struct {
 **创建发布 body**：`{app_id,template_id,version,artifact_id,server_ids,concurrency?}`。
 **创建响应**：`{release:{...}, runs:[{server_id,status}]}` —— 立即返回，执行在后台异步进行（前端轮询进度）。
 
-**补充约定（M4 实现后冻结）**
+**补充约定（部署 实现后冻结）**
 - **上传型制品需要目标机能访问控制端**：`upload` 制品发布时，控制端把 `<LEADSTACK_PUBLIC_URL>/api/v1/artifacts/{id}/download` 作为下载地址交给目标机。生产部署必须配置 `LEADSTACK_PUBLIC_URL`（如 `http://10.0.0.5:8080`）；不配时创建发布直接 400 并说明原因，而不是让目标机静默失败。
 - `GET /releases`（列表）**不返回 runs**，只返回 release 主体；需要进度时用 `GET /releases/{id}` 或 `/releases/{id}/runs`。
 - `retry` 会重置失败 run 的日志（seq 从 1 重新开始），成功 run 不受影响。
@@ -1030,9 +1030,9 @@ CREATE TABLE release_logs(
   PRIMARY KEY(release_run_id, seq)) WITHOUT ROWID;
 ```
 
-## 29. M4 验收标准（`scripts/verify_m4.sh` 一键复现）
+## 29. 部署验收标准（`scripts/verify_deploy.sh` 一键复现）
 
-1. `make build` 成功；`gofmt` 干净；`go vet ./...` 与 `go test ./...` 全绿；M0–M3 脚本仍全绿。
+1. `make build` 成功；`gofmt` 干净；`go vet ./...` 与 `go test ./...` 全绿；既有能力 脚本仍全绿。
 2. 创建应用 + `binary` 模板 + `url` 制品（指向本机 HTTP 文件服务）→ 创建发布到 1 台 SSH 服务器 → 轮询至 `success`。
 3. **真实产物落盘**：目标机（devssh 执行）上 `<root>/current` 符号链接指向的目录里存在下载的文件，且**校验和与制品一致**。
 4. **发布日志可增量拉取**：`GET /releases/{id}/runs/{serverID}/logs?after_seq=0` 返回有序日志，再以 `after_seq=<最后一条>` 拉取不重复。
@@ -1042,7 +1042,7 @@ CREATE TABLE release_logs(
 8. **模板安全**：`Render` 对未知占位符报错；含 `; rm -rf /` 的 version 被拒绝（400）；渲染预览端点不执行任何命令。
 9. **重试**：`POST /releases/{id}/retry` 只重跑 failed 的服务器，成功的 run 不重复执行。
 10. 未带 token 访问 `/apps` 返回 401；删除有 release 的应用返回 409。
-11. `scripts/verify_m0.sh` ~ `verify_m3.sh` 仍全绿（**M4 不得回归**）。
+11. `scripts/verify_bootstrap.sh` ~ `verify_alerts.sh` 仍全绿（**部署 不得回归**）。
 
 ---
 
@@ -1176,7 +1176,7 @@ type RestoreResult struct {
 | POST | `/backups/restore` | multipart 上传归档（字段名 `file`）→ 校验 → 暂存到 `<data_dir>/.restore-pending/` → `202 {restart_required:true, staged:{source,created_at,verified_at,archive_sha256,schema_version}}`；**下次启动时应用**。校验失败 400 且不留半成品 |
 | GET/PATCH | `/backup-settings` | `{enabled, interval, retention, include_artifacts}`；`interval` 为 Go duration 字符串 |
 
-**已知限制（M4.5 记录）**：「版本过新」在真实环境需由**更新版本的程序**生成的归档才能触发；验收脚本不构造该场景，改由单测覆盖 `ErrSchemaTooNew` 与 `code=schema_too_new`。
+**已知限制（备份 记录）**：「版本过新」在真实环境需由**更新版本的程序**生成的归档才能触发；验收脚本不构造该场景，改由单测覆盖 `ErrSchemaTooNew` 与 `code=schema_too_new`。
 
 **启动时应用暂存恢复**：`cmd/leadstack` 在打开数据库**之前**检查 `.restore-pending/meta.json`，存在则执行离线恢复（旧数据保留为 `<data_dir>.pre-restore-<ts>/`）再继续启动，并打印醒目日志。
 **定时备份**：`enabled=true` 时按 `interval`（默认 `24h`）执行，保留 `retention`（默认 7）份，超出按创建时间删最旧。
@@ -1191,7 +1191,7 @@ leadstack restore --file /tmp/x.lsbak --data-dir ./data [--passphrase-file p]   
 
 ## 35. 验收标准（`scripts/verify_backup.sh` 一键复现）
 
-1. `make build` 成功；`gofmt` 干净；`go vet ./...` 与 `go test ./...` 全绿；M0–M4 脚本仍全绿。
+1. `make build` 成功；`gofmt` 干净；`go vet ./...` 与 `go test ./...` 全绿；既有能力 脚本仍全绿。
 2. 造数据（服务器/凭证/应用/模板/制品/检测项/告警规则）→ `POST /backups` 成功，`size_bytes>0`，文件以 `LSBAK1` 开头。
 3. **归档必须加密**：原始归档字节中搜不到 `SQLite format 3`、`BEGIN OPENSSH PRIVATE KEY`、明文密码、`master.key` 内容；`backup.pass` 存在于数据目录但**不在**归档内。
 4. `GET /backups` 列表可见；下载内容与磁盘文件一致；`POST /verify` 返回 `ok=true` 且 manifest 含 db/master.key 条目。
@@ -1202,11 +1202,11 @@ leadstack restore --file /tmp/x.lsbak --data-dir ./data [--passphrase-file p]   
 9. **定时备份 + 保留策略**：`interval` 压到几秒、`retention=2`，等若干轮后备份数量不超过 2 且最新的更新。
 10. **主密钥有效性**：恢复后原凭证仍可解密（用恢复后的实例 `POST /servers/{id}/test-connection` 或读取凭证指纹一致来证明）。
 11. 未带 token 访问 `/backups` 返回 401；备份文件名含路径穿越（`../`）时删除/下载被拒（400）。
-12. `scripts/verify_m0.sh` ~ `verify_m4.sh` 仍全绿（**不得回归**）。
+12. `scripts/verify_bootstrap.sh` ~ `verify_deploy.sh` 仍全绿（**不得回归**）。
 
 ---
 
-# M5/M6 契约（运维增强 · 团队协作 · 体验）
+# 运维与协作 契约（运维增强 · 团队协作 · 体验）
 
 > 本批补齐全部剩余功能。**新功能不得破坏既有 166 项验收**：所有列表接口在**不传 `limit` 时仍返回 `{data:[...]}` 数组**（分页参数只在显式传入时生效）。
 
@@ -1344,7 +1344,7 @@ POST /servers/import
 -> {data:{total, created:[{host,server_id}], failed:[{host,error}]}}
 ```
 - 解析：每行 `host[:port]`，`#` 开头与空行忽略；去重（同 host:port 已存在则跳过并计失败原因）；单次上限 500 行。
-- 复用 M1 的服务器创建逻辑；返回逐条结果。
+- 复用 纳管 的服务器创建逻辑；返回逐条结果。
 
 ## 46. 中英双语 · 主题 · 字号 · 布局（前端规范）
 

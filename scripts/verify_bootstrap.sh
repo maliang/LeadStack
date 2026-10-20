@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# LeadStack M0 端到端验收脚本（Lead 所有，独立于各工作流）
+# LeadStack 基础 端到端验收脚本（Lead 所有，独立于各工作流）
 #
 # 覆盖 docs/ARCHITECTURE.md 第 6 节验收标准 1-6。
-# 用法：bash scripts/verify_m0.sh
+# 用法：bash scripts/verify_bootstrap.sh
 # 前置：已执行 make build（产出 bin/leadstack 与 bin/leadstack-agent）
 set -uo pipefail
 

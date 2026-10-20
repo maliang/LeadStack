@@ -1,4 +1,4 @@
-// Package notify 实现 LeadStack M3 的通知渠道。
+// Package notify 实现 LeadStack 告警 的通知渠道。
 //
 // 契约见 docs/ARCHITECTURE.md 第 19.2 节：
 //   - Kind / Channel / Severity / Message / Client 与各 Kind 的 Config 字段已冻结；

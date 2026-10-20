@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# LeadStack M3 端到端验收（Lead 所有）
+# LeadStack 告警 端到端验收（Lead 所有）
 #
-# 覆盖 docs/ARCHITECTURE.md 第 22 节 M3 验收标准。
-# 用法：make build && make devssh && bash scripts/verify_m3.sh
+# 覆盖 docs/ARCHITECTURE.md 第 22 节 告警验收标准。
+# 用法：make build && make devssh && bash scripts/verify_alerts.sh
 #
 # 写法约束：不要用 `jq '... // empty'` 取布尔字段（会吞掉 false）；
 # 不要把带 \" 的 JSON 嵌进两层 "$( )"（bash 3.2 会拆参）。

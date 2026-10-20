@@ -19,7 +19,7 @@ internal/webui/dist
 .e2e-logs
 
 # ---------------------------------------------------------------------------
-# M4：制品与部署根目录绝不进镜像
+# 部署：制品与部署根目录绝不进镜像
 #   - 上传型制品由控制端存到数据目录内（<LEADSTACK_DATA_DIR>/artifacts，即 /data 卷），
 #     随 data 一起被上面排除；这里再显式列出常见的独立目录名，防止有人把
 #     LEADSTACK_ARTIFACT_DIR / LEADSTACK_DEPLOY_ROOT 指到仓库里。

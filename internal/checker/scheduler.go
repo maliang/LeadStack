@@ -66,7 +66,7 @@ func (st *targetState) setSpec(spec Spec, mode string) {
 //
 // 状态口径（docs/ARCHITECTURE.md 第 15 节）：
 // down = 最近一次失败且连续失败次数 ≥ fail_threshold，否则 up。
-// 首次有结果时只建立基线（unknown → up/down 不算翻转），避免误触发 M3 告警。
+// 首次有结果时只建立基线（unknown → up/down 不算翻转），避免误触发 告警 告警。
 func (st *targetState) apply(r Result, failThreshold int) (stateOK bool, flipped bool, since int64) {
 	if r.OK {
 		st.fails = 0

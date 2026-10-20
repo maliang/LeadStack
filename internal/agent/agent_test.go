@@ -626,7 +626,7 @@ func TestCollectorShortCache(t *testing.T) {
 	}
 }
 
-// TestCollectorExtraMetrics 验证 M1 新增的网络累计字节与进程数指标。
+// TestCollectorExtraMetrics 验证 纳管 新增的网络累计字节与进程数指标。
 func TestCollectorExtraMetrics(t *testing.T) {
 	c := NewCollector(testLogger())
 	snap := c.Snapshot()

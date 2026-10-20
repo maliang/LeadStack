@@ -139,13 +139,13 @@ func run() error {
 		return err
 	}
 
-	// M1：主密钥（LEADSTACK_MASTER_KEY 或 <data-dir>/master.key）→ 凭证加解密器。
+	// 纳管：主密钥（LEADSTACK_MASTER_KEY 或 <data-dir>/master.key）→ 凭证加解密器。
 	cipher, err := buildCipher(cfg, logger)
 	if err != nil {
 		return err
 	}
 
-	// M1：agentless 采集器，同时提供 SSH 连通性测试与主机信息采集能力。
+	// 纳管：agentless 采集器，同时提供 SSH 连通性测试与主机信息采集能力。
 	sshClient, err := collector.New(collector.Options{
 		Store:          st,
 		Cipher:         cipher,
@@ -158,13 +158,13 @@ func run() error {
 		return err
 	}
 
-	// M2：任务下发（agent 通道）。Hub 实现 jobs.Sender，Dispatcher 实现 checker.Executor。
+	// 检测：任务下发（agent 通道）。Hub 实现 jobs.Sender，Dispatcher 实现 checker.Executor。
 	// 先建 Hub，再建依赖它的 Dispatcher，最后把同一个 Hub 注入 API。
 	hub := api.NewHub()
 	hubSender := api.NewHubSender(hub)
 	dispatcher := jobs.NewDispatcher(hubSender, jobs.Options{Logger: logger})
 
-	// M2：检测执行通道——agent 走 job 下发，ssh 走 SSH 执行通道（带连接复用）。
+	// 检测：检测执行通道——agent 走 job 下发，ssh 走 SSH 执行通道（带连接复用）。
 	sshExec := api.NewSSHExecutor(api.SSHExecutorOptions{
 		Store:          st,
 		Cipher:         cipher,
@@ -177,12 +177,12 @@ func run() error {
 	}
 	routingExec := api.NewRoutingExecutor(st, dispatcher, sshExec, logger)
 
-	// M5：运维命令通道（日志/进程/端口/定时任务/agent 文件）复用同一个按 mode 路由的执行器。
+	// 运维：运维命令通道（日志/进程/端口/定时任务/agent 文件）复用同一个按 mode 路由的执行器。
 	var sftpFactory api.SFTPFactory
 	if sshExec != nil {
 		sftpFactory = sshExec
 	}
-	// M5：ssh 模式的终端会话（agent 模式由 api 内部经 WS 转发实现）。
+	// 运维：ssh 模式的终端会话（agent 模式由 api 内部经 WS 转发实现）。
 	termOpener, termErr := term.NewSSHOpener(term.SSHOpenerOptions{
 		Resolve: func(ctx context.Context, serverID string) (sshx.PTYOptions, error) {
 			return api.ResolveSSHPTYOptions(ctx, st, cipher, filepath.Join(cfg.DataDir, "known_hosts"), serverID)
@@ -193,7 +193,7 @@ func run() error {
 		termOpener = nil
 	}
 
-	// M3：通知客户端 → 渠道发送器 → 告警引擎 → 事件桥。
+	// 告警：通知客户端 → 渠道发送器 → 告警引擎 → 事件桥。
 	notifyClient := notify.NewClient(notify.Options{})
 	notifier := api.NewNotifyAdapter(notifyClient)
 	alertStore := api.NewAlertStore(st, logger)
@@ -210,8 +210,8 @@ func run() error {
 	})
 	alertBridge := api.NewAlertEventBridge(st, alertEngine, logger)
 
-	// M2：检测调度器（Store 适配器把服务器的 mode 一并带出）；
-	// OnStateChange 是 M3 的关键接线：检测翻转 → 告警事件。
+	// 检测：检测调度器（Store 适配器把服务器的 mode 一并带出）；
+	// OnStateChange 是 告警 的关键接线：检测翻转 → 告警事件。
 	checkStore := api.NewCheckerStore(st, logger)
 	scheduler := checker.NewScheduler(checker.Deps{
 		Store:         checkStore,
@@ -220,7 +220,7 @@ func run() error {
 		OnStateChange: alertBridge.OnCheckStateChange,
 	})
 
-	// M4：部署执行通道（ssh 直连 + agent 任务下发）与异步编排器。
+	// 部署：部署执行通道（ssh 直连 + agent 任务下发）与异步编排器。
 	deployRunner := api.NewDeployRunner(api.DeployRunnerOptions{
 		Store:          st,
 		Cipher:         cipher,
@@ -243,7 +243,7 @@ func run() error {
 		defer deployOrch.Close()
 	}
 
-	// M4.5：备份服务（口令解析与归档格式由 internal/backup 负责）。
+	// 备份：备份服务（口令解析与归档格式由 internal/backup 负责）。
 	backupService, err := api.NewBackupService(cfg, logger)
 	if err != nil {
 		return err

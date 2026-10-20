@@ -42,7 +42,7 @@ type serverPayload struct {
 	Tags           []string           `json:"tags"`
 	CreatedAt      int64              `json:"created_at"`
 	MetricsSummary map[string]float64 `json:"metrics_summary,omitempty"`
-	// M1 扩展字段。
+	// 纳管 扩展字段。
 	CredentialID  *string         `json:"credential_id"`
 	Group         *string         `json:"group"`
 	HostKeyPolicy string          `json:"host_key_policy"`
@@ -50,7 +50,7 @@ type serverPayload struct {
 	HostInfo      json.RawMessage `json:"host_info"`
 }
 
-// createServerRequest 是新增服务器请求体（M1 扩展 credential_id/mode/group/tags/host_key_policy）。
+// createServerRequest 是新增服务器请求体（纳管 扩展 credential_id/mode/group/tags/host_key_policy）。
 type createServerRequest struct {
 	Name          string    `json:"name"`
 	Host          string    `json:"host"`

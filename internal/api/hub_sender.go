@@ -15,7 +15,7 @@ import (
 
 // JobRouter 接收 agent 侧 job.* 帧，转发给任务下发器（jobs.Dispatcher 实现）。
 //
-// 只声明 M2 需要的四个方法，避免 api 依赖 jobs 的其余实现细节。
+// 只声明 检测 需要的四个方法，避免 api 依赖 jobs 的其余实现细节。
 type JobRouter interface {
 	HandleAck(serverID, runID string)
 	HandleLog(serverID, runID string, seq int, stream, chunk string)
@@ -112,7 +112,7 @@ func (c *agentConn) writeRaw(payload []byte) error {
 // 返回 handled=false 表示该类型不由本函数处理（例如未装配下发器），调用方按「忽略未知类型」处理。
 func (a *API) dispatchJobFrame(serverID string, env protocol.Envelope) (jobFrameResult, error) {
 	if a.jobs == nil {
-		// 未装配任务下发器时保持 M0 行为：忽略但不报错、不断开连接。
+		// 未装配任务下发器时保持 基础 行为：忽略但不报错、不断开连接。
 		return jobFrameResult{Handled: false}, nil
 	}
 	if serverID == "" {

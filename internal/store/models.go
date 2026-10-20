@@ -27,7 +27,7 @@ type Server struct {
 	Arch         *string `json:"arch"`
 	Kernel       *string `json:"kernel"`
 	CreatedAt    int64   `json:"created_at"`
-	// M1 扩展列（契约第 11 节）。
+	// 纳管 扩展列（契约第 11 节）。
 	CredentialID  *string `json:"credential_id"`
 	Group         *string `json:"group"`
 	HostKeyPolicy string  `json:"host_key_policy"`
@@ -124,7 +124,7 @@ const (
 	EventKindOffline = "offline"
 )
 
-// ------------------------------------------------ M2：检测 ------------------------------------------------
+// ------------------------------------------------ 检测：检测 ------------------------------------------------
 
 // Check 是一个检测项定义（契约第 16 节 checks 表）。
 type Check struct {
@@ -151,7 +151,7 @@ type CheckResult struct {
 	Message    *string `json:"message,omitempty"`
 }
 
-// CheckState 是一个 (检测项, 服务器) 的当前状态（连续失败计数供 M3 告警使用）。
+// CheckState 是一个 (检测项, 服务器) 的当前状态（连续失败计数供 告警 告警使用）。
 type CheckState struct {
 	CheckID         string  `json:"check_id"`
 	ServerID        string  `json:"server_id"`
@@ -186,7 +186,7 @@ const (
 // DefaultFailThreshold 是连续失败多少次判 down（可由 params.fail_threshold 覆盖）。
 const DefaultFailThreshold = 3
 
-// ------------------------------------------------ M3：告警 ------------------------------------------------
+// ------------------------------------------------ 告警：告警 ------------------------------------------------
 
 // AlertRule 是一条告警规则（契约第 21 节 alert_rules 表）。
 //
@@ -275,7 +275,7 @@ const (
 	AlertEventSilenced = "silenced"
 )
 
-// ------------------------------------------------ M4：批量部署 ------------------------------------------------
+// ------------------------------------------------ 部署：批量部署 ------------------------------------------------
 
 // App 是一个被部署的业务应用。
 type App struct {

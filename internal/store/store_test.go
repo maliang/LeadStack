@@ -205,7 +205,7 @@ func TestUsersAndHeartbeat(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------ M1 ------------------------------------------------
+// ------------------------------------------------ 纳管 ------------------------------------------------
 
 // seedServer 插入一台测试服务器。
 func seedServer(t *testing.T, st *Store, id, name, mode, group string, tags []string) *Server {

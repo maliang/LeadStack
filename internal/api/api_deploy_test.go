@@ -90,8 +90,8 @@ func (e *testEnv) createTemplateVia(jwt, name, kind, content string) store.Deplo
 	return out.Data
 }
 
-// TestM4AppAndTemplateEndpoints 覆盖应用/模板 CRUD、409 保护与渲染预览。
-func TestM4AppAndTemplateEndpoints(t *testing.T) {
+// TestDeployAppAndTemplateEndpoints 覆盖应用/模板 CRUD、409 保护与渲染预览。
+func TestDeployAppAndTemplateEndpoints(t *testing.T) {
 	env := newTestEnv(t)
 
 	// 401
@@ -184,8 +184,8 @@ func TestM4AppAndTemplateEndpoints(t *testing.T) {
 	}
 }
 
-// TestM4ArtifactUploadAndSecurity 覆盖制品上传、sha256、体积上限与 URL 登记。
-func TestM4ArtifactUploadAndSecurity(t *testing.T) {
+// TestDeployArtifactUploadAndSecurity 覆盖制品上传、sha256、体积上限与 URL 登记。
+func TestDeployArtifactUploadAndSecurity(t *testing.T) {
 	env := newTestEnv(t)
 	jwt := env.login()
 
@@ -327,8 +327,8 @@ func TestM4ArtifactUploadAndSecurity(t *testing.T) {
 	}
 }
 
-// TestM4ReleaseEndpoints 覆盖发布创建、状态汇总、日志增量、retry/rollback/cancel 与注入防护。
-func TestM4ReleaseEndpoints(t *testing.T) {
+// TestDeployReleaseEndpoints 覆盖发布创建、状态汇总、日志增量、retry/rollback/cancel 与注入防护。
+func TestDeployReleaseEndpoints(t *testing.T) {
 	env := newTestEnv(t)
 	jwt := env.login()
 	ctx := context.Background()
@@ -578,8 +578,8 @@ func (f *fakePlanRunner) snapshot() (maxInflight int, plans int, servers []strin
 	return f.maxInflight, len(f.plans), append([]string(nil), f.servers...)
 }
 
-// TestM4OrchestratorConcurrencyAndStatus 覆盖异步编排：并发上限、状态汇总、失败隔离与重试只跑 failed。
-func TestM4OrchestratorConcurrencyAndStatus(t *testing.T) {
+// TestDeployOrchestratorConcurrencyAndStatus 覆盖异步编排：并发上限、状态汇总、失败隔离与重试只跑 failed。
+func TestDeployOrchestratorConcurrencyAndStatus(t *testing.T) {
 	env := newTestEnv(t)
 	jwt := env.login()
 	ctx := context.Background()
@@ -734,8 +734,8 @@ func TestM4OrchestratorConcurrencyAndStatus(t *testing.T) {
 	_ = retried
 }
 
-// TestM4CancelRelease 覆盖取消：pending/running 的 run 变 canceled。
-func TestM4CancelRelease(t *testing.T) {
+// TestDeployCancelRelease 覆盖取消：pending/running 的 run 变 canceled。
+func TestDeployCancelRelease(t *testing.T) {
 	env := newTestEnv(t)
 	jwt := env.login()
 	ctx := context.Background()
@@ -867,8 +867,8 @@ func (e *testEnv) waitReleaseTerminal(t *testing.T, jwt, releaseID string, timeo
 	return last
 }
 
-// TestM4AgentLogTap 覆盖 agent 模式流式日志旁路：runID 绑定后 job.log 帧实时入库。
-func TestM4AgentLogTap(t *testing.T) {
+// TestDeployAgentLogTap 覆盖 agent 模式流式日志旁路：runID 绑定后 job.log 帧实时入库。
+func TestDeployAgentLogTap(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
 
@@ -923,9 +923,9 @@ func TestM4AgentLogTap(t *testing.T) {
 	}
 }
 
-// TestM4PlanRootConvention 用**真实 deploy.Build** 校验部署根约定：
+// TestDeployPlanRootConvention 用**真实 deploy.Build** 校验部署根约定：
 // BuildParams.Root 是部署根，应用根由 Build 拼成 <Root>/<AppSlug>，绝不能出现重复 slug。
-func TestM4PlanRootConvention(t *testing.T) {
+func TestDeployPlanRootConvention(t *testing.T) {
 	env := newTestEnv(t)
 	jwt := env.login()
 

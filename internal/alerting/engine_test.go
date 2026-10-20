@@ -1117,7 +1117,7 @@ func TestEventKindValuesMatchStoreConvention(t *testing.T) {
 // checker.Deps.OnStateChange 只在**状态翻转**时回调一次（见 internal/checker/scheduler.go
 // record()）。因此 for_duration_s > 0 的 check/server 规则永远收不到第二次事件，
 // 必须由周期 tick（backend 调用 EvaluateMetrics）把待触发记录提升为 firing。
-// 若回归，M3 验收第 4 条（for_duration 告警）在真实链路上会永远不触发。
+// 若回归，告警 验收第 4 条（for_duration 告警）在真实链路上会永远不触发。
 
 func TestPendingPromotedByPeriodicTick(t *testing.T) {
 	rule := checkRule()

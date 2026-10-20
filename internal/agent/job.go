@@ -179,7 +179,7 @@ func (m *jobManager) pump(ctx context.Context, w *wsConn, runID, stream string, 
 				Chunk:  chunk,
 			})
 			if err := w.send(ctx, env); err != nil {
-				// 连接已不可用，丢弃剩余输出（M0 不落盘），让进程按超时策略结束。
+				// 连接已不可用，丢弃剩余输出（基础 不落盘），让进程按超时策略结束。
 				_, _ = io.Copy(io.Discard, r)
 				return
 			}

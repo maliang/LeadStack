@@ -69,7 +69,7 @@ type checkPayload struct {
 	ServerCount int            `json:"server_count"`
 	ServerIDs   []string       `json:"server_ids"`
 	Status      string         `json:"status"`
-	// State 与 Status 同值：前端 M2 约定用 state，后端历史字段是 status，两个都发以免任何一方改造。
+	// State 与 Status 同值：前端 检测 约定用 state，后端历史字段是 status，两个都发以免任何一方改造。
 	State string `json:"state"`
 	// ConsecutiveFail 是该检测项当前的连续失败次数（多目标取最大值），供前端展示「1/3」进度。
 	ConsecutiveFail int                 `json:"consecutive_fail"`

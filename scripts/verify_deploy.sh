@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# LeadStack M4 端到端验收（Lead 所有）
+# LeadStack 部署 端到端验收（Lead 所有）
 #
-# 覆盖 docs/ARCHITECTURE.md 第 29 节 M4 验收标准。
-# 用法：make build && make devssh && bash scripts/verify_m4.sh
+# 覆盖 docs/ARCHITECTURE.md 第 29 节 部署验收标准。
+# 用法：make build && make devssh && bash scripts/verify_deploy.sh
 #
 # 关键设计：devssh 把命令交给本机真实 sh 执行，所以部署真的会落到临时目录，
 # 我们可以直接检查符号链接、文件内容与 sha256 —— 不是"看接口返回 200"就算过。
@@ -129,7 +129,7 @@ SRV_ID="$(sget "$(api POST /api/v1/servers \
 
 # ---------------------------------------------------------------- 4. 应用 / 模板 / 制品
 step "4. 应用、模板与制品"
-APP_ID="$(sget "$(api POST /api/v1/apps '{"name":"演示应用","slug":"demo-app","description":"M4 验收"}' "$TOKEN")" '.data.id')"
+APP_ID="$(sget "$(api POST /api/v1/apps '{"name":"演示应用","slug":"demo-app","description":"部署 验收"}' "$TOKEN")" '.data.id')"
 [ -n "$APP_ID" ] && pass "应用已创建（slug=demo-app）" || { fail "创建应用失败"; exit 1; }
 
 BIN_TPL="$(cat <<'TPL'

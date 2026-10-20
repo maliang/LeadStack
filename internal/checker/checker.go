@@ -1,4 +1,4 @@
-// Package checker 实现 LeadStack M2 的检测引擎：五种探测器（tcp/http/ping/process/script）
+// Package checker 实现 LeadStack 检测 的检测引擎：五种探测器（tcp/http/ping/process/script）
 // 与按 (check, server) 目标调度的 Scheduler。
 //
 // 契约见 docs/ARCHITECTURE.md 第 13 节（检测模型与执行位置）与 14.1 节（包 API，签名已冻结）。
@@ -74,5 +74,5 @@ type Deps struct {
 	Store         Store
 	Exec          Executor
 	Concurrency   int                                                  // 默认 8
-	OnStateChange func(checkID, serverID string, ok bool, since int64) // 可选，M3 告警挂这里
+	OnStateChange func(checkID, serverID string, ok bool, since int64) // 可选，告警 告警挂这里
 }

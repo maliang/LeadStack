@@ -4,7 +4,7 @@
 > `goreleaser release --snapshot --clean` 成功产出 **5 平台 10 个二进制**；docker 可用时
 > `docker build` 成功且容器 `/healthz` 返回 200。
 >
-> 本文记录的是**本机真实执行**的过程与输出（macOS 27.0.1 / arm64 / Apple M1 Pro），
+> 本文记录的是**本机真实执行**的过程与输出（macOS 27.0.1 / arm64 / Apple 纳管 Pro），
 > 不是纸面推演。所有命令都可以照抄复现。
 
 ---
@@ -13,7 +13,7 @@
 
 | 项 | 值 |
 |---|---|
-| 主机 | macOS 27.0.1 / arm64（Apple M1 Pro，32 GB） |
+| 主机 | macOS 27.0.1 / arm64（Apple 纳管 Pro，32 GB） |
 | Go | 1.27.2（`/opt/homebrew/bin/go`） |
 | Node / pnpm | 26.11.1 / 10.34.7 |
 | goreleaser | **2.18.3**（`brew install goreleaser` 安装） |
@@ -154,7 +154,7 @@ $ curl -s http://127.0.0.1:<port>/healthz
 1. `before.hooks` 的 `make web-embed` 失败：
    `src/i18n/index.ts(2,18): error TS2307: Cannot find module './zh-CN'`（前端 i18n 正在落地）。
 2. Go 编译失败：`internal/api/handlers_remote.go:54:20: undefined: remoteRunnerAdapter`、
-   `internal/api/handlers_terminal.go:165:48: undefined: mustJSON`（后端 M6 代码未提交完整）。
+   `internal/api/handlers_terminal.go:165:48: undefined: mustJSON`（后端 协作 代码未提交完整）。
 
 处理方式：先用 `goreleaser release --snapshot --clean --skip=before`（复用已存在的
 `internal/webui/dist`）验证**发布配置本身**可用（10 个二进制照常产出），
@@ -348,7 +348,7 @@ CI（`.github/workflows/ci.yml`）：
 
 | 触发 | 任务 | 说明 |
 |---|---|---|
-| push / PR | `build-test` | vet + **gofmt 闸门** + test + **go test -race** + `make build` + M0–M3 阻塞验收 + M4/备份/运维允许失败 |
+| push / PR | `build-test` | vet + **gofmt 闸门** + test + **go test -race** + `make build` + 既有能力 阻塞验收 + 部署/备份/运维允许失败 |
 | push / PR | `docker` | `docker build -t leadstack:ci .`（前端就绪时） |
 | push / PR | **`release-snapshot`** | `goreleaser check` + `goreleaser build --snapshot --clean`，并断言 **10 个二进制**且不含 devssh |
 | tag `v*` | `release` | `goreleaser release --clean` 发布 Release |

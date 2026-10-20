@@ -161,7 +161,7 @@ func resolvedMaxSchemaVersion(v int) int {
 // Logger 返回服务日志器。
 func (a *API) Logger() *slog.Logger { return a.logger }
 
-// Hub 返回活跃 agent 连接表（供 M1 的任务下发复用）。
+// Hub 返回活跃 agent 连接表（供 纳管 的任务下发复用）。
 func (a *API) Hub() *Hub { return a.hub }
 
 // WireAgentLogTap 把 agent 日志旁路接到 HubSender：部署任务下发时绑定 runID，

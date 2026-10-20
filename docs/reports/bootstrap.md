@@ -1,4 +1,4 @@
-# M0 交付报告
+# 基础 交付报告
 
 > 完成时间：2026-10-19　|　验收人：Lead（独立于实现方）
 > 构建环境：macOS 26 (arm64) · Go 1.27.2 · Node 26.11.1 / pnpm 10.34.7
@@ -7,7 +7,7 @@
 
 ## 一、结论
 
-**M0 验收通过（11/11 项）**。四条并行工作流全部交付：控制端后端、节点 agent、React 控制台、工程化与安装包。
+**基础 验收通过（11/11 项）**。四条并行工作流全部交付：控制端后端、节点 agent、React 控制台、工程化与安装包。
 
 ## 二、交付物
 
@@ -34,7 +34,7 @@
 | 10 | 内嵌 UI 与安装脚本同端口可用 | ✅ `/` 200 · `/assets/*.js` 200 · `/install.sh` 200 且与 `deploy/install.sh` **逐字节一致** |
 | 11 | 交叉编译五平台 | ✅ 10 个产物（linux/darwin/windows × amd64/arm64） |
 
-复现命令：`make build && bash scripts/verify_m0.sh`
+复现命令：`make build && bash scripts/verify_bootstrap.sh`
 
 ## 四、并行协作方式
 
@@ -47,16 +47,16 @@
 2. `/install.sh` 404（安装命令不可用）→ 裁定由 `make web-embed` 把 `deploy/install.sh` 复制进 `internal/webui/dist/`，唯一事实来源仍是 `deploy/install.sh`；
 3. 验收脚本自身缺陷（`api()` 参数顺序导致 401）→ 修复并新增「指标必须落库」断言。
 
-## 五、已知限制（不阻塞 M0，已排入 M1）
+## 五、已知限制（不阻塞 基础，已排入 纳管）
 
-1. `make build-go`（跳过前端）路径下 `/install.sh` 会 404，需用 `make build`；M1 改为正式 embed。
-2. 指标保留 7 天、无降采样表；M1 加 1m/1h 汇总。
-3. agent 服务托管依赖 `install.sh`（systemd/launchd），`kardianos/service` 自安装留待 M1（依赖已从 go.mod 移除，需要时再加回）。
-4. M0 不实现 job.exec 的**控制端侧**下发与终端（agent 侧已实现并单测）；收到相关消息一律忽略不断连。
+1. `make build-go`（跳过前端）路径下 `/install.sh` 会 404，需用 `make build`；纳管 改为正式 embed。
+2. 指标保留 7 天、无降采样表；纳管 加 1m/1h 汇总。
+3. agent 服务托管依赖 `install.sh`（systemd/launchd），`kardianos/service` 自安装留待 纳管（依赖已从 go.mod 移除，需要时再加回）。
+4. 基础 不实现 job.exec 的**控制端侧**下发与终端（agent 侧已实现并单测）；收到相关消息一律忽略不断连。
 5. Docker 镜像与 GoReleaser 仅做结构校验（本机无 docker/goreleaser），由 CI 兜底。
 6. macOS 公证 / Windows 代码签名未接入（CI 中留 TODO）。
 7. 仓库尚未纳入 git 版本管理。
 
-## 六、下一步（M1：服务器纳管）
+## 六、下一步（纳管：服务器纳管）
 
 凭证加密存储 → 纯 SSH 连通性测试与 Agentless 降级采集 → 服务器分组/标签与批量操作 → 主机信息卡与详情页 → 指标历史曲线。

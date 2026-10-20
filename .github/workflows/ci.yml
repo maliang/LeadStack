@@ -2,21 +2,21 @@
 #
 #   push / PR  -> jq 就绪 -> vet + **gofmt 闸门** + build + test + **go test -race（api/store）**
 #                 + 脚本语法/干跑校验 + make build + make devssh
-#                 -> M0/M1/M2/M3 端到端验收（阻塞）+ M4 端到端验收（稳定前允许失败）
+#                 -> 基础/纳管/检测/告警 端到端验收（阻塞）+ 部署 端到端验收（稳定前允许失败）
 #                 -> 备份/恢复验收（稳定前允许失败）
-#                 -> 运维验收 verify_ops.sh（M5/M6 能力，稳定前允许失败）
+#                 -> 运维验收 verify_ops.sh（运维与协作 能力，稳定前允许失败）
 #                 -> docker 构建（前端工程就绪后）
 #                 -> goreleaser 快照构建（验证发布配置与 5 平台 × 2 二进制）
 #   tag v*     -> 上面的检查全绿后，用 goreleaser 交叉编译 5 个目标并发布 Release
 #
-# 两道硬闸门（M3 新增）：
+# 两道硬闸门（告警 新增）：
 #   1) `make fmt-check`：gofmt -l 必须为空（本仓库多次出现格式漂移）
 #   2) `make test-race`：go test -race 覆盖 internal/api 与 internal/store（告警并发状态机）
 #
 # Go 版本：两个 job 都用 `go-version-file: go.mod` 读取模块的 go 指令（当前 go 1.27.2），
 #   不写死版本，避免 runner 工具链比 go.mod 旧时直接报 "go.mod requires go >= 1.27.2"。
 #
-# 验收脚本（scripts/verify_m0.sh、verify_m1.sh、verify_m2.sh，Lead 所有）依赖 jq，
+# 验收脚本（scripts/verify_bootstrap.sh、verify_servers.sh、verify_checks.sh，Lead 所有）依赖 jq，
 # 失败时控制端/agent 日志与脚本输出会作为 artifact 上传（.e2e-logs/）。
 #
 # TODO(macOS 公证 / Windows 签名)：
@@ -102,7 +102,7 @@ jobs:
         run: go test ./...
 
       - name: go test -race（闸门：internal/api 与 internal/store）
-        # 并发面最大的两个包（M3 告警状态机在 api）；-count=1 避免命中缓存
+        # 并发面最大的两个包（告警 告警状态机在 api）；-count=1 避免命中缓存
         run: make test-race
 
       - name: 部署脚本语法检查（sh / dash / bash）
@@ -119,7 +119,7 @@ jobs:
       - name: make build（一条命令出两个二进制 + 内嵌 UI）
         run: make build
 
-      - name: make devssh（DEV-ONLY 测试 SSH 端点，供 M1 验收）
+      - name: make devssh（DEV-ONLY 测试 SSH 端点，供 纳管 验收）
         run: make devssh
 
       - name: 校验产物存在
@@ -136,64 +136,64 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # ---- 端到端验收（M0/M1/M2/M3 阻塞；M4 初期允许失败）----
+      # ---- 端到端验收（基础/纳管/检测/告警 阻塞；部署 初期允许失败）----
       # 日志：脚本内部会把控制端/agent 日志尾部打到 stdout，这里 tee 到 .e2e-logs/；
       # 同时把 TMPDIR 指到该目录，脚本异常中止时残留的 leadstack*.log 也会被 artifact 收走。
-      - name: M0 端到端验收（阻塞）
+      - name: 基础 端到端验收（阻塞）
         id: e2e_m0
         shell: bash
         run: |
           mkdir -p .e2e-logs
-          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_m0.sh 2>&1 | tee .e2e-logs/verify_m0.log
+          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_bootstrap.sh 2>&1 | tee .e2e-logs/verify_bootstrap.log
           exit "${PIPESTATUS[0]}"
 
-      - name: M1 端到端验收（阻塞，已双验收稳定）
+      - name: 纳管 端到端验收（阻塞，已双验收稳定）
         id: e2e_m1
         shell: bash
         run: |
           mkdir -p .e2e-logs
-          if [ ! -f scripts/verify_m1.sh ]; then
-            echo "scripts/verify_m1.sh 尚未就绪，跳过 M1 验收"
+          if [ ! -f scripts/verify_servers.sh ]; then
+            echo "scripts/verify_servers.sh 尚未就绪，跳过服务器纳管验收"
             exit 0
           fi
-          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_m1.sh 2>&1 | tee .e2e-logs/verify_m1.log
+          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_servers.sh 2>&1 | tee .e2e-logs/verify_servers.log
           exit "${PIPESTATUS[0]}"
 
-      - name: M2 端到端验收（阻塞，已 25/25 稳定）
+      - name: 检测 端到端验收（阻塞，已 25/25 稳定）
         id: e2e_m2
         shell: bash
         run: |
           mkdir -p .e2e-logs
-          if [ ! -f scripts/verify_m2.sh ]; then
-            echo "scripts/verify_m2.sh 尚未就绪，跳过 M2 验收"
+          if [ ! -f scripts/verify_checks.sh ]; then
+            echo "scripts/verify_checks.sh 尚未就绪，跳过监控检测验收"
             exit 0
           fi
-          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_m2.sh 2>&1 | tee .e2e-logs/verify_m2.log
+          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_checks.sh 2>&1 | tee .e2e-logs/verify_checks.log
           exit "${PIPESTATUS[0]}"
 
-      - name: M3 端到端验收（阻塞，已 29/29 稳定）
+      - name: 告警 端到端验收（阻塞，已 29/29 稳定）
         id: e2e_m3
         shell: bash
         run: |
           mkdir -p .e2e-logs
-          if [ ! -f scripts/verify_m3.sh ]; then
-            echo "scripts/verify_m3.sh 尚未就绪，跳过 M3 验收"
+          if [ ! -f scripts/verify_alerts.sh ]; then
+            echo "scripts/verify_alerts.sh 尚未就绪，跳过告警验收"
             exit 0
           fi
-          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_m3.sh 2>&1 | tee .e2e-logs/verify_m3.log
+          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_alerts.sh 2>&1 | tee .e2e-logs/verify_alerts.log
           exit "${PIPESTATUS[0]}"
 
-      - name: M4 端到端验收（稳定前允许失败）
+      - name: 部署 端到端验收（稳定前允许失败）
         id: e2e_m4
         continue-on-error: true
         shell: bash
         run: |
           mkdir -p .e2e-logs
-          if [ ! -f scripts/verify_m4.sh ]; then
-            echo "scripts/verify_m4.sh 尚未就绪，跳过 M4 验收"
+          if [ ! -f scripts/verify_deploy.sh ]; then
+            echo "scripts/verify_deploy.sh 尚未就绪，跳过部署验收"
             exit 0
           fi
-          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_m4.sh 2>&1 | tee .e2e-logs/verify_m4.log
+          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_deploy.sh 2>&1 | tee .e2e-logs/verify_deploy.log
           exit "${PIPESTATUS[0]}"
 
       - name: 备份/恢复验收（稳定前允许失败）
@@ -210,7 +210,7 @@ jobs:
           TMPDIR="$PWD/.e2e-logs" bash scripts/verify_backup.sh 2>&1 | tee .e2e-logs/verify_backup.log
           exit "${PIPESTATUS[0]}"
 
-      - name: M5/M6 运维能力验收（terminal/文件/cron/审计/RBAC，稳定前允许失败）
+      - name: 运维与协作 运维能力验收（terminal/文件/cron/审计/RBAC，稳定前允许失败）
         id: e2e_ops
         continue-on-error: true
         # verify_ops.sh 会跑真实终端 WS、文件落盘、cron tick 与 agent 升级，比其它脚本慢得多
@@ -234,7 +234,7 @@ jobs:
 
       - name: 上传 e2e 日志（任一 e2e 失败时）
         # 注意：continue-on-error 的步骤不会让 job 变成 failure，
-        # 所以必须用 steps.<id>.outcome 兜住 M4 / 备份 / 运维验收，否则它们的日志会丢。
+        # 所以必须用 steps.<id>.outcome 兜住 部署 / 备份 / 运维验收，否则它们的日志会丢。
         if: failure() || steps.e2e_m4.outcome == 'failure' || steps.e2e_backup.outcome == 'failure' || steps.e2e_ops.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:

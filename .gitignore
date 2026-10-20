@@ -6,7 +6,7 @@
 # e2e 验收日志（make test-e2e 产出，失败时由 CI 上传为 artifact）
 /.e2e-logs/
 
-# M4：制品与部署根目录都是运行时状态，不入库（Docker 场景见 .dockerignore）
+# 部署：制品与部署根目录都是运行时状态，不入库（Docker 场景见 .dockerignore）
 /artifacts/
 /.leadstack/
 /.deploy-root/

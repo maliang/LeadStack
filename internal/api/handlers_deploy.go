@@ -452,7 +452,7 @@ func isValidTemplateKind(kind string) bool {
 //   - multipart 上传（`file` 字段）：服务端落盘并**自行计算 sha256**；
 //   - JSON `{kind:"url",url,sha256,size_bytes?}`：只登记元数据（发布时才下载）。
 //
-// 产品口径（M4 裁决）：**url 制品必须提供 sha256**。原因是目标机下载后必须校验，
+// 产品口径（部署 裁决）：**url 制品必须提供 sha256**。原因是目标机下载后必须校验，
 // 校验通过才切换 current —— 这是「失败不破坏上一版本、回滚有意义」的前提；
 // 缺 sha256 一律在登记阶段 400（fail fast），而不是等到发布执行时才失败。
 func (a *API) handleCreateArtifact(w http.ResponseWriter, r *http.Request) {

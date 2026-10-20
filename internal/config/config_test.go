@@ -113,7 +113,7 @@ func TestEnsureDataDir(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------ M1 ------------------------------------------------
+// ------------------------------------------------ 纳管 ------------------------------------------------
 
 // TestMasterKeyFromEnv 校验 LEADSTACK_MASTER_KEY 解析与校验。
 func TestMasterKeyFromEnv(t *testing.T) {
@@ -238,9 +238,9 @@ func TestDecodeMasterKey(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------ M2 ------------------------------------------------
+// ------------------------------------------------ 检测 ------------------------------------------------
 
-// TestCheckConfigDefaults 校验 M2 检测相关配置的默认值与解析。
+// TestCheckConfigDefaults 校验 检测 检测相关配置的默认值与解析。
 func TestCheckConfigDefaults(t *testing.T) {
 	t.Setenv(EnvListen, "")
 	t.Setenv(EnvDataDir, "")

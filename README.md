@@ -6,7 +6,7 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量节点 agent，跨平台、开箱
 
 ---
 
-## 现在能做什么（M5 · M6）
+## 现在能做什么（运维 · 协作）
 
 - 一条命令启动控制端，浏览器登录控制台
 - **两种接入方式**：Agent 常驻（秒级指标）/ SSH 免安装（控制端主动采集，无需在目标机装任何东西）
@@ -137,24 +137,24 @@ docs/                   计划书与接口契约
 
 ## 状态
 
-- **M0（骨架）已完成** —— [交付报告](docs/M0-REPORT.md)（11/11 项验收）
-- **M1（服务器纳管）已完成** —— [交付报告](docs/M1-REPORT.md)（33/33 项验收，M0 无回归）
-- **M2（监控与检测）已完成** —— [交付报告](docs/M2-REPORT.md)（25/25 项验收，M0/M1 无回归）
-- **M3（告警）已完成** —— [交付报告](docs/M3-REPORT.md)（29/29 项验收，M0–M2 无回归）
-- **M4（批量部署）已完成** —— [交付报告](docs/M4-REPORT.md)（33/33 项验收，M0–M3 无回归）
-- **数据备份与恢复已完成** —— [交付报告](docs/BACKUP-REPORT.md)（35/35 项验收）
-- **M5 运维增强 + M6 团队协作与体验已完成** —— [交付报告](docs/M5-M6-REPORT.md)（46/46 项验收）
+- **基础骨架已完成** —— [交付报告](docs/reports/bootstrap.md)（11/11 项验收）
+- **服务器纳管已完成** —— [交付报告](docs/reports/server-management.md)（33/33 项验收，无回归）
+- **监控与检测已完成** —— [交付报告](docs/reports/monitoring.md)（25/25 项验收，无回归）
+- **告警已完成** —— [交付报告](docs/reports/alerting.md)（29/29 项验收，无回归）
+- **批量部署已完成** —— [交付报告](docs/reports/deployment.md)（33/33 项验收，无回归）
+- **数据备份与恢复已完成** —— [交付报告](docs/reports/backup.md)（35/35 项验收）
+- **运维增强与团队协作已完成** —— [交付报告](docs/reports/ops-and-collaboration.md)（46/46 项验收）
 - 计划书见 [docs/PLAN.md](docs/PLAN.md)
 
 端到端验收可一键复现（共 **212 项断言**）：
 
 ```bash
 make build && make devssh
-bash scripts/verify_m0.sh    # 11 项：接入、指标、离线判定
-bash scripts/verify_m1.sh    # 33 项：凭证、SSH 纳管、主机信息、批量、历史
-bash scripts/verify_m2.sh    # 25 项：五类检测、两条执行通道、调度、降级
-bash scripts/verify_m3.sh    # 29 项：渠道、firing、去重、确认、恢复、指标规则、静默
-bash scripts/verify_m4.sh    # 33 项：发布、产物落盘校验、失败保护、回滚、批量、重试、注入防护
+bash scripts/verify_bootstrap.sh    # 11 项：接入、指标、离线判定
+bash scripts/verify_servers.sh    # 33 项：凭证、SSH 纳管、主机信息、批量、历史
+bash scripts/verify_checks.sh    # 25 项：五类检测、两条执行通道、调度、降级
+bash scripts/verify_alerts.sh    # 29 项：渠道、firing、去重、确认、恢复、指标规则、静默
+bash scripts/verify_deploy.sh    # 33 项：发布、产物落盘校验、失败保护、回滚、批量、重试、注入防护
 bash scripts/verify_backup.sh # 35 项：加密有效性、篡改检测、离线恢复、暂存恢复、定时与保留
 bash scripts/verify_ops.sh    # 46 项：审计、RBAC、Token、分页、导入、终端、文件、定时任务、日志/进程/端口
 # 或：make test-e2e

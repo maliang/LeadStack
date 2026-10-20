@@ -232,7 +232,7 @@ func (n *AlertNotifier) notifyOne(ctx context.Context, a alerting.Alert, channel
 		return
 	}
 	if !channel.Enabled {
-		// notify 客户端不拦截 Enabled，必须由调用方判断（lead §M3 对齐事项）。
+		// notify 客户端不拦截 Enabled，必须由调用方判断（lead 告警 对齐事项）。
 		n.logger.Debug("告警通知跳过已禁用渠道", "alert_id", a.ID, "channel_id", channelID)
 		n.appendEvent(ctx, a.ID, fmt.Sprintf("渠道「%s」已禁用，跳过发送", channel.Name))
 		return

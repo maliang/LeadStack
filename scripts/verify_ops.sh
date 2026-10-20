@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LeadStack M5/M6 运维增强与团队协作端到端验收（Lead 所有）
+# LeadStack 运维与协作 运维增强与团队协作端到端验收（Lead 所有）
 #
 # 覆盖 docs/ARCHITECTURE.md 第 47 节。
 # 用法：make build && make devssh && bash scripts/verify_ops.sh
@@ -365,6 +365,6 @@ TICKET_OFF="$(status_of -X POST -H "Authorization: Bearer ${TOKEN}" "${BASE}/api
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"
-if [ "$FAIL" -eq 0 ]; then printf '\033[32mM5/M6 验收通过\033[0m\n'; exit 0; fi
-printf '\033[31mM5/M6 验收未通过\033[0m\n'
+if [ "$FAIL" -eq 0 ]; then printf '\033[32m运维与协作 验收通过\033[0m\n'; exit 0; fi
+printf '\033[31m运维与协作 验收未通过\033[0m\n'
 exit 1
