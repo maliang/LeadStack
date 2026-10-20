@@ -53,6 +53,7 @@ const (
 // releaseMetadata 是写到 <root>/.leadstack/releases/<releaseID>.json 的快照（§24）。
 type releaseMetadata struct {
 	AppSlug       string `json:"app_slug"`
+	Root          string `json:"root"`
 	ReleaseID     string `json:"release_id"`
 	Version       string `json:"version"`
 	PrevReleaseID string `json:"prev_release_id,omitempty"`
@@ -109,6 +110,7 @@ func Build(tmpl Template, art Artifact, p BuildParams) (Plan, error) {
 	}
 	meta := releaseMetadata{
 		AppSlug:       p.AppSlug,
+		Root:          appRoot,
 		ReleaseID:     p.ReleaseID,
 		Version:       p.Version,
 		PrevReleaseID: p.PrevReleaseID,

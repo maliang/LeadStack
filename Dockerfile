@@ -80,8 +80,12 @@ ENV LEADSTACK_LISTEN=0.0.0.0:8080 \
     LEADSTACK_DATA_DIR=/data
 
 # 持久化：
-#   /data —— SQLite 数据库 + 上传型制品（<data_dir>/artifacts）。制品与数据库同卷，
-#            否则容器重建后会丢失制品文件（release 记录还在，但下载会 404）。
+#   /data —— SQLite 数据库 + 上传型制品（<data_dir>/artifacts）+ 备份归档（<data_dir>/backups）
+#            + 解密口令（<data_dir>/backup.pass）。三类数据同卷，否则容器重建后
+#            制品下载 404、历史备份与口令一起消失。
+#   ⚠ 备份目录在 /data 卷内，备份数据随卷持久化；但 backup.pass 是解密备份的唯一钥匙，
+#     **必须单独备份**（拷出卷外、与 .lsbak 分开保管）——丢了它，备份就永久解不开。
+#     备份归档与口令文件都不会进镜像（.dockerignore 已排除 backups/、*.lsbak、backup.pass）。
 VOLUME ["/data"]
 EXPOSE 8080
 
@@ -91,6 +95,13 @@ EXPOSE 8080
 #   容器场景请用 volume 把 LEADSTACK_DEPLOY_ROOT 挂进来，例如：
 #     docker run -v leadstack-deploy:/opt/leadstack/apps -e LEADSTACK_DEPLOY_ROOT=/opt/leadstack/apps ...
 #   或参考 deploy/docker-compose.yml 里被注释掉的 deploy-root 示例。
+
+# 备份相关环境变量（均可选，对应 REST /backup-settings）：
+#   LEADSTACK_BACKUP_INTERVAL         定时备份间隔（Go duration，默认 24h）
+#   LEADSTACK_BACKUP_RETENTION        保留份数（默认 7，超出按时间删最旧）
+#   LEADSTACK_BACKUP_INCLUDE_ARTIFACTS 备份是否包含上传制品（默认 false，制品体积大）
+#   LEADSTACK_BACKUP_PASSPHRASE       口令（优先于 <data_dir>/backup.pass；生产建议用文件或挂载 secret，
+#                                     不要把口令写进镜像 ENV）
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1

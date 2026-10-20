@@ -965,6 +965,8 @@ type RunOutcome struct {
 
 **安全红线**：所有变量值在代入前必须校验字符集（slug/version 白名单，其余禁止 `;|&$`\` 与换行），**防止命令注入**。未知占位符 → 报错（不能静默留空，否则会部署出半成品）。
 
+**校验口径**：路径类变量（`ROOT`、`RELEASE_DIR`）允许 **UTF-8 可打印字符**（中文目录名如 `/srv/应用` 必须可用，上限 1024 字节），但仍拒绝空白、控制字符、换行与 shell 元字符 `; | & $ \` " ' ( ) { } < > * ? ! ~ #`，并拒绝 `..` 路径段；`APP_SLUG`/`VERSION`/`RELEASE_ID`/`ARTIFACT_URL`/`ARTIFACT_SHA256` 的白名单保持不变。
+
 ## 27. REST 端点（前缀 `/api/v1`）
 
 | 方法 | 路径 | 说明 |
@@ -1034,3 +1036,163 @@ CREATE TABLE release_logs(
 9. **重试**：`POST /releases/{id}/retry` 只重跑 failed 的服务器，成功的 run 不重复执行。
 10. 未带 token 访问 `/apps` 返回 401；删除有 release 的应用返回 409。
 11. `scripts/verify_m0.sh` ~ `verify_m3.sh` 仍全绿（**M4 不得回归**）。
+
+---
+
+# 备份与恢复契约
+
+> 数据目录里有四类东西：`leadstack.db`（业务数据）、`master.key`（凭证加密主密钥）、`known_hosts`（SSH 主机密钥）、`artifacts/`（上传制品）。
+> **丢了主密钥 = 所有凭证作废**，所以备份必须包含它；而包含它的归档如果明文存放，等于把全部服务器钥匙交出去 —— 因此备份**必须加密**。
+
+## 30. 归档格式 `LSBAK1`
+
+```
++--------------------------------------------------------------+
+| magic  "LSBAK1\n"  (7 字节)                                   |
+| headerLen  uint32 BE                                          |
+| header     JSON，长度 headerLen                               |
+| ciphertext AES-256-GCM(tar.gz)                                 |
++--------------------------------------------------------------+
+```
+
+**header JSON（冻结）**
+```json
+{ "format_version": 1,
+  "app_version": "1.2.3",
+  "schema_version": 6,
+  "created_at": 1710000000000,
+  "includes_artifacts": false,
+  "kdf": {"name":"scrypt","salt":"<b64>","n":32768,"r":8,"p":1,"key_len":32},
+  "cipher": {"name":"aes-256-gcm","nonce":"<b64>"} }
+```
+
+**tar.gz 内文件（manifest.json 必须为第一个条目）**
+| 文件 | 必选 | 说明 |
+|---|---|---|
+| `manifest.json` | ✅ | `{format_version,app_version,schema_version,created_at,includes_artifacts,files:[{name,size,sha256}]}` |
+| `leadstack.db` | ✅ | 用 `VACUUM INTO` 导出的**一致快照**（不能直接拷 WAL 模式的库文件） |
+| `master.key` | ✅ | 凭证主密钥；缺失则恢复后所有凭证不可用 |
+| `known_hosts` | 可选 | SSH 主机密钥记录 |
+| `artifacts/<id>` | 可选 | 上传制品；默认不含（体积大），由开关控制 |
+
+**绝不进归档**：`backup.pass`、`backups/` 目录、`*.restore-pending/`、`*.db-wal` / `*.db-shm`。
+> `backup.pass` 被排除是有意设计：它是解密备份的钥匙，单独存放，这样**备份文件即使被拿走也解不开**。
+
+## 31. 口令与密钥
+
+| 项 | 约定 |
+|---|---|
+| 口令来源 | `LEADSTACK_BACKUP_PASSPHRASE` 环境变量优先；否则读 `<data_dir>/backup.pass`；都不存在则**自动生成** 32 字节随机口令并以 0600 落盘（日志提示「请单独保管」） |
+| 派生 | `scrypt(passphrase, salt, N=32768, r=8, p=1)` → 32 字节 AES-256 密钥 |
+| 加密 | AES-256-GCM，随机 12 字节 nonce；认证失败（口令错/被篡改）必须**明确区分**为 `ErrBadPassphrase` 与 `ErrCorrupt` |
+| 恢复 | 必须提供口令；错误口令 → 明确报错，不得静默失败 |
+
+## 32. Go 包 API 契约（`internal/backup`）
+
+**不得 import `internal/store` / `internal/api`**（只做文件与归档，SQLite 用只读连接做快照）。
+
+```go
+type Options struct {
+    DataDir    string        // 要备份的数据目录
+    BackupDir  string        // 归档输出目录（默认 <data_dir>/backups）
+    Passphrase string        // 空则从 EnvPassphrase / backup.pass 解析
+    Now        func() int64
+}
+
+type Info struct {
+    Name              string `json:"name"`         // 文件名，如 leadstack-20261020-091500.lsbak
+    SizeBytes         int64  `json:"size_bytes"`
+    CreatedAt         int64  `json:"created_at"`
+    IncludesArtifacts bool   `json:"includes_artifacts"`
+    SchemaVersion     int    `json:"schema_version"`
+    SHA256            string `json:"sha256"`       // 归档文件本身的校验和
+}
+
+type Manifest struct {
+    FormatVersion     int            `json:"format_version"`
+    AppVersion        string         `json:"app_version"`
+    SchemaVersion     int            `json:"schema_version"`
+    CreatedAt         int64          `json:"created_at"`
+    IncludesArtifacts bool           `json:"includes_artifacts"`
+    Files             []ManifestFile `json:"files"`
+}
+type ManifestFile struct {
+    Name      string `json:"name"`
+    SizeBytes int64  `json:"size_bytes"`
+    SHA256    string `json:"sha256"`
+}
+
+type Manager struct{ /* ... */ }
+func NewManager(opts Options) (*Manager, error)
+
+// Create 生成一份备份。**在线执行**：不停止服务，不阻塞写入过久（VACUUM INTO 快照）。
+func (m *Manager) Create(ctx context.Context, includeArtifacts bool) (*Info, error)
+// List 从备份目录读取（按创建时间倒序）；元数据存同名 .json 边车文件。
+func (m *Manager) List(ctx context.Context) ([]Info, error)
+// Verify 解密 + 校验 header/manifest/文件哈希/DB 完整性，任何异常都报错。
+func (m *Manager) Verify(ctx context.Context, path string) (*Manifest, error)
+func (m *Manager) Delete(ctx context.Context, name string) error
+
+// 哨兵错误
+var ErrBadPassphrase = errors.New("backup: 口令错误")
+var ErrCorrupt       = errors.New("backup: 归档损坏或格式不符")
+var ErrSchemaTooNew  = errors.New("backup: 备份来自更新的版本")
+
+// Restore 离线恢复：解压到临时目录 → 校验 → 把现有受管文件移到 <dataDir>.pre-restore-<ts>/ → 放置新文件。
+// **要求服务已停止**（调用方负责）；恢复前自动做一次安全快照（目录级 move，不复制大文件）。
+func Restore(opts RestoreOptions) (*RestoreResult, error)
+
+type RestoreOptions struct {
+    File       string
+    DataDir    string
+    Passphrase string
+    // KeepOld 为 true 时保留 <dataDir>.pre-restore-<ts>/，默认 true。
+    KeepOld bool
+    MaxSchemaVersion int // 当前程序支持的最高迁移版本，用于拒绝「来自更新版本」的备份
+}
+type RestoreResult struct {
+    Manifest      *Manifest
+    PreRestoreDir string
+    RestoredFiles []string
+}
+```
+
+## 33. REST 端点（前缀 `/api/v1`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/backups` | 备份列表（含 size/created_at/includes_artifacts/schema_version/sha256） |
+| POST | `/backups` | 立即备份 `{include_artifacts?}` → 201 + `Info` |
+| GET | `/backups/{name}/download` | 下载归档（`Content-Disposition: attachment`） |
+| POST | `/backups/{name}/verify` | 校验 → `{ok, manifest}`；失败返回 400 + `{error:{code,message}}`。**同时校验 schema 版本**：备份来自更新版本时 `code=schema_too_new`（与恢复阶段同一判定，避免用户到恢复时才发现） |
+| DELETE | `/backups/{name}` | 删除（同时删边车 json） |
+| POST | `/backups/restore` | multipart 上传归档（字段名 `file`）→ 校验 → 暂存到 `<data_dir>/.restore-pending/` → `202 {restart_required:true, staged:{source,created_at,verified_at,archive_sha256,schema_version}}`；**下次启动时应用**。校验失败 400 且不留半成品 |
+| GET/PATCH | `/backup-settings` | `{enabled, interval, retention, include_artifacts}`；`interval` 为 Go duration 字符串 |
+
+**已知限制（M4.5 记录）**：「版本过新」在真实环境需由**更新版本的程序**生成的归档才能触发；验收脚本不构造该场景，改由单测覆盖 `ErrSchemaTooNew` 与 `code=schema_too_new`。
+
+**启动时应用暂存恢复**：`cmd/leadstack` 在打开数据库**之前**检查 `.restore-pending/meta.json`，存在则执行离线恢复（旧数据保留为 `<data_dir>.pre-restore-<ts>/`）再继续启动，并打印醒目日志。
+**定时备份**：`enabled=true` 时按 `interval`（默认 `24h`）执行，保留 `retention`（默认 7）份，超出按创建时间删最旧。
+
+## 34. 命令行
+
+```bash
+leadstack backup  --data-dir ./data --out /tmp/x.lsbak [--with-artifacts] [--passphrase-file p]
+leadstack backup verify --file /tmp/x.lsbak [--passphrase-file p]
+leadstack restore --file /tmp/x.lsbak --data-dir ./data [--passphrase-file p]   # 服务必须已停止
+```
+
+## 35. 验收标准（`scripts/verify_backup.sh` 一键复现）
+
+1. `make build` 成功；`gofmt` 干净；`go vet ./...` 与 `go test ./...` 全绿；M0–M4 脚本仍全绿。
+2. 造数据（服务器/凭证/应用/模板/制品/检测项/告警规则）→ `POST /backups` 成功，`size_bytes>0`，文件以 `LSBAK1` 开头。
+3. **归档必须加密**：原始归档字节中搜不到 `SQLite format 3`、`BEGIN OPENSSH PRIVATE KEY`、明文密码、`master.key` 内容；`backup.pass` 存在于数据目录但**不在**归档内。
+4. `GET /backups` 列表可见；下载内容与磁盘文件一致；`POST /verify` 返回 `ok=true` 且 manifest 含 db/master.key 条目。
+5. **篡改检测**：翻转归档中一个字节 → `verify` 失败且错误可读。
+6. **口令错误**：用错误口令 `verify`/`restore` → 明确报 `口令错误`，不得"成功但数据为空"。
+7. **恢复：离线 CLI** —— 先改数据（删除一台服务器）→ 停服务 → `leadstack restore` → 启动 → 被删的服务器**恢复存在**，且 `pre-restore` 目录保留了恢复前状态。
+8. **恢复：API 暂存** —— 上传归档到 `/backups/restore` → 202 `restart_required` → 重启控制端 → 数据恢复且暂存目录被清理。
+9. **定时备份 + 保留策略**：`interval` 压到几秒、`retention=2`，等若干轮后备份数量不超过 2 且最新的更新。
+10. **主密钥有效性**：恢复后原凭证仍可解密（用恢复后的实例 `POST /servers/{id}/test-connection` 或读取凭证指纹一致来证明）。
+11. 未带 token 访问 `/backups` 返回 401；备份文件名含路径穿越（`../`）时删除/下载被拒（400）。
+12. `scripts/verify_m0.sh` ~ `verify_m4.sh` 仍全绿（**不得回归**）。

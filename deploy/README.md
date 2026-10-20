@@ -63,21 +63,21 @@ make devssh     # bin/leadstack-devssh —— 仅供本地验收，绝不进发�
 make fmt-check  # gofmt -l 必须为空
 make test-race  # go test -race 覆盖 internal/api 与 internal/store
 
-# 3) 一键跑五套端到端验收（M0 → M1 → M2 → M3 → M4，日志落在 .e2e-logs/）
+# 3) 一键跑六套端到端验收（M0 → M1 → M2 → M3 → M4 → backup，日志落在 .e2e-logs/）
 make test-e2e   # 等价于 make e2e
 ```
 
 `make test-e2e` 的行为：
 
-- 按序执行 `scripts/verify_m0.sh` → `verify_m1.sh` → `verify_m2.sh` → `verify_m3.sh` → `verify_m4.sh`（脚本由 Lead 维护）；
-- 每个脚本的完整输出（含失败时打印的控制端/agent 日志尾部）tee 到 `.e2e-logs/verify_m0.log` … `verify_m4.log`；
+- 按序执行 `scripts/verify_m0.sh` → `verify_m1.sh` → `verify_m2.sh` → `verify_m3.sh` → `verify_m4.sh` → `verify_backup.sh`（脚本由 Lead 维护）；
+- 每个脚本的完整输出（含失败时打印的控制端/agent 日志尾部）tee 到 `.e2e-logs/verify_m0.log` … `verify_m4.log`、`verify_backup.log`；
 - `TMPDIR` 被指向 `.e2e-logs/`，脚本异常中止时残留的 `leadstack*.log` 也留在那里，便于取证；
 - 某个脚本**不存在**时只打印提示并跳过（不算失败），脚本落地后自动纳入，无需改 Makefile；
-- 已存在的脚本一旦失败立即停止（不再跑后续脚本）并让 `make` 失败 —— 先用 `[1/5]`…`[5/5]` 定位到哪一档挂了；
-- 脚本按 `PORT` 环境变量选端口（`verify_m0` 默认 18777、`verify_m1` 默认 18788，M2/M3/M4 见各自脚本），
+- 已存在的脚本一旦失败立即停止（不再跑后续脚本）并让 `make` 失败 —— 先用 `[1/6]`…`[6/6]` 定位到哪一档挂了；
+- 脚本按 `PORT` 环境变量选端口（`verify_m0` 默认 18777、`verify_m1` 默认 18788，M2/M3/M4/backup 见各自脚本），
   与日常 `make run` 的 8080 不冲突；同时跑多套时用 `PORT=18801 make test-e2e` 之类错开。
 
-### 五个验收脚本分别验什么、大概多久
+### 六个验收脚本分别验什么、大概多久
 
 | 脚本 | 覆盖范围 | 典型耗时（本机 M1 Max） |
 |---|---|---|
@@ -86,9 +86,10 @@ make test-e2e   # 等价于 make e2e
 | `verify_m2.sh` | 检测项（tcp/http/process）、立即执行与调度结果、两种通道（agent/ssh）执行、大跨度降采样、校验鉴权 | **约 90–150 秒**（含 60 秒调度结果累积） |
 | `verify_m3.sh` | 告警渠道（webhook 真实收到通知、密钥不回显）、check/metric 规则触发、ack/resolved、去重与静默、`/alerts/summary` | **约 100–180 秒**（含 `for_duration` 与周期评估等待，脚本会把评估间隔压到几秒） |
 | `verify_m4.sh` | 应用/模板/制品、真实发布到 devssh 并校验产物落盘与 sha256、日志增量拉取、失败不改 `current`、回滚、并发批量、模板安全、重试、401/409 | **约 120–200 秒**（含发布轮询与回滚各一轮；SSH 通道由 devssh 承担） |
+| `verify_backup.sh` | 归档格式/加密（搜不到明文与主密钥）、列表/下载/校验、篡改与错误口令、CLI 离线恢复 + `pre-restore`、API 暂存恢复需重启、定时备份与保留策略、401/路径穿越 | **约 150–240 秒**（含两轮重启 + 定时备份等待若干轮；会自建数据目录，不碰 `./data`） |
 
-`make test-e2e` 全绿时总计约 **8–12 分钟**（脚本缺失会被跳过，相应更快）。
-CI 上 M0/M1/M2/M3 为阻塞项，M4 在稳定前为 `continue-on-error`；任一项失败都会把 `.e2e-logs/` 作为 artifact 上传。
+`make test-e2e` 全绿时总计约 **10–15 分钟**（脚本缺失会被跳过，相应更快）。
+CI 上 M0/M1/M2/M3 为阻塞项，M4 与备份验收在稳定前为 `continue-on-error`；任一项失败都会把 `.e2e-logs/` 作为 artifact 上传。
 
 单独跑某一个脚本：
 
@@ -98,6 +99,7 @@ PORT=19002 bash scripts/verify_m1.sh
 PORT=19003 bash scripts/verify_m2.sh
 PORT=19004 bash scripts/verify_m3.sh
 PORT=19005 bash scripts/verify_m4.sh
+PORT=19006 bash scripts/verify_backup.sh
 ```
 
 ### M3 告警相关环境变量
@@ -156,6 +158,131 @@ PORT=19005 bash scripts/verify_m4.sh
 - **控制端重启后，正在运行的发布不会自动恢复。** `release_run` 的状态机推进在控制端进程内完成；进程重启后仍处于 `pending`/`running` 的 run 会停在原状态（不会自动续跑，也不会被标记失败）。处理方式：用 `POST /releases/{id}/retry` 人工重试失败的 run，或重新发起发布。
 - 同样地，重启期间不保证发布日志完整（日志按 run 分片落库，已写入的部分仍在）。
 - 目标机上的 `current` 符号链接切换是原子的，因此**重启期间不会出现半成品目录**；已完成服务器的发布结果不受影响。
+
+## 备份与恢复
+
+> ## ⚠️ 最重要的一条：`backup.pass` 是解密备份的**唯一钥匙**
+>
+> - 备份归档（`.lsbak`）用 **AES-256-GCM + scrypt** 加密，钥匙来自 `backup.pass`
+>   （或 `LEADSTACK_BACKUP_PASSPHRASE`）。**没有它，备份永久无法解密，任何人都救不回来。**
+> - `backup.pass` **绝不能**和备份文件放在一起：默认它就在 `<data_dir>/` 里、与 `backups/` 同盘——
+>   磁盘整盘丢失/勒索加密时两者会一起没。请把它单独拷到别处保管（另一台机器、密码管理器、
+>   离线介质），并且**只给必要的人**。
+> - 它**不会**被打进备份归档（这是有意设计：备份被拿走也解不开）、也不会进镜像/仓库。
+> - 恢复时口令错了会明确报「口令错误」，不会出现「恢复成功但数据为空」。
+> - 丢失 `backup.pass` 的唯一出路：拿一份**已知口令**的旧备份重来，或放弃这些备份。
+
+### 三种日常备份方式
+
+| 方式 | 做法 | 适用 |
+|---|---|---|
+| **UI 一键** | 控制台「备份与恢复」页 → 立即备份（可选包含制品） | 临改动前手动留档 |
+| **定时备份** | `GET/PATCH /api/v1/backup-settings` 打开 `enabled`，设 `interval`（默认 `24h`）与 `retention`（默认 7 份）；也可用环境变量 `LEADSTACK_BACKUP_INTERVAL` / `LEADSTACK_BACKUP_RETENTION` / `LEADSTACK_BACKUP_INCLUDE_ARTIFACTS` | 生产常态 |
+| **CLI** | `leadstack backup --data-dir ./data --out /tmp/x.lsbak [--with-artifacts] [--passphrase-file p]`；`leadstack backup verify --file /tmp/x.lsbak` | 脚本化 / 异地备份 |
+
+备份是**在线**的：用 SQLite `VACUUM INTO` 做一致快照，不停止服务，也不需要停机。
+
+### 备份里有什么、放在哪
+
+- 归档默认落在 `<data_dir>/backups/leadstack-<YYYYMMDD-HHMMSS>.lsbak`，旁边有同名 `.json` 边车（列表元数据）；
+- 内容：`manifest.json`（首个条目）、`leadstack.db`（一致快照）、`master.key`（凭证主密钥）、
+  可选 `known_hosts`、`artifacts/<id>`（仅 `--with-artifacts` / `include_artifacts=true` 时）；
+- **绝不进归档**：`backup.pass`、`backups/` 目录、`*.restore-pending/`、`*.db-wal` / `*.db-shm`；
+- 归档文件本身以 ASCII `LSBAK1` 开头；除 header 外全是密文，直接 `strings` 搜不到 SQLite 头、
+  私钥、口令或 `master.key` 内容；
+- `master.key` 在归档里很关键：没有它，恢复后所有凭证（SSH 密码/私钥）都解不开。
+
+### 离线恢复（CLI，**服务必须已停止**）
+
+```sh
+# 1) 停服务（必须！否则恢复会与正在写的进程打架）
+#    宿主机 systemd：
+sudo systemctl stop leadstack
+#    Docker：
+docker compose -f deploy/docker-compose.yml stop leadstack
+
+# 2) 恢复（会先校验；口令默认从 <data_dir>/backup.pass 读，读不到可用 --passphrase-file）
+./bin/leadstack restore --file /tmp/x.lsbak --data-dir /var/lib/leadstack/data
+
+# 3) 启动
+sudo systemctl start leadstack
+docker compose -f deploy/docker-compose.yml start leadstack
+```
+
+恢复的行为（见 `docs/ARCHITECTURE.md` 30–32 节）：
+
+- 先解密 + 校验 manifest/文件哈希/DB 完整性，任何异常直接失败，**不会破坏现有数据**；
+- 校验通过后，把现有的受管文件**移动**到 `<data_dir>.pre-restore-<ts>/`（目录级 move，不复制大文件），
+  再放置恢复出来的文件 —— **恢复前的旧数据就保存在这个 `pre-restore` 目录里**，确认无误后手工删即可；
+- 来自「更新版本」的备份（`schema_version` 高于当前程序）会被拒绝（`ErrSchemaTooNew`）；
+- 恢复完成后**必须重新启动控制端**才能看到数据。
+
+### API 暂存恢复（不停机上传，重启生效）
+
+`POST /api/v1/backups/restore`（multipart 上传归档）→ 校验 → 暂存到 `<data_dir>/.restore-pending/`
+→ 返回 `202 {"restart_required": true}`。**下次启动**时，控制端会在打开数据库**之前**应用这份暂存恢复
+（同样把旧数据移到 `<data_dir>.pre-restore-<ts>/`），并在日志里打印醒目提示。
+适合「远程上传、约个时间窗口重启」的场景；真正的数据切换仍需一次重启。
+
+### Docker 场景：怎么备份 `/data` 卷
+
+`/data` 卷里同时有：SQLite 库、上传制品（`/data/artifacts`）、备份归档（`/data/backups`）、解密口令（`/data/backup.pass`）。
+
+```sh
+# 1) 用容器内 CLI 生成加密备份（推荐：一致性由服务保证，不需要停容器）
+docker compose -f deploy/docker-compose.yml exec leadstack \
+  /usr/local/bin/leadstack backup --data-dir /data --out /data/backups/manual.lsbak
+
+# 2) 把归档拷出到宿主机
+docker compose -f deploy/docker-compose.yml cp leadstack:/data/backups/manual.lsbak ./manual.lsbak
+
+# 3) ⚠ 单独拷出解密口令，与上面的 .lsbak 分开保管（不要放同一个目录/同一块盘）
+docker compose -f deploy/docker-compose.yml cp leadstack:/data/backup.pass ./backup.pass
+
+# 4) 可选：整个 /data 卷打包（停机窗口内做，或用①的在线备份代替）
+docker compose -f deploy/docker-compose.yml stop leadstack
+docker run --rm -v leadstack_leadstack-data:/data -v "$PWD":/out alpine \
+  tar czf /out/leadstack-data-$(date +%Y%m%d).tgz -C /data .
+docker compose -f deploy/docker-compose.yml start leadstack
+```
+
+> 卷级 tar 会把 `backup.pass` 一起打进去——如果你要「备份与钥匙分离」，请把 `backup.pass`
+> 从 tar 里去掉或单独保管，否则打包件被拿走等于备份被解出。
+
+Docker 下的离线恢复：
+
+```sh
+docker compose -f deploy/docker-compose.yml stop leadstack
+docker run --rm -v leadstack_leadstack-data:/data -v "$PWD":/in \
+  --entrypoint /usr/local/bin/leadstack leadstack:local \
+  restore --file /in/manual.lsbak --data-dir /data
+docker compose -f deploy/docker-compose.yml start leadstack
+```
+
+### 校验与排错
+
+```sh
+# 只校验不恢复：解密 + header/manifest/文件哈希/DB 完整性
+./bin/leadstack backup verify --file /tmp/x.lsbak
+```
+
+| 现象 | 含义 | 处理 |
+|---|---|---|
+| `backup: 口令错误` | 口令不对（或 `backup.pass` 不是当初那把） | 换正确的口令文件；**不要**反复试写，先确认钥匙来源 |
+| `backup: 归档损坏或格式不符` | 文件被截断/篡改/不是 LSBAK1 | 换一份备份；确认传输完整（比对 sha256） |
+| `backup: 备份来自更新的版本` | 备份的 `schema_version` 高于当前程序 | 升级控制端到同版本或更新再恢复 |
+| 恢复后凭证全失效 | 归档里缺 `master.key` | 说明备份不完整，换一份 |
+
+### 备份相关环境变量
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `LEADSTACK_BACKUP_INTERVAL` | `24h` | 定时备份间隔（Go duration）；`0s` 表示只手动备份 |
+| `LEADSTACK_BACKUP_RETENTION` | `7` | 保留份数，超出按创建时间删最旧 |
+| `LEADSTACK_BACKUP_INCLUDE_ARTIFACTS` | `false` | 备份是否含上传制品（体积大；不含时恢复后需重新上传制品） |
+| `LEADSTACK_BACKUP_PASSPHRASE` | 空 | 口令（优先于 `<data_dir>/backup.pass`）。容器部署建议用 secret/env_file 注入，别写进 compose 明文 |
+
+默认值以 `internal/config` 实现为准。
 
 ### `bin/leadstack-devssh` 是什么
 

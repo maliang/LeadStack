@@ -17,7 +17,11 @@ SSH_PORT="${SSH_PORT:-0}"   # 0 = 由 devssh 自行分配
 BASE="http://127.0.0.1:${PORT}"
 ADMIN_USER="admin"
 ADMIN_PASS="verify-m4-pass"
-DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/leadstack-m4.XXXXXX")"
+# 选择纯 ASCII 的临时根目录：部署根路径会经过 deploy 的变量白名单校验，
+# 若 TMPDIR 指向含中文的仓库路径（本仓库名含「领栈」），ROOT 会被判非法。
+TMP_CANDIDATE="${TMPDIR:-/tmp}"
+if printf '%s' "$TMP_CANDIDATE" | LC_ALL=C grep -q '[^ -~]'; then TMP_CANDIDATE=/tmp; fi
+DATA_DIR="$(mktemp -d "$TMP_CANDIDATE/leadstack-m4.XXXXXX")"
 DEPLOY_ROOT="$DATA_DIR/deploy-root"     # 部署根目录（控制端传给目标机的 --root）
 FILE_DIR="$DATA_DIR/files"
 LEAD_PID=""; DEVSSH_PID=""; FILE_PID=""; SRV_PID=""

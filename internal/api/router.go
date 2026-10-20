@@ -115,6 +115,19 @@ func (a *API) Router() http.Handler {
 				})
 			})
 
+			// ---- 备份与恢复 ----
+			r.Route("/backups", func(r chi.Router) {
+				r.Get("/", a.handleListBackups)
+				r.Post("/", a.handleCreateBackup)
+				// /backups/restore 必须先于 /{name} 类路由注册（静态优先）。
+				r.Post("/restore", a.handleRestoreUpload)
+				r.Get("/{name}/download", a.handleDownloadBackup)
+				r.Post("/{name}/verify", a.handleVerifyBackup)
+				r.Delete("/{name}", a.handleDeleteBackup)
+			})
+			r.Get("/backup-settings", a.handleGetBackupSettings)
+			r.Patch("/backup-settings", a.handlePatchBackupSettings)
+
 			r.Route("/alerts", func(r chi.Router) {
 				// /alerts/summary 必须先于 /alerts/{alertID} 注册。
 				r.Get("/summary", a.handleAlertSummary)

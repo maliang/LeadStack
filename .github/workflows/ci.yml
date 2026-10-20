@@ -3,6 +3,7 @@
 #   push / PR  -> jq 就绪 -> vet + **gofmt 闸门** + build + test + **go test -race（api/store）**
 #                 + 脚本语法/干跑校验 + make build + make devssh
 #                 -> M0/M1/M2/M3 端到端验收（阻塞）+ M4 端到端验收（稳定前允许失败）
+#                 -> 备份/恢复验收（稳定前允许失败）
 #                 -> docker 构建（前端工程就绪后）
 #   tag v*     -> 上面的检查全绿后，用 goreleaser 交叉编译 5 个目标并发布 Release
 #
@@ -193,10 +194,24 @@ jobs:
           TMPDIR="$PWD/.e2e-logs" bash scripts/verify_m4.sh 2>&1 | tee .e2e-logs/verify_m4.log
           exit "${PIPESTATUS[0]}"
 
+      - name: 备份/恢复验收（稳定前允许失败）
+        id: e2e_backup
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p .e2e-logs
+          if [ ! -f scripts/verify_backup.sh ]; then
+            echo "scripts/verify_backup.sh 尚未就绪，跳过备份验收"
+            exit 0
+          fi
+          # 备份验收会自己起停控制端并用 CLI 做离线恢复，仍需 TMPDIR 落在 workspace 便于取证
+          TMPDIR="$PWD/.e2e-logs" bash scripts/verify_backup.sh 2>&1 | tee .e2e-logs/verify_backup.log
+          exit "${PIPESTATUS[0]}"
+
       - name: 上传 e2e 日志（任一 e2e 失败时）
         # 注意：continue-on-error 的步骤不会让 job 变成 failure，
-        # 所以必须用 steps.<id>.outcome 兜住 M4，否则 M4 的日志会丢。
-        if: failure() || steps.e2e_m4.outcome == 'failure'
+        # 所以必须用 steps.<id>.outcome 兜住 M4 与备份验收，否则它们的日志会丢。
+        if: failure() || steps.e2e_m4.outcome == 'failure' || steps.e2e_backup.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: e2e-logs-${{ github.sha }}

@@ -332,3 +332,37 @@ export function RotateCcwIcon(props: IconProps) {
     </Base>
   )
 }
+
+export function ArchiveIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <rect x="3" y="4" width="18" height="4" rx="1" />
+      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
+    </Base>
+  )
+}
+
+export function DownloadIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M12 3v12M7 10l5 5 5-5M4 20h16" />
+    </Base>
+  )
+}
+
+export function UploadIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <path d="M12 21V9M7 14l5-5 5 5M4 4h16" />
+    </Base>
+  )
+}
+
+export function KeyRoundIcon(props: IconProps) {
+  return (
+    <Base {...props}>
+      <circle cx="8" cy="15" r="4" />
+      <path d="m10.8 12.2 8.2-8.2M16.5 4.5 19 7M14 7l2.5 2.5" />
+    </Base>
+  )
+}

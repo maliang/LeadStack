@@ -36,6 +36,7 @@ const testAdminPassword = "TestPassword-123"
 type testEnv struct {
 	t      *testing.T
 	st     *store.Store
+	cfg    *config.Config
 	api    *API
 	srv    *httptest.Server
 	http   *http.Client
@@ -46,6 +47,7 @@ type testEnv struct {
 	alerts *fakeAlertEngine
 	notif  *fakeNotifier
 	deploy *fakeDeployOrchestrator
+	backup *fakeBackupService
 }
 
 // newTestEnv 启动临时目录 + 临时 SQLite + httptest 服务。
@@ -89,16 +91,20 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 
 	cfg := &config.Config{
-		Listen:            "127.0.0.1:0",
-		DataDir:           dir,
-		DBPath:            dbPath,
-		LogLevel:          slog.LevelError,
-		TokenTTL:          time.Hour,
-		ShutdownTimeout:   time.Second,
-		Version:           "test",
-		DeployRoot:        filepath.Join(dir, "apps"),
-		ArtifactMaxMB:     config.DefaultArtifactMaxMB,
-		DeployConcurrency: config.DefaultDeployConcurrency,
+		Listen:                 "127.0.0.1:0",
+		DataDir:                dir,
+		DBPath:                 dbPath,
+		LogLevel:               slog.LevelError,
+		TokenTTL:               time.Hour,
+		ShutdownTimeout:        time.Second,
+		Version:                "test",
+		DeployRoot:             filepath.Join(dir, "apps"),
+		ArtifactMaxMB:          config.DefaultArtifactMaxMB,
+		DeployConcurrency:      config.DefaultDeployConcurrency,
+		BackupDir:              filepath.Join(dir, "backups"),
+		BackupInterval:         config.DefaultBackupInterval,
+		BackupRetention:        config.DefaultBackupRetention,
+		BackupIncludeArtifacts: false,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 
@@ -125,11 +131,12 @@ func newTestEnv(t *testing.T) *testEnv {
 	notifier := &fakeNotifier{}
 	notifier.autoChannel = true
 	deployStub := &fakeDeployOrchestrator{}
+	backupStub := newFakeBackupService(cfg.BackupDir, cfg.BackupInterval, cfg.BackupRetention)
 
 	a, err := New(Options{
 		Config: cfg, Store: st, Auth: manager, Cipher: cipher, SSH: sshStub,
 		CheckRunner: runner, Jobs: jobRouter, Alerts: alertEngine, Notifier: notifier,
-		Deploy: deployStub,
+		Deploy: deployStub, Backups: backupStub, MaxSchemaVersion: 6,
 		Logger: logger, Version: "test",
 	})
 	if err != nil {
@@ -139,9 +146,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Cleanup(srv.Close)
 
 	return &testEnv{
-		t: t, st: st, api: a, srv: srv, http: srv.Client(),
+		t: t, st: st, cfg: cfg, api: a, srv: srv, http: srv.Client(),
 		cipher: cipher, ssh: sshStub, runner: runner, jobs: jobRouter,
-		alerts: alertEngine, notif: notifier, deploy: deployStub,
+		alerts: alertEngine, notif: notifier, deploy: deployStub, backup: backupStub,
 	}
 }
 

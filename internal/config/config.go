@@ -43,6 +43,16 @@ const (
 	EnvDeployRoot = "LEADSTACK_DEPLOY_ROOT"
 	// EnvPublicURL 是控制端对目标机可达的基地址（upload 制品下载用）。
 	EnvPublicURL = "LEADSTACK_PUBLIC_URL"
+	// EnvBackupDir 是备份归档目录。
+	EnvBackupDir = "LEADSTACK_BACKUP_DIR"
+	// EnvBackupInterval 是定时备份周期（Go duration 字符串）。
+	EnvBackupInterval = "LEADSTACK_BACKUP_INTERVAL"
+	// EnvBackupRetention 是保留的备份份数。
+	EnvBackupRetention = "LEADSTACK_BACKUP_RETENTION"
+	// EnvBackupIncludeArtifacts 是备份是否包含上传制品。
+	EnvBackupIncludeArtifacts = "LEADSTACK_BACKUP_INCLUDE_ARTIFACTS"
+	// EnvBackupPassphrase 是备份加密口令（设置后不再读取 backup.pass）。
+	EnvBackupPassphrase = "LEADSTACK_BACKUP_PASSPHRASE"
 )
 
 // 默认值。
@@ -75,6 +85,12 @@ const (
 	DefaultDeployRoot = "/opt/leadstack/apps"
 	// ArtifactsDirName 是控制端存放上传制品的目录名（位于 DataDir 下）。
 	ArtifactsDirName = "artifacts"
+	// BackupsDirName 是备份归档的默认目录名（位于 DataDir 下）。
+	BackupsDirName = "backups"
+	// DefaultBackupInterval 是定时备份的默认周期。
+	DefaultBackupInterval = 24 * time.Hour
+	// DefaultBackupRetention 是默认保留份数。
+	DefaultBackupRetention = 7
 	// MasterKeyFileName 是主密钥文件名（位于 DataDir 下）。
 	MasterKeyFileName = "master.key"
 	// MasterKeySize 是主密钥字节数（AES-256）。
@@ -122,6 +138,16 @@ type Config struct {
 	DeployRoot string
 	// PublicURL 是控制端对目标机可达的基地址；upload 制品部署时需要。
 	PublicURL string
+	// BackupDir 是备份归档目录（默认 <data_dir>/backups）。
+	BackupDir string
+	// BackupInterval 是定时备份周期。
+	BackupInterval time.Duration
+	// BackupRetention 是保留的备份份数。
+	BackupRetention int
+	// BackupIncludeArtifacts 表示备份是否默认包含上传制品。
+	BackupIncludeArtifacts bool
+	// BackupPassphrase 是备份加密口令（可选；空则读 backup.pass 或自动生成）。
+	BackupPassphrase string
 }
 
 // Load 解析配置。version 由调用方（main）传入，args 通常为 os.Args[1:]。
@@ -146,27 +172,37 @@ func Load(version string, args []string) (*Config, error) {
 	artifactMaxMB := fs.Int("artifact-max-mb", envIntOr(EnvArtifactMaxMB, DefaultArtifactMaxMB), "上传制品体积上限 MB（环境变量 "+EnvArtifactMaxMB+"）")
 	deployRoot := fs.String("deploy-root", envOr(EnvDeployRoot, DefaultDeployRoot), "目标机部署根目录（环境变量 "+EnvDeployRoot+"）")
 	publicURL := fs.String("public-url", strings.TrimSpace(os.Getenv(EnvPublicURL)), "控制端可达基地址，如 http://10.0.0.1:8080（环境变量 "+EnvPublicURL+"）")
+	backupDir := fs.String("backup-dir", envOr(EnvBackupDir, ""), "备份归档目录，默认 <data-dir>/backups（环境变量 "+EnvBackupDir+"）")
+	backupInterval := fs.Duration("backup-interval", defaultDurationOr(EnvBackupInterval, DefaultBackupInterval), "定时备份周期，如 24h（环境变量 "+EnvBackupInterval+"）")
+	backupRetention := fs.Int("backup-retention", envIntOr(EnvBackupRetention, DefaultBackupRetention), "保留备份份数（环境变量 "+EnvBackupRetention+"）")
+	backupIncludeArtifacts := fs.Bool("backup-include-artifacts", envBoolOr(EnvBackupIncludeArtifacts, false), "备份是否包含上传制品（环境变量 "+EnvBackupIncludeArtifacts+"）")
+	backupPassphrase := fs.String("backup-passphrase", os.Getenv(EnvBackupPassphrase), "备份加密口令；留空则读 <data-dir>/backup.pass 或自动生成（环境变量 "+EnvBackupPassphrase+"）")
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("解析命令行参数: %w", err)
 	}
 
 	cfg := &Config{
-		Listen:             strings.TrimSpace(*listen),
-		DataDir:            strings.TrimSpace(*dataDir),
-		AdminPassword:      *adminPassword,
-		TokenTTL:           *tokenTTL,
-		ShutdownTimeout:    *shutdownTimeout,
-		Version:            version,
-		SSHInterval:        *sshInterval,
-		SSHConcurrency:     *sshConcurrency,
-		CheckConcurrency:   *checkConcurrency,
-		CheckIntervalMin:   *checkIntervalMin,
-		AlertEvalInterval:  *alertEvalInterval,
-		AlertRetentionDays: *alertRetentionDays,
-		DeployConcurrency:  *deployConcurrency,
-		ArtifactMaxMB:      *artifactMaxMB,
-		DeployRoot:         strings.TrimSpace(*deployRoot),
-		PublicURL:          strings.TrimSuffix(strings.TrimSpace(*publicURL), "/"),
+		Listen:                 strings.TrimSpace(*listen),
+		DataDir:                strings.TrimSpace(*dataDir),
+		AdminPassword:          *adminPassword,
+		TokenTTL:               *tokenTTL,
+		ShutdownTimeout:        *shutdownTimeout,
+		Version:                version,
+		SSHInterval:            *sshInterval,
+		SSHConcurrency:         *sshConcurrency,
+		CheckConcurrency:       *checkConcurrency,
+		CheckIntervalMin:       *checkIntervalMin,
+		AlertEvalInterval:      *alertEvalInterval,
+		AlertRetentionDays:     *alertRetentionDays,
+		DeployConcurrency:      *deployConcurrency,
+		ArtifactMaxMB:          *artifactMaxMB,
+		DeployRoot:             strings.TrimSpace(*deployRoot),
+		PublicURL:              strings.TrimSuffix(strings.TrimSpace(*publicURL), "/"),
+		BackupDir:              strings.TrimSpace(*backupDir),
+		BackupInterval:         *backupInterval,
+		BackupRetention:        *backupRetention,
+		BackupIncludeArtifacts: *backupIncludeArtifacts,
+		BackupPassphrase:       *backupPassphrase,
 	}
 
 	if cfg.Listen == "" {
@@ -212,6 +248,12 @@ func Load(version string, args []string) (*Config, error) {
 	if cfg.PublicURL != "" && !strings.HasPrefix(cfg.PublicURL, "http://") && !strings.HasPrefix(cfg.PublicURL, "https://") {
 		return nil, errors.New("配置错误: public-url 必须以 http:// 或 https:// 开头")
 	}
+	if cfg.BackupInterval < time.Second || cfg.BackupInterval > 365*24*time.Hour {
+		return nil, errors.New("配置错误: backup-interval 必须在 1s-8760h 之间")
+	}
+	if cfg.BackupRetention < 1 || cfg.BackupRetention > 1000 {
+		return nil, errors.New("配置错误: backup-retention 必须在 1-1000 之间")
+	}
 
 	if raw := strings.TrimSpace(*masterKeyHex); raw != "" {
 		key, err := DecodeMasterKey(raw)
@@ -227,6 +269,15 @@ func Load(version string, args []string) (*Config, error) {
 	}
 	cfg.DataDir = absDataDir
 	cfg.DBPath = filepath.Join(absDataDir, DefaultDBFileName)
+	if cfg.BackupDir == "" {
+		cfg.BackupDir = filepath.Join(absDataDir, BackupsDirName)
+	} else {
+		absBackupDir, berr := filepath.Abs(cfg.BackupDir)
+		if berr != nil {
+			return nil, fmt.Errorf("解析备份目录 %q: %w", cfg.BackupDir, berr)
+		}
+		cfg.BackupDir = absBackupDir
+	}
 
 	lvl, err := ParseLogLevel(*logLevel)
 	if err != nil {
@@ -267,6 +318,21 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// BackupPassFile 返回备份口令文件路径（<data-dir>/backup.pass）。
+func (c *Config) BackupPassFile() string {
+	return filepath.Join(c.DataDir, "backup.pass")
+}
+
+// RestorePendingDir 返回「暂存恢复」目录（<data-dir>/.restore-pending）。
+func (c *Config) RestorePendingDir() string {
+	return filepath.Join(c.DataDir, ".restore-pending")
+}
+
+// KnownHostsPath 返回 known_hosts 文件路径（<data-dir>/known_hosts）。
+func (c *Config) KnownHostsPath() string {
+	return filepath.Join(c.DataDir, "known_hosts")
 }
 
 // ArtifactsDir 返回上传制品的存放目录（<data-dir>/artifacts）。
@@ -361,4 +427,19 @@ func defaultDurationOr(key string, fallback time.Duration) time.Duration {
 		return time.Duration(secs) * time.Second
 	}
 	return fallback
+}
+
+// envBoolOr 读取布尔环境变量（1/true/yes/on 为真），非法或缺失时返回 fallback。
+func envBoolOr(key string, fallback bool) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch raw {
+	case "":
+		return fallback
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }

@@ -44,30 +44,39 @@ type Options struct {
 	// Notifier 是通知渠道端口（*NotifyAdapter）；为 nil 时渠道配置不做强校验、测试发送返回未启用。
 	Notifier Notifier
 	// Deploy 是发布编排端口；为 nil 时创建发布只落库不执行（run 保持 pending）。
-	Deploy    DeployOrchestrator
-	Version   string
-	StartedAt time.Time
+	Deploy DeployOrchestrator
+	// Backups 是备份能力端口；为 nil 时备份接口返回 503、定时备份不启动。
+	Backups BackupService
+	// MaxSchemaVersion 是当前程序支持的最高迁移版本，用于拒绝「来自更新版本」的备份；
+	// 为 0 时取 defaultMaxSchemaVersion。
+	MaxSchemaVersion int
+	Version          string
+	StartedAt        time.Time
 }
 
 // API 汇聚处理器的所有依赖。
 type API struct {
-	cfg       *config.Config
-	st        *store.Store
-	authMgr   *auth.Manager
-	cipher    *credential.Cipher
-	ssh       SSHService
-	checks    CheckRunner
-	jobs      JobRouter
-	alerts    AlertEngine
-	notifier  Notifier
-	deploy    DeployOrchestrator
-	artifacts *artifactStore
-	logTap    *agentLogTap
-	logger    *slog.Logger
-	version   string
-	startedAt time.Time
-	web       http.Handler
-	hub       *Hub
+	cfg              *config.Config
+	st               *store.Store
+	authMgr          *auth.Manager
+	cipher           *credential.Cipher
+	ssh              SSHService
+	checks           CheckRunner
+	jobs             JobRouter
+	alerts           AlertEngine
+	notifier         Notifier
+	deploy           DeployOrchestrator
+	artifacts        *artifactStore
+	logTap           *agentLogTap
+	backups          BackupService
+	maxSchemaVersion int
+	// backupWake 用于「设置变更后立即重排定时备份」，容量 1 的非阻塞信号。
+	backupWake chan struct{}
+	logger     *slog.Logger
+	version    string
+	startedAt  time.Time
+	web        http.Handler
+	hub        *Hub
 }
 
 // New 校验依赖并构造 API。
@@ -102,24 +111,35 @@ func New(opts Options) (*API, error) {
 		version = "dev"
 	}
 	return &API{
-		cfg:       opts.Config,
-		st:        opts.Store,
-		authMgr:   opts.Auth,
-		cipher:    opts.Cipher,
-		ssh:       opts.SSH,
-		checks:    opts.CheckRunner,
-		jobs:      opts.Jobs,
-		alerts:    opts.Alerts,
-		notifier:  opts.Notifier,
-		deploy:    opts.Deploy,
-		artifacts: artifacts,
-		logTap:    newAgentLogTap(opts.Store, logger),
-		logger:    logger,
-		version:   version,
-		startedAt: startedAt,
-		web:       webui.Handler(),
-		hub:       hub,
+		cfg:              opts.Config,
+		st:               opts.Store,
+		authMgr:          opts.Auth,
+		cipher:           opts.Cipher,
+		ssh:              opts.SSH,
+		checks:           opts.CheckRunner,
+		jobs:             opts.Jobs,
+		alerts:           opts.Alerts,
+		notifier:         opts.Notifier,
+		deploy:           opts.Deploy,
+		artifacts:        artifacts,
+		logTap:           newAgentLogTap(opts.Store, logger),
+		backups:          opts.Backups,
+		maxSchemaVersion: resolvedMaxSchemaVersion(opts.MaxSchemaVersion),
+		backupWake:       make(chan struct{}, 1),
+		logger:           logger,
+		version:          version,
+		startedAt:        startedAt,
+		web:              webui.Handler(),
+		hub:              hub,
 	}, nil
+}
+
+// resolvedMaxSchemaVersion 返回生效的最高迁移版本（未注入时用兜底常量）。
+func resolvedMaxSchemaVersion(v int) int {
+	if v > 0 {
+		return v
+	}
+	return defaultMaxSchemaVersion
 }
 
 // Logger 返回服务日志器。

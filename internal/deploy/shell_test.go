@@ -515,3 +515,116 @@ func makeTarGz(t *testing.T, files map[string]string) []byte {
 	}
 	return buf.Bytes()
 }
+
+// TestChinesePathRealShell 在真实中文目录下执行切换与清理，
+// 证明「放宽 UTF-8」之后生成的命令仍然正确（不只是校验层通过）。
+func TestChinesePathRealShell(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "应用领栈")
+	rel1 := filepath.Join(root, "releases", "r1")
+	rel2 := filepath.Join(root, "releases", "r2")
+	writeFile(t, filepath.Join(rel1, "说明.txt"), "第一版", 0o644)
+	writeFile(t, filepath.Join(rel2, "说明.txt"), "第二版", 0o644)
+
+	switchCmd := switchCurrentCommand(root, rel1, "r1")
+	if !strings.Contains(switchCmd, "'"+rel1+"'") {
+		t.Fatalf("路径必须单引号包裹: %s", switchCmd)
+	}
+	mustRunShell(t, switchCmd)
+	cur := filepath.Join(root, "current")
+	if fi, err := os.Lstat(cur); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("中文目录下 current 必须是符号链接: err=%v", err)
+	}
+	if got := readLinkTarget(t, cur); got != rel1 {
+		t.Fatalf("current 指向 %q want %q", got, rel1)
+	}
+	if data, err := os.ReadFile(filepath.Join(cur, "说明.txt")); err != nil || string(data) != "第一版" {
+		t.Fatalf("中文目录内容读取失败: %q err=%v", string(data), err)
+	}
+
+	// 中文目录下再次切换 + 清理（current/prev 必须保住）
+	mustRunShell(t, switchCurrentCommand(root, rel2, "r2"))
+	if got := readLinkTarget(t, cur); got != rel2 {
+		t.Fatalf("第二次切换指向 %q", got)
+	}
+	mustRunShell(t, cleanupCommand(root, "r2", "r1", 5))
+	for _, keep := range []string{"r1", "r2"} {
+		if _, err := os.Stat(filepath.Join(root, "releases", keep)); err != nil {
+			t.Fatalf("清理不应删除 %s: %v", keep, err)
+		}
+	}
+	if got := readLinkTarget(t, cur); got != rel2 {
+		t.Fatalf("清理破坏了 current: %q", got)
+	}
+}
+
+// TestBinaryPlanWithChineseRootRealEndToEnd 用**中文部署根**跑完整 binary 发布：
+// 这正是本地仓库路径含「领栈」时 M4 失败的那个场景。
+func TestBinaryPlanWithChineseRootRealEndToEnd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("真实执行用例在 -short 下跳过")
+	}
+	artifact := makeTarGz(t, map[string]string{"地图.txt": "中文内容"})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(artifact)
+	}))
+	defer srv.Close()
+
+	base := t.TempDir()
+	root := filepath.Join(base, "领栈", "部署根") // 中文部署根
+	appRoot := filepath.Join(root, "demo-app")
+	tmpl := Template{Kind: KindBinary, Content: "#!/bin/sh\necho \"started {{VERSION}} in {{ROOT}}\" > {{ROOT}}/started.txt\n"}
+	plan, err := Build(tmpl, Artifact{
+		Kind: ArtifactURL, Location: srv.URL + "/app-1.0.0.tar.gz",
+		SHA256: fmt.Sprintf("%x", sha256.Sum256(artifact)),
+	}, BuildParams{AppSlug: "demo-app", ReleaseID: "r1", Version: "1.0.0", Root: root, Now: 1})
+	if err != nil {
+		t.Fatalf("中文部署根构建计划失败: %v", err)
+	}
+	if plan.Root != appRoot {
+		t.Fatalf("Plan.Root=%q want %q", plan.Root, appRoot)
+	}
+	// 关键：所有命令里的路径都要单引号包裹
+	for _, s := range plan.Steps {
+		if strings.Contains(s.Command, root) && !strings.Contains(s.Command, "'"+root) {
+			t.Fatalf("步骤 %s 的命令未用单引号包裹中文路径:\n%s", s.Name, s.Command)
+		}
+	}
+
+	exec := NewExecutor(&shRunner{}, ExecutorOptions{Logger: quietLogger()})
+	out, err := exec.RunPlan(context.Background(), "srv-local", plan, Hooks{})
+	if err != nil || out.Status != StatusSuccess {
+		t.Fatalf("中文部署根下发布应成功: %+v err=%v", out, err)
+	}
+
+	cur := filepath.Join(appRoot, "current")
+	if got := readLinkTarget(t, cur); got != filepath.Join(appRoot, "releases", "r1") {
+		t.Fatalf("current 指向 %q", got)
+	}
+	if data, err := os.ReadFile(filepath.Join(cur, "地图.txt")); err != nil || string(data) != "中文内容" {
+		t.Fatalf("中文文件名产物读取失败: %q err=%v", string(data), err)
+	}
+	started, err := os.ReadFile(filepath.Join(appRoot, "started.txt"))
+	if err != nil || !strings.Contains(string(started), "1.0.0") || !strings.Contains(string(started), root) {
+		t.Fatalf("启动脚本未正确渲染中文根目录: %q err=%v", string(started), err)
+	}
+	meta, err := os.ReadFile(filepath.Join(appRoot, ".leadstack", "releases", "r1.json"))
+	if err != nil {
+		t.Fatalf("元数据未落盘: %v", err)
+	}
+	if !strings.Contains(string(meta), "领栈") {
+		t.Fatalf("元数据里应记录中文根目录: %s", string(meta))
+	}
+}
+
+// TestShQuoteNeutralizesTildeAndGlob 是对「单引号是否足以保护 ~ / *」的实证：
+// 单引号内的 ~ 与 * 不会被 shell 展开。
+func TestShQuoteNeutralizesTildeAndGlob(t *testing.T) {
+	out, _, code := runShell(t, "printf '%s\\n' "+shQuote("~/projects")+" "+shQuote("*")+" "+shQuote("$HOME"))
+	if code != 0 {
+		t.Fatalf("执行失败")
+	}
+	if strings.TrimSpace(out) != "~/projects\n*\n$HOME" {
+		t.Fatalf("单引号未阻止展开，输出=%q", out)
+	}
+}

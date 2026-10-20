@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // 模板占位符名（§26，已冻结）。Render 同时接受 {{X}} 与 {{.X}} 两种写法。
@@ -28,8 +29,6 @@ var (
 	versionRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	releaseRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	sha256Re  = regexp.MustCompile(`^[A-Fa-f0-9]{64}$`)
-	// 绝对路径：禁止空格、引号、`;|&$`、反引号、换行、通配符等所有 shell 元字符。
-	absPathRe = regexp.MustCompile(`^/[A-Za-z0-9._+~/-]*$`)
 	// http(s) URL：允许查询串必需的 & = ? % 等，禁止引号、反引号、$、空格、换行、分号与管道。
 	urlRe = regexp.MustCompile(`^https?://[A-Za-z0-9._~:/?#\[\]@!&()*+,=%-]+$`)
 	// 容器镜像引用：registry[:port]/path[:tag][@sha256:...]
@@ -138,24 +137,60 @@ func validateSHA256(v string) error {
 	return nil
 }
 
-// validateAbsPath 校验绝对路径（部署根 / release 目录）。
+// 路径类变量的约束（ROOT / RELEASE_DIR）。
+//
+// 允许 **UTF-8 可打印字符**（中文目录名 `/srv/应用`、`/Users/张三/项目` 必须可用），
+// 但仍然拒绝一切会破坏 shell 命令的字符：
+//
+//   - 空白（空格/Tab/换行/回车）：路径里有空格就得靠引号，容易在模板里漏；
+//   - 控制字符与不可打印字符（含 NUL、RTL 覆写 U+202E 之类的格式字符）；
+//   - shell 元字符 ; | & $ ` " ' ( ) { } < > * ? ! ~ #。
+//
+// 说明：本包生成的所有命令里路径**一律经 shQuote 单引号包裹**（已用真实 shell 验证：
+// 单引号内的 `~`、`*`、`$` 都不会被展开），所以单引号本身足够安全；
+// 这里仍然把这些字符禁掉，是为了不依赖「模板作者/未来改动记得加引号」，属于纵深防御。
+const (
+	maxPathBytes = 1024
+	// pathForbiddenRunes 是路径里一律拒绝的 shell 元字符（含会被展开的 ~ 与通配符 *）。
+	pathForbiddenRunes = ";|&$`\"'(){}<>*?!~#"
+)
+
+// validateAbsPath 校验绝对路径（部署根 / release 目录），允许 UTF-8。
 func validateAbsPath(v string) error {
 	if v == "" {
 		return errors.New("不能为空")
 	}
+	if len(v) > maxPathBytes {
+		return fmt.Errorf("过长（%d 字节，上限 %d）", len(v), maxPathBytes)
+	}
 	if !strings.HasPrefix(v, "/") {
 		return fmt.Errorf("必须是绝对路径: %q", snippetText(v))
 	}
-	if !absPathRe.MatchString(v) {
-		return fmt.Errorf("含非法字符（只允许字母/数字/._+~/-，禁止空格、引号、;|&$、反引号与换行）: %q", snippetText(v))
-	}
 	if strings.HasSuffix(v, "/") {
 		return fmt.Errorf("不能以 / 结尾: %q", snippetText(v))
+	}
+	for _, r := range v {
+		if err := validatePathRune(r); err != nil {
+			return fmt.Errorf("%s（问题字符 %q）: %q", err.Error(), r, snippetText(v))
+		}
 	}
 	for _, seg := range strings.Split(v, "/") {
 		if seg == ".." {
 			return fmt.Errorf("不能包含 .. 路径段: %q", snippetText(v))
 		}
+	}
+	return nil
+}
+
+// validatePathRune 逐个字符校验路径（UTF-8 友好：只按「可打印/危险字符」判断，不看码点范围）。
+func validatePathRune(r rune) error {
+	switch {
+	case r == ' ', r == '\t', r == '\n', r == '\r', r == '\v', r == '\f':
+		return errors.New("不能包含空白字符（空格/制表符/换行）")
+	case !unicode.IsPrint(r):
+		return errors.New("只能包含可打印字符（禁止控制字符/不可打印字符）")
+	case strings.ContainsRune(pathForbiddenRunes, r):
+		return errors.New("不能包含 shell 元字符（; | & $ ` \" ' ( ) { } < > * ? ! ~ #）")
 	}
 	return nil
 }

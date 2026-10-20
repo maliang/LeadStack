@@ -11,6 +11,13 @@
 /.deploy-root/
 /deploy-root/
 
+# 备份与恢复的运行时文件（日常备份 / verify_backup.sh 产出，**绝不可入库**）
+#   backup.pass 是解密备份的唯一钥匙，一旦提交等于把备份内容公开
+data/backups/
+*.lsbak
+*.pre-restore-*/
+backup.pass
+
 # 前端依赖与产物
 node_modules/
 web/node_modules/

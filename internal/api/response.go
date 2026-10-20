@@ -17,6 +17,8 @@ const (
 	codeConflict        = "conflict"
 	codeInvalidArgument = "invalid_argument"
 	codeInternal        = "internal"
+	// codeSchemaTooNew 表示备份由更新版本创建（M4.5 §33 契约新增）。
+	codeSchemaTooNew = "schema_too_new"
 )
 
 // maxRequestBodyBytes 限制请求体大小，避免超大 JSON 打爆内存。

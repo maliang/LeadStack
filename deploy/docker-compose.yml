@@ -31,7 +31,20 @@ services:
       # LEADSTACK_ARTIFACT_MAX_MB: "512"
       # 目标机上的部署根目录基路径（仅在控制端自己也作为部署目标时才需要，见下方 volumes）
       # LEADSTACK_DEPLOY_ROOT: /opt/leadstack/apps
+      # ---- 备份与恢复（都可选，默认值见 internal/config）----
+      # 定时备份间隔（Go duration；设为 0s/关闭则只做手动备份）
+      # LEADSTACK_BACKUP_INTERVAL: "24h"
+      # 备份保留份数（超出按创建时间删最旧）
+      # LEADSTACK_BACKUP_RETENTION: "7"
+      # 备份是否包含上传型制品（制品体积大，默认不含；不含时恢复后需重新上传制品）
+      # LEADSTACK_BACKUP_INCLUDE_ARTIFACTS: "false"
+      # 口令：优先用 <data_dir>/backup.pass（容器内 /data/backup.pass，随卷持久化）。
+      # 若走环境变量，请用 docker secret / env_file 注入，**不要写死在 compose 里**：
+      # LEADSTACK_BACKUP_PASSPHRASE: "从 secret 注入，勿明文"
     volumes:
+      # /data 卷同时保存：SQLite 库 + 上传制品 + 备份归档（/data/backups）+ 解密口令（/data/backup.pass）。
+      # ⚠ backup.pass 是解密备份的唯一钥匙，必须单独备份（例如 docker cp 出来另存），
+      #   否则卷丢失/重建后，已经拷出去的 .lsbak 将永久无法解密。
       - leadstack-data:/data
       # 可选：控制端同时作为部署目标时（本机 devssh / binary 模板），
       # 把目标机部署根目录挂出来，让 <root>/current -> releases/<ts>-<hash> 快照、

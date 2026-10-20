@@ -43,6 +43,24 @@ const adminUsername = "admin"
 const sweepInterval = 5 * time.Second
 
 func main() {
+	// 子命令分发：只认 os.Args[1] 的三个字面量，其余（含所有 -flag）保持原有「启动服务」行为。
+	if isSubcommand(os.Args[1:]) {
+		switch os.Args[1] {
+		case "backup":
+			if err := runBackupCommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "leadstack backup: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "restore":
+			if err := runRestoreCommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "leadstack restore: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+
 	if err := run(); err != nil {
 		slog.Error("控制端退出", "err", err)
 		os.Exit(1)
@@ -64,6 +82,18 @@ func run() error {
 
 	if err := cfg.EnsureDataDir(); err != nil {
 		return err
+	}
+
+	// 关键顺序：**先应用暂存恢复，再打开数据库**（否则可能以旧库运行在新文件之上）。
+	if err := applyPendingRestoreIfAny(cfg, logger); err != nil {
+		return err
+	}
+
+	// pid 文件供 CLI `restore` 判断「服务是否已停止」。
+	if err := writePIDFile(cfg.DataDir); err != nil {
+		logger.Warn("写入 pid 文件失败（CLI restore 将无法检测服务占用）", "err", err)
+	} else {
+		defer removePIDFile(cfg.DataDir)
 	}
 
 	// 收到 SIGINT/SIGTERM 后取消 ctx，触发优雅关闭。
@@ -186,20 +216,28 @@ func run() error {
 		defer deployOrch.Close()
 	}
 
+	// M4.5：备份服务（口令解析与归档格式由 internal/backup 负责）。
+	backupService, err := api.NewBackupService(cfg, logger)
+	if err != nil {
+		return err
+	}
+
 	srv, err := api.New(api.Options{
-		Config:      cfg,
-		Store:       st,
-		Auth:        authMgr,
-		Cipher:      cipher,
-		SSH:         sshClient,
-		CheckRunner: api.NewCheckRunner(scheduler, logger),
-		Jobs:        dispatcher,
-		Hub:         hub,
-		Alerts:      alertEngine,
-		Notifier:    notifier,
-		Deploy:      deployOrch,
-		Logger:      logger,
-		Version:     version,
+		Config:           cfg,
+		Store:            st,
+		Auth:             authMgr,
+		Cipher:           cipher,
+		SSH:              sshClient,
+		CheckRunner:      api.NewCheckRunner(scheduler, logger),
+		Jobs:             dispatcher,
+		Hub:              hub,
+		Backups:          backupService,
+		MaxSchemaVersion: currentSchemaVersion,
+		Alerts:           alertEngine,
+		Notifier:         notifier,
+		Deploy:           deployOrch,
+		Logger:           logger,
+		Version:          version,
 	})
 	if err != nil {
 		return err
@@ -222,6 +260,11 @@ func run() error {
 
 	// 把部署日志旁路接到 HubSender：agent 模式的 job.log 实时写入 release_logs。
 	srv.WireAgentLogTap(hubSender)
+
+	// 定时备份循环（独立 goroutine，与清扫/告警解耦）。
+	backupCtx, cancelBackups := context.WithCancel(ctx)
+	defer cancelBackups()
+	go srv.RunBackupScheduler(backupCtx)
 
 	// 告警评估循环：服务器上下线巡检 + 指标阈值评估。
 	alertCtx, cancelAlerts := context.WithCancel(ctx)
@@ -259,6 +302,7 @@ func run() error {
 	cancelCollect()
 	cancelChecks()
 	cancelAlerts()
+	cancelBackups()
 	// WebSocket 连接已被 hijack，http.Server.Shutdown 不会关闭它们，需要显式处理。
 	srv.Hub().CloseAll()
 
@@ -314,6 +358,21 @@ func ensureMasterKeyPerm(path string, logger *slog.Logger) error {
 		return fmt.Errorf("收紧主密钥文件权限 %s: %w", path, err)
 	}
 	return nil
+}
+
+// isSubcommand 判断是否为 CLI 子命令（backup / restore）。
+//
+// 只认 os.Args[1] 的字面量：`leadstack -listen ...` 等仍走「启动服务」。
+func isSubcommand(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "backup", "restore":
+		return true
+	default:
+		return false
+	}
 }
 
 // ensureAdmin 在用户表为空时创建初始管理员。

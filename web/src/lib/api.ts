@@ -576,6 +576,68 @@ export interface ReleaseFilters {
   limit?: number
 }
 
+
+/* ------------------------------------------------------------------ */
+/* 备份与恢复（契约第 30/31/33 节）                                    */
+/* ------------------------------------------------------------------ */
+
+export interface BackupInfo {
+  name: string
+  size_bytes: number
+  created_at: number | null
+  includes_artifacts: boolean
+  schema_version: number | null
+  /** 归档文件本身的 sha256；列表里通常只给前缀或完整值 */
+  sha256: string | null
+}
+
+export interface BackupManifestFile {
+  name: string
+  size_bytes: number
+  sha256: string | null
+}
+
+export interface BackupManifest {
+  format_version: number | null
+  app_version: string | null
+  schema_version: number | null
+  created_at: number | null
+  includes_artifacts: boolean
+  files: BackupManifestFile[]
+}
+
+export interface BackupVerifyResult {
+  ok: boolean
+  manifest: BackupManifest | null
+  error: string | null
+}
+
+export interface BackupSettings {
+  enabled: boolean
+  /** Go duration 字符串，如 6h / 12h / 24h / 30m */
+  interval: string
+  /** 保留份数 */
+  retention: number
+  include_artifacts: boolean
+}
+
+export interface RestoreStagedResult {
+  restart_required: boolean
+  /** 暂存归档文件名（后端字段可能是 archive_name 或 source） */
+  archive_name: string | null
+  uploaded_at: number | null
+  size_bytes: number | null
+  schema_version: number | null
+  sha256: string | null
+  /** 暂存目录（后端可能不返回） */
+  staged_path: string | null
+}
+
+export interface BackupDownload {
+  blob: Blob
+  filename: string
+}
+
 /* ------------------------------------------------------------------ */
 /* M3：告警（契约第 18/20 节）                                          */
 /* ------------------------------------------------------------------ */
@@ -1272,6 +1334,73 @@ export function normalizeReleaseLogs(input: unknown): ReleaseLogEntry[] {
     .sort((a, b) => a.seq - b.seq)
 }
 
+/* ---------------------- 备份：归一化 ---------------------- */
+
+export function normalizeBackupInfo(input: unknown): BackupInfo {
+  const raw = toRecord(input) ?? {}
+  return {
+    name: toText(raw.name) ?? '',
+    size_bytes: toNumber(raw.size_bytes) ?? 0,
+    created_at: toNumber(raw.created_at),
+    includes_artifacts: toBool(raw.includes_artifacts),
+    schema_version: toNumber(raw.schema_version),
+    sha256: toText(raw.sha256),
+  }
+}
+
+export function normalizeBackupManifest(input: unknown): BackupManifest | null {
+  const raw = toRecord(input)
+  if (!raw) return null
+  return {
+    format_version: toNumber(raw.format_version),
+    app_version: toText(raw.app_version),
+    schema_version: toNumber(raw.schema_version),
+    created_at: toNumber(raw.created_at),
+    includes_artifacts: toBool(raw.includes_artifacts),
+    files: extractList(raw.files, ['files']).map((item) => {
+      const file = toRecord(item) ?? {}
+      return {
+        name: toText(file.name) ?? '',
+        size_bytes: toNumber(file.size_bytes) ?? 0,
+        sha256: toText(file.sha256),
+      }
+    }),
+  }
+}
+
+export function normalizeBackupSettings(input: unknown): BackupSettings {
+  const raw = toRecord(input) ?? {}
+  return {
+    enabled: toBool(raw.enabled, false),
+    interval: toText(raw.interval) ?? '24h',
+    retention: toNumber(raw.retention) ?? 7,
+    include_artifacts: toBool(raw.include_artifacts, false),
+  }
+}
+
+export function normalizeBackupVerifyResult(input: unknown): BackupVerifyResult {
+  const raw = toRecord(input) ?? {}
+  return {
+    ok: toBool(raw.ok, false),
+    manifest: normalizeBackupManifest(raw.manifest),
+    error: toText(raw.error ?? raw.message),
+  }
+}
+
+export function normalizeRestoreStagedResult(input: unknown): RestoreStagedResult {
+  const raw = toRecord(input) ?? {}
+  const staged = toRecord(raw.staged) ?? {}
+  return {
+    restart_required: toBool(raw.restart_required, true),
+    archive_name: toText(staged.archive_name ?? staged.source ?? raw.archive_name),
+    uploaded_at: toNumber(staged.uploaded_at ?? staged.created_at ?? raw.uploaded_at),
+    size_bytes: toNumber(staged.size_bytes ?? raw.size_bytes),
+    schema_version: toNumber(staged.schema_version ?? raw.schema_version),
+    sha256: toText(staged.archive_sha256 ?? raw.sha256),
+    staged_path: toText(raw.staged_path ?? raw.staged_to),
+  }
+}
+
 export function normalizeCredential(input: unknown): Credential {
   const raw = toRecord(input) ?? {}
   return {
@@ -1872,6 +2001,76 @@ export const api = {
   /** POST /releases/{id}/cancel —— 取消仍在 pending/running 的 run */
   cancelRelease(id: string): Promise<unknown> {
     return request<unknown>(`/releases/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+  },
+
+  /* ---------------------- 备份与恢复（契约第 33 节） ---------------------- */
+
+  backups(): Promise<BackupInfo[]> {
+    return request<unknown>('/backups').then((raw) =>
+      extractList(raw, ['backups', 'items']).map(normalizeBackupInfo),
+    )
+  },
+
+  /** POST /backups → 201 + Info（在线备份，不阻塞写入过久） */
+  createBackup(includeArtifacts: boolean): Promise<BackupInfo> {
+    return request<unknown>('/backups', {
+      method: 'POST',
+      body: { include_artifacts: includeArtifacts },
+    }).then(normalizeBackupInfo)
+  },
+
+  /** GET /backups/{name}/download —— 带鉴权下载，返回 Blob（前端再触发保存） */
+  async downloadBackup(name: string): Promise<BackupDownload> {
+    const token = getToken()
+    const response = await fetch(`${API_PREFIX}/backups/${encodeURIComponent(name)}/download`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!response.ok) {
+      let message = `下载失败（HTTP ${response.status}）`
+      try {
+        const payload = (await response.json()) as ErrorEnvelope
+        if (payload?.error?.message) message = payload.error.message
+      } catch {
+        /* ignore */
+      }
+      if (response.status === 401) {
+        clearToken()
+        unauthorizedHandler?.()
+      }
+      throw new ApiError(response.status, 'download_failed', message)
+    }
+    const disposition = response.headers.get('Content-Disposition') ?? ''
+    const match = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition)
+    const filename = match ? decodeURIComponent(match[1].replace(/"/g, '')) : name
+    return { blob: await response.blob(), filename }
+  },
+
+  /** POST /backups/{name}/verify → {ok, manifest}；失败为 400 + 可读原因 */
+  verifyBackup(name: string): Promise<BackupVerifyResult> {
+    return request<unknown>(`/backups/${encodeURIComponent(name)}/verify`, {
+      method: 'POST',
+    }).then(normalizeBackupVerifyResult)
+  },
+
+  deleteBackup(name: string): Promise<unknown> {
+    return request<unknown>(`/backups/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  },
+
+  /** POST /backups/restore（multipart 上传归档）→ 202 {restart_required:true} */
+  restoreBackup(file: File): Promise<RestoreStagedResult> {
+    const form = new FormData()
+    form.append('file', file, file.name)
+    return requestMultipart<unknown>('/backups/restore', form).then(normalizeRestoreStagedResult)
+  },
+
+  backupSettings(): Promise<BackupSettings> {
+    return request<unknown>('/backup-settings').then(normalizeBackupSettings)
+  },
+
+  updateBackupSettings(payload: BackupSettings): Promise<BackupSettings> {
+    return request<unknown>('/backup-settings', { method: 'PATCH', body: payload }).then(
+      normalizeBackupSettings,
+    )
   },
 }
 

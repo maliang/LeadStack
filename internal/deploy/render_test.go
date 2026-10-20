@@ -220,3 +220,123 @@ func TestSnippetTextSanitizesAndTruncates(t *testing.T) {
 		t.Fatalf("应截断: len=%d", len(got))
 	}
 }
+
+// TestPathVariablesAllowUTF8 覆盖中文用户场景：中文/多语言目录名必须可用。
+func TestPathVariablesAllowUTF8(t *testing.T) {
+	paths := []string{
+		"/srv/应用/releases-1",
+		"/Users/张三/项目/领栈",
+		"/opt/日本語/アプリ",
+		"/srv/Ünïcode/Äpp",
+		"/srv/مشروع/تطبيق",
+		"/srv/🚀/rocket",
+		"/srv/应用_v1.2+build-3",
+	}
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			vars := validVars()
+			vars[VarRoot] = p
+			vars[VarReleaseDir] = p + "/releases/r1"
+			got, err := Render("{{ROOT}}|{{RELEASE_DIR}}", vars)
+			if err != nil {
+				t.Fatalf("中文/UTF-8 路径应被接受，得到 %v", err)
+			}
+			if got != p+"|"+p+"/releases/r1" {
+				t.Fatalf("渲染结果=%q", got)
+			}
+		})
+	}
+}
+
+// TestPathVariablesStillRejectDanger 确认放宽 UTF-8 之后，安全边界一点没松。
+func TestPathVariablesStillRejectDanger(t *testing.T) {
+	bad := map[string]string{
+		"空格":      "/srv/my app",
+		"制表符":     "/srv/my\tapp",
+		"换行":      "/srv/app\nrm -rf /",
+		"回车":      "/srv/app\rx",
+		"分号":      "/srv/app;rm -rf /",
+		"管道":      "/srv/app|id",
+		"与号":      "/srv/app&&id",
+		"美元":      "/srv/app$HOME",
+		"命令替换":    "/srv/app$(touch /tmp/pwned)",
+		"反引号":     "/srv/app`id`",
+		"双引号":     `/srv/app"x`,
+		"单引号":     "/srv/app'x",
+		"圆括号":     "/srv/app(/x)",
+		"花括号":     "/srv/app{1,2}",
+		"重定向":     "/srv/app>x",
+		"输入重定向":   "/srv/app<x",
+		"通配符星号":   "/srv/app*",
+		"通配符问号":   "/srv/app?",
+		"叹号":      "/srv/app!",
+		"波浪号":     "~/项目",
+		"路径中的波浪号": "/srv/~/app",
+		"井号":      "/srv/app#x",
+		"路径穿越":    "/srv/../etc",
+		"路径穿越中段":  "/srv/a/../../etc",
+		"NUL":     "/srv/app\x00x",
+		"控制字符":    "/srv/app\x01x",
+		"RTL 覆写":  "/srv/app\u202ex",
+		"相对路径":    "srv/app",
+		"结尾斜杠":    "/srv/app/",
+		"空":       "",
+	}
+	for name, p := range bad {
+		t.Run(name, func(t *testing.T) {
+			vars := validVars()
+			vars[VarRoot] = p
+			if _, err := Render("{{ROOT}}", vars); err == nil {
+				t.Fatalf("路径 %q 必须被拒绝", p)
+			}
+			vars = validVars()
+			vars[VarReleaseDir] = p
+			if _, err := Render("{{RELEASE_DIR}}", vars); err == nil {
+				t.Fatalf("RELEASE_DIR=%q 必须被拒绝", p)
+			}
+		})
+	}
+}
+
+// TestPathVariableLengthLimit 保留长度上限（防超长注入）。
+func TestPathVariableLengthLimit(t *testing.T) {
+	vars := validVars()
+	vars[VarRoot] = "/srv/" + strings.Repeat("a", maxPathBytes-6)
+	if _, err := Render("{{ROOT}}", vars); err != nil {
+		t.Fatalf("刚好到上限的路径应被接受: %v", err)
+	}
+	vars[VarRoot] = "/srv/" + strings.Repeat("a", maxPathBytes)
+	if _, err := Render("{{ROOT}}", vars); err == nil {
+		t.Fatalf("超过上限的路径必须被拒绝")
+	}
+	// 中文路径同样受字节数上限约束
+	vars[VarRoot] = "/srv/" + strings.Repeat("应", 400)
+	if _, err := Render("{{ROOT}}", vars); err == nil {
+		t.Fatalf("超长中文路径必须被拒绝")
+	}
+}
+
+// TestNonPathVariablesUnchanged 确保本次放宽**没有**波及 URL/版本号/slug/releaseID/sha。
+func TestNonPathVariablesUnchanged(t *testing.T) {
+	cases := []struct{ name, varN, value string }{
+		{"URL 中文", VarArtifactURL, "https://e/应用/app.tgz"},
+		{"URL 空格", VarArtifactURL, "https://e/a b"},
+		{"URL 分号", VarArtifactURL, "https://e/a;rm"},
+		{"URL 反引号", VarArtifactURL, "https://e/`id`"},
+		{"URL $()", VarArtifactURL, "https://e/$(id)"},
+		{"版本号中文", VarVersion, "1.0-应用"},
+		{"版本号空格", VarVersion, "1.0 beta"},
+		{"slug 中文", VarAppSlug, "应用"},
+		{"releaseID 中文", VarReleaseID, "发布20261019"},
+		{"sha 中文", VarArtifactSHA256, strings.Repeat("应", 64)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vars := validVars()
+			vars[tc.varN] = tc.value
+			if _, err := Render("{{"+tc.varN+"}}", vars); err == nil {
+				t.Fatalf("%s 的值 %q 必须被拒绝（白名单不得放松）", tc.varN, tc.value)
+			}
+		})
+	}
+}

@@ -6,6 +6,7 @@ import { AuthProvider } from './lib/auth'
 import AlertsPage from './pages/AlertsPage'
 import AppDetailPage from './pages/AppDetailPage'
 import AppsPage from './pages/AppsPage'
+import BackupsPage from './pages/BackupsPage'
 import ChecksPage from './pages/ChecksPage'
 import CredentialsPage from './pages/CredentialsPage'
 import DashboardPage from './pages/DashboardPage'
@@ -30,6 +31,7 @@ export default function App() {
             <Route path="/checks" element={<ChecksPage />} />
             <Route path="/alerts" element={<AlertsPage />} />
             <Route path="/apps" element={<AppsPage />} />
+            <Route path="/backups" element={<BackupsPage />} />
             <Route path="/apps/:id" element={<AppDetailPage />} />
             <Route path="/releases/:id" element={<ReleaseDetailPage />} />
             <Route path="/credentials" element={<CredentialsPage />} />

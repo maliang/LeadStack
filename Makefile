@@ -4,7 +4,7 @@
 #   make build-go   只构建两个 Go 二进制（跳过前端，前端未就绪时也能用）
 #   make cross      交叉编译 5 个目标到 dist/
 #   make devssh     DEV-ONLY 测试 SSH 服务（仅本地验收用，**绝不进发布产物**）
-#   make test-e2e   按序跑 scripts/verify_m0..m4.sh（缺失的自动跳过）
+#   make test-e2e   按序跑 scripts/verify_m0..m4.sh 与 verify_backup.sh（缺失的自动跳过）
 #   make fmt-check  gofmt 闸门：有未格式化文件即失败
 #   make test-race  go test -race（internal/api、internal/store 并发状态机）
 #   make help       查看全部目标
@@ -200,12 +200,12 @@ devssh: ## 构建 DEV-ONLY 测试 SSH 服务到 bin/leadstack-devssh（不参与
 	CGO_ENABLED=0 $(GO) build $(GOFLAGS_BUILD) -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/leadstack-devssh $(CMD_DEVSSH)
 
 # 验收脚本清单（按序执行；由 lead 维护，缺失时自动跳过，落地后无需改 Makefile）
-E2E_SCRIPTS := verify_m0 verify_m1 verify_m2 verify_m3 verify_m4
+E2E_SCRIPTS := verify_m0 verify_m1 verify_m2 verify_m3 verify_m4 verify_backup
 
 # 依次跑 M0/M1/M2 验收脚本；输出（含脚本内部打印的控制端/agent 日志尾部）tee 到 $(E2E_LOG_DIR)/，
 # CI 失败时把该目录作为 artifact 上传。某个脚本缺失时打印提示并跳过（不算失败）；
 # 任一已存在的脚本失败 → 立即停止（不再跑后续脚本）并让 make 失败。
-test-e2e: ## 端到端验收：按序 verify_m0 → m1 → m2 → m3 → m4（前置：make build && make devssh）
+test-e2e: ## 端到端验收：按序 verify_m0 → m1 → m2 → m3 → m4 → backup（前置：make build && make devssh）
 	@mkdir -p $(E2E_LOG_DIR)
 	@printf '>> 前置产物：bin/leadstack、bin/leadstack-agent（make build）+ bin/leadstack-devssh（make devssh）\n'
 	@set -eu; scripts='$(E2E_SCRIPTS)'; total=0; i=0; \
