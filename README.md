@@ -102,6 +102,32 @@ docker logs leadstack | grep 初始密码     # 首次启动打印的管理员�
 
 `/data` 是持久化卷（数据库 + 制品 + 备份 + `master.key`），**务必保留**。
 
+#### 二进制放在哪里都行（但数据目录跟「当前工作目录」走）
+
+README 里的 `./bin/leadstack` 只是「`make build` 产出的、位于仓库 `bin/` 下的二进制」的写法，**不是必须的路径**。
+它是单文件、无外部依赖的可执行程序（前端与安装脚本都已内嵌），可以放到任意目录或加入 `PATH`：
+
+```bash
+sudo cp bin/leadstack /usr/local/bin/leadstack     # 或用 ~/bin
+leadstack --version                                # 之后在任何目录都能直接敲
+```
+
+但要注意一个坑：**默认数据目录 `./data` 是相对「你运行命令时所在的目录」**，不是相对二进制所在位置。
+
+```bash
+# 在 /home/me 下运行 → 数据落在 /home/me/data（可能不是你想要的）
+leadstack
+
+# 推荐：显式指定数据目录（服务化部署必做）
+leadstack --data-dir /var/lib/leadstack
+
+# 或固定工作目录
+cd /var/lib/leadstack && leadstack
+```
+
+systemd / launchd / Docker 部署时请显式设置工作目录与 `--data-dir`（或 `LEADSTACK_DATA_DIR`），
+否则升级或重启后可能「像是数据丢了」——其实是换了个目录又初始化了一份。
+
 ### 第 3 步：首次启动与初始化
 
 ```bash
