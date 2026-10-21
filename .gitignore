@@ -25,7 +25,10 @@ web/node_modules/
 web/dist/
 web/.vite/
 # go:embed 的前端产物（由 make build / make web-embed 生成）
-/internal/webui/dist/
+# 例外：占位页必须入库，否则 fresh clone 的 go vet / go build 会因为 //go:embed all:dist
+# 找不到任何文件而直接失败（CI 就是这么红的）。make build 后用真实产物覆盖它是预期的。
+/internal/webui/dist/*
+!/internal/webui/dist/index.html
 
 # 数据库与本地状态
 *.db
