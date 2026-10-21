@@ -129,17 +129,19 @@ release:
   draft: false
   prerelease: auto
   make_latest: true
+  # 注意：footer 的模板上下文是 Release（只有 .Tag/.Version/.Env 等），
+  # 没有 .Os/.Arch（那是 archives 的上下文）——写了会导致发布阶段渲染失败。
   footer: |
     ## 安装 agent
 
     ```sh
-    curl -fsSL https://raw.githubusercontent.com/maliang/leadstack/v{{ .Version }}/deploy/install.sh \
+    curl -fsSL https://raw.githubusercontent.com/maliang/LeadStack/v{{ .Version }}/deploy/install.sh \
       | sh -s -- --server <控制端地址> --token <接入令牌>
     ```
 
-    > 脚本也可从归档内取得（`deploy/install.sh`）；离线环境请下载对应平台的
-    > `leadstack-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}.tar.gz` 后用
-    > `sh install.sh --from-file ./leadstack-agent ...` 安装。
+    > 脚本也可从归档内取得（`deploy/install.sh`）；离线环境请按平台下载对应归档
+    > `leadstack-agent_{{ .Version }}_<os>_<arch>.tar.gz`（例如 `_linux_amd64`），
+    > 再执行 `sh install.sh --from-file ./leadstack-agent ...` 安装。
 
 # ---------------------------------------------------------------------------
 # TODO(签名/公证)：以下两段需要证书才能启用，未就绪前保持注释，CI 不阻塞。
