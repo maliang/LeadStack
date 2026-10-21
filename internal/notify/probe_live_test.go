@@ -102,6 +102,7 @@ func TestLiveProviderProbes(t *testing.T) {
 		{
 			name: "slack",
 			ch: Channel{Kind: KindSlack, Config: map[string]any{
+				// 拆成两段拼接：整串看起来像真实 Slack Webhook，会被 GitHub 秘密扫描误判为泄露并拒绝推送
 				"webhook": "https://hooks.slack.com" + "/services/T00000000/B00000000/fakefakefakefakefakefake",
 			}},
 			wantStatus:     []int{404, 400, 403},
