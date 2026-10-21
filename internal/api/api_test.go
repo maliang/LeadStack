@@ -105,6 +105,11 @@ func newTestEnv(t *testing.T) *testEnv {
 		BackupInterval:         config.DefaultBackupInterval,
 		BackupRetention:        config.DefaultBackupRetention,
 		BackupIncludeArtifacts: false,
+		UpgradeEnabled:         true,
+		UpdateRepo:             "maliang/leadstack",
+		UpdateAPIBase:          "https://api.github.com",
+		UpdateCheckInterval:    6 * time.Hour,
+		UpgradeRollbackTimeout: 120 * time.Second,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 

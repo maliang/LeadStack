@@ -137,6 +137,11 @@ func (a *API) Router() http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(a.RequireRole(roleAdmin))
 
+				r.Get("/system/update", a.handleGetUpdate)
+				r.Post("/system/update/check", a.handleCheckUpdate)
+				r.Post("/system/update/apply", a.handleApplyUpdate)
+				r.Get("/system/update/status", a.handleUpdateStatus)
+
 				r.Get("/system/network", a.handleGetNetwork)
 				r.Put("/system/network", a.handlePutNetwork)
 				r.Post("/system/network/reset", a.handleResetNetwork)

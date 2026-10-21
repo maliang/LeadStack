@@ -251,6 +251,65 @@ export interface NetworkUpdatePayload {
   default_ssh_port?: number
 }
 
+export interface UpdateAsset {
+  os: string
+  arch: string
+  url: string
+  size_bytes: number
+}
+
+export interface UpdateInfo {
+  current: string
+  latest: string | null
+  has_update: boolean
+  published_at: number | null
+  release_url: string | null
+  notes: string | null
+  /** 该版本包含数据库迁移 */
+  schema_changed: boolean
+  assets: UpdateAsset[]
+  /** 当前平台/架构是否有可用产物 */
+  upgradable: boolean
+  checked_at: number | null
+  /** 检查失败原因（空表示成功）；失败时保留上次数据 */
+  error: string | null
+  /** 服务端是否允许自升级（LEADSTACK_UPGRADE_ENABLED） */
+  upgrade_enabled: boolean
+  /** 自动检查间隔（服务端配置，可能缺省） */
+  check_interval: string | null
+}
+
+export type UpdatePhase =
+  | 'idle'
+  | 'downloading'
+  | 'backing_up'
+  | 'replacing'
+  | 'restarting'
+  | 'success'
+  | 'failed'
+  | 'rolled_back'
+  | string
+
+export interface UpdateStatus {
+  job_id: string | null
+  phase: UpdatePhase
+  target_version: string | null
+  current_version: string | null
+  message: string | null
+  error: string | null
+  rolled_back: boolean
+  backup_file: string | null
+  progress: number | null
+  started_at: number | null
+  finished_at: number | null
+}
+
+export interface HealthInfo {
+  status: string
+  version: string
+  uptime_s: number
+}
+
 export interface SystemInfo {
   version: string
   uptime_s: number
@@ -1719,6 +1778,72 @@ export function normalizeNetworkConfig(input: unknown): NetworkConfig {
   }
 }
 
+export function normalizeUpdateInfo(input: unknown): UpdateInfo {
+  const raw = toRecord(input) ?? {}
+  return {
+    current: toText(raw.current) ?? '',
+    latest: toText(raw.latest),
+    has_update: toBool(raw.has_update),
+    published_at: toNumber(raw.published_at),
+    release_url: toText(raw.release_url),
+    notes: typeof raw.notes === 'string' ? raw.notes : null,
+    schema_changed: toBool(raw.schema_changed),
+    assets: extractList(raw.assets, ['assets']).map((item) => {
+      const asset = toRecord(item) ?? {}
+      return {
+        os: toText(asset.os) ?? '',
+        arch: toText(asset.arch) ?? '',
+        url: toText(asset.url) ?? '',
+        size_bytes: toNumber(asset.size_bytes) ?? 0,
+      }
+    }),
+    upgradable: toBool(raw.upgradable, true),
+    checked_at: toNumber(raw.checked_at),
+    error: toText(raw.error),
+    upgrade_enabled: toBool(raw.upgrade_enabled, true),
+    check_interval: toText(raw.check_interval),
+  }
+}
+
+function normalizeUpdatePhase(value: unknown): UpdatePhase {
+  const phase = String(value ?? '').toLowerCase().replace(/-/g, '_')
+  const map: Record<string, UpdatePhase> = {
+    download: 'downloading',
+    downloading: 'downloading',
+    backup: 'backing_up',
+    backing_up: 'backing_up',
+    replace: 'replacing',
+    replacing: 'replacing',
+    restart: 'restarting',
+    restarting: 'restarting',
+    success: 'success',
+    succeeded: 'success',
+    done: 'success',
+    failed: 'failed',
+    failure: 'failed',
+    rollback: 'rolled_back',
+    rolled_back: 'rolled_back',
+  }
+  return map[phase] ?? (phase === '' ? 'idle' : phase)
+}
+
+export function normalizeUpdateStatus(input: unknown): UpdateStatus {
+  const raw = toRecord(input) ?? {}
+  return {
+    job_id: toText(raw.job_id ?? raw.jobId),
+    phase: normalizeUpdatePhase(raw.phase ?? raw.stage ?? raw.state),
+    target_version: toText(raw.target_version),
+    current_version: toText(raw.current_version),
+    message: toText(raw.message),
+    error: toText(raw.error),
+    rolled_back: toBool(raw.rolled_back ?? raw.rollback),
+    backup_file: toText(raw.backup_file),
+    progress: toNumber(raw.progress),
+    started_at: toNumber(raw.started_at),
+    finished_at: toNumber(raw.finished_at),
+  }
+}
+
 export function normalizeCredential(input: unknown): Credential {
   const raw = toRecord(input) ?? {}
   return {
@@ -1883,6 +2008,48 @@ export const api = {
 
   me(): Promise<User> {
     return request<User>('/auth/me')
+  },
+
+  /** GET /system/update —— 检查更新（缓存） */
+  checkForUpdate(): Promise<UpdateInfo> {
+    return request<unknown>('/system/update').then(normalizeUpdateInfo)
+  },
+
+  /** POST /system/update/check —— 强制刷新检查 */
+  refreshUpdateCheck(): Promise<UpdateInfo> {
+    return request<unknown>('/system/update/check', { method: 'POST' }).then(normalizeUpdateInfo)
+  },
+
+  /** POST /system/update/apply —— 触发升级（自动备份 + 失败回退） */
+  applyUpdate(payload: { version: string; allow_major?: boolean }): Promise<{ job_id: string | null }> {
+    return request<unknown>('/system/update/apply', { method: 'POST', body: payload }).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      return { job_id: toText(record.job_id ?? record.jobId) }
+    })
+  },
+
+  /** GET /system/update/status —— 升级进度（2s 轮询） */
+  updateStatus(): Promise<UpdateStatus> {
+    return request<unknown>('/system/update/status').then(normalizeUpdateStatus)
+  },
+
+  /** GET /healthz —— 不经过 /api/v1，用于升级重启期间探测服务恢复 */
+  async health(): Promise<HealthInfo> {
+    let response: Response
+    try {
+      response = await fetch('/healthz', { headers: { Accept: 'application/json' } })
+    } catch {
+      throw new ApiError(0, 'network_error', 'healthz unreachable')
+    }
+    if (!response.ok) throw new ApiError(response.status, 'health_failed', `HTTP ${response.status}`)
+    const payload = (await response.json()) as unknown
+    const raw = toRecord(payload)
+    const data = toRecord(raw?.data) ?? raw
+    return {
+      status: toText(data?.status) ?? 'ok',
+      version: toText(data?.version) ?? '',
+      uptime_s: toNumber(data?.uptime_s) ?? 0,
+    }
   },
 
   /** GET /system/network —— 监听地址/对外地址/默认 SSH 端口（契约 §49） */

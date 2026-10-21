@@ -88,6 +88,8 @@ type API struct {
 	sftp             SFTPFactory
 	termOpener       term.Opener
 	activeListen     string
+	updates          *updateChecker
+	upgrader         *upgrader
 	listenOverride   string
 	fallbackReason   string
 	termTickets      sync.Map // ticket → *terminalTicket
@@ -153,12 +155,15 @@ func New(opts Options) (*API, error) {
 		listenOverride:   opts.ListenOverride,
 		fallbackReason:   opts.FallbackReason,
 		maxSchemaVersion: resolvedMaxSchemaVersion(opts.MaxSchemaVersion),
-		backupWake:       make(chan struct{}, 1),
-		logger:           logger,
-		version:          version,
-		startedAt:        startedAt,
-		web:              webui.Handler(),
-		hub:              hub,
+		updates: newUpdateChecker(cfgUpdateRepo(opts.Config), cfgUpdateAPIBase(opts.Config),
+			version, cfgUpdateInterval(opts.Config), logger),
+		upgrader:   &upgrader{},
+		backupWake: make(chan struct{}, 1),
+		logger:     logger,
+		version:    version,
+		startedAt:  startedAt,
+		web:        webui.Handler(),
+		hub:        hub,
 	}, nil
 }
 
@@ -253,4 +258,28 @@ func (a *API) writeStoreError(w http.ResponseWriter, r *http.Request, err error)
 		return
 	}
 	a.internalError(w, r, err)
+}
+
+// cfgUpdateRepo 返回检查更新的仓库（config 可能为 nil，用于测试构造）。
+func cfgUpdateRepo(cfg *config.Config) string {
+	if cfg == nil || cfg.UpdateRepo == "" {
+		return config.DefaultUpdateRepo
+	}
+	return cfg.UpdateRepo
+}
+
+// cfgUpdateAPIBase 返回 GitHub API 基址。
+func cfgUpdateAPIBase(cfg *config.Config) string {
+	if cfg == nil || cfg.UpdateAPIBase == "" {
+		return config.DefaultUpdateAPIBase
+	}
+	return cfg.UpdateAPIBase
+}
+
+// cfgUpdateInterval 返回自动检查间隔。
+func cfgUpdateInterval(cfg *config.Config) time.Duration {
+	if cfg == nil {
+		return config.DefaultUpdateCheckInterval
+	}
+	return cfg.UpdateCheckInterval
 }

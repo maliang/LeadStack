@@ -64,6 +64,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "upgrade":
+			if err := runUpgradeCommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "leadstack upgrade: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "network":
 			if err := runNetworkCommand(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "leadstack network: %v\n", err)
@@ -376,6 +382,30 @@ func run() error {
 	defer cancelAlerts()
 	go alertBridge.Run(alertCtx, cfg.AlertEvalInterval)
 
+	// 升级自检（契约 51.3）：仅当 <data_dir>/upgrade/state.json 存在（即刚被新版本接管）时执行。
+	// 全部通过才删除标记（watchdog 据此认定成功）；任一失败立即退出，让 watchdog 回退。
+	if selfState, serr := api.ReadUpgradeState(api.UpgradeStatePathFor(cfg.DataDir)); serr != nil {
+		logger.Warn("读取升级状态失败，跳过自检", "err", serr)
+	} else if selfState != nil {
+		result, _, cerr := api.RunUpgradeSelfCheck(ctx, cfg.DBPath, cfg.DataDir, currentSchemaVersion)
+		switch {
+		case cerr != nil:
+			logger.Error("升级自检执行失败，进程退出以触发自动回退", "err", cerr)
+			os.Exit(1)
+		case result == nil || !result.Passed:
+			logger.Error("升级自检未通过，进程退出以触发自动回退",
+				"message", result.Message, "integrity_ok", result.IntegrityOK,
+				"schema_ok", result.SchemaOK, "schema_version", result.SchemaVersion,
+				"data_dir_writable", result.DataDirWritable)
+			os.Exit(1)
+		default:
+			logger.Warn("升级自检通过，已确认新版本",
+				"from", selfState.FromVersion, "to", selfState.TargetVersion,
+				"schema_version", result.SchemaVersion)
+			srv.AuditUpgradeSuccess(selfState.FromVersion, selfState.TargetVersion)
+		}
+	}
+
 	httpSrv := &http.Server{
 		Addr:              activeListen,
 		Handler:           srv.Router(),
@@ -473,7 +503,7 @@ func isSubcommand(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "backup", "restore", "network":
+	case "backup", "restore", "network", "upgrade":
 		return true
 	default:
 		return false

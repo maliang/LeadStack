@@ -6,8 +6,13 @@
 #                 -> 备份/恢复验收（稳定前允许失败）
 #                 -> 运维验收 verify_ops.sh（运维与协作 能力，稳定前允许失败）
 #                 -> docker 构建（前端工程就绪后）
-#                 -> goreleaser 快照构建（验证发布配置与 5 平台 × 2 二进制）
-#   tag v*     -> 上面的检查全绿后，用 goreleaser 交叉编译 5 个目标并发布 Release
+#                 -> goreleaser 快照构建（验证发布配置与 5 平台 × 2 二进制，不发布）
+#
+# 发布职责边界（重要）：
+#   本文件 = 质量门禁 + 发布配置验证；
+#   release-auto.yml = 主分支提交 → 版本推导 → tag → 真正的 goreleaser 发布。
+#   不要把「建 tag / 发 Release」写回本文件，否则会与自动发版重复发布。
+#   tag v*     -> 本文件不再发布 Release（tag 发布统一由 release-auto.yml 负责，避免双发布）
 #
 # 两道硬闸门（告警 新增）：
 #   1) `make fmt-check`：gofmt -l 必须为空（本仓库多次出现格式漂移）
@@ -339,49 +344,3 @@ jobs:
             exit 1
           fi
           echo "断言通过：10 个发布二进制，且无 devssh"
-
-  # ---------------------------------------------------------------------------
-  # 4) tag 发布：goreleaser 交叉编译 + GitHub Release
-  # ---------------------------------------------------------------------------
-  release:
-    name: goreleaser release
-    needs: build-test
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: "10"
-
-      - name: 安装 Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "26"
-
-      - name: 安装 Go
-        uses: actions/setup-go@v5
-        with:
-          # 与 build-test job 同口径：按 go.mod 的 go 指令装工具链（1.27.2）
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-
-      # goreleaser 的 before.hooks 会执行 `make web-embed`（构建前端并放进 internal/webui/dist）
-      - name: goreleaser release
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # TODO(signing): 证书就绪后在此注入
-          #   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
-          #   APPLE_KEY_ID / APPLE_ISSUER_ID / APPLE_KEY_P8
-          #   WINDOWS_CERT_PFX_BASE64 / WINDOWS_CERT_PASSWORD

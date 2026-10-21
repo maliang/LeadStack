@@ -10,6 +10,7 @@ import { Button } from '../components/Button'
 import { AppearanceSettings } from '../components/AppearanceSettings'
 import { NetworkSettingsCard } from '../components/NetworkSettingsCard'
 import { NetworkFallbackBanner } from '../components/NetworkFallbackBanner'
+import { UpdateDialog, UpdateSettingsCard } from '../components/SystemUpdate'
 import { KeyIcon } from '../components/Icons'
 import { PageHeader } from '../components/PageHeader'
 import { useToast } from '../components/Toast'
@@ -30,6 +31,7 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [updateOpen, setUpdateOpen] = useState(false)
 
   const handleChangePassword = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -61,6 +63,8 @@ export default function SettingsPage() {
       <PageHeader title={t('nav.settings')} description={t('settings.description')} />
 
       <NetworkFallbackBanner />
+
+      <UpdateSettingsCard onOpenDetails={() => setUpdateOpen(true)} />
 
       <NetworkSettingsCard />
 
@@ -203,6 +207,8 @@ export default function SettingsPage() {
           </section>
         </div>
       </div>
+
+      <UpdateDialog open={updateOpen} onClose={() => setUpdateOpen(false)} />
     </div>
   )
 }

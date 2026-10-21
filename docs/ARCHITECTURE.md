@@ -1488,3 +1488,95 @@ leadstack network --reset                      # 清除全部网络设置，回�
 2. **命令行优先**：settings 存坏值（被占用端口）时，用 `--listen 空闲端口 G` 启动 → 监听 G（命令行压过 settings）。
 3. **离线 CLI**：服务停止时 `leadstack network --listen <新值>` 能写入并回显；`--show` 输出三者取值；`--reset` 后设置清空。
 4. 以上任一场景下，控制台 `/healthz` 必须可达（即"人能进去改回来"）。
+
+---
+
+## 51. 控制端自升级（控制台提示 → 一键升级 → 自动备份 → 失败自动回退）
+
+**总原则**：升级是**用户主动点击**触发的（不后台偷跑）；**没有备份就不升级**；**升级失败由独立 watchdog 自动回退**（含数据恢复）。
+
+### 51.1 配置
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `LEADSTACK_UPDATE_REPO` | `maliang/leadstack` | 检查更新的 GitHub 仓库 |
+| `LEADSTACK_UPDATE_API_BASE` | `https://api.github.com` | API 基址（测试/镜像用） |
+| `LEADSTACK_UPDATE_CHECK_INTERVAL` | `6h` | 自动检查间隔（0 = 只在手动刷新时检查） |
+| `LEADSTACK_UPGRADE_ENABLED` | `true` | 是否允许控制台自升级（false 时 apply 返回 403） |
+| `LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT` | `120s` | watchdog 等待新版本确认成功的上限 |
+
+### 51.2 检查更新
+
+```
+GET  /system/update            -> 缓存结果（超过 interval 才真正请求 GitHub）
+POST /system/update/check      -> 强制刷新（忽略缓存）
+```
+响应：
+```json
+{ "data": {
+  "current": "v0.2.0", "latest": "v0.3.0", "has_update": true,
+  "published_at": 1710000000000, "release_url": "https://github.com/…",
+  "notes": "…release body 前 4KB…",
+  "schema_changed": true,          // 该版本包含数据库迁移（需提示用户）
+  "assets": [{"os":"linux","arch":"amd64","url":"…","size_bytes":123}],
+  "upgradable": true,              // 当前平台/架构在 assets 中存在
+  "checked_at": 1710000000000, "error": ""   // 检查失败时 error 非空且保留旧数据
+}}
+```
+**实现要求**：GitHub API 失败（离线/限流）**不得影响其它功能**，返回 `error` 并保留上次结果；响应体只取 release notes 前 4KB。
+
+### 51.3 执行升级
+
+```
+POST /system/update/apply  {"version":"v0.3.0"}   -> 202 {"job_id":"…"}
+GET  /system/update/status                        -> 进度与结果
+```
+**流程（严格按序，任一步失败即中止）**
+
+1. 校验：目标版本 > 当前版本、当前平台有对应 asset、`LEADSTACK_UPGRADE_ENABLED`；
+2. **强制备份**（调用备份服务，落到 `<backup_dir>`）：失败 → 中止并返回错误，**绝不继续**；
+3. 下载 asset 到 `<data_dir>/upgrade/<version>.tar.gz`（临时文件 + 原子 rename），校验 `checksums.txt` 中的 sha256；
+4. 解压取 `leadstack`，校验其为可执行文件；
+5. 写入升级标记 `<data_dir>/upgrade/state.json`：
+   `{target_version, prev_exe, new_exe, backup_file, started_at, deadline, watchdog_pid}`；
+6. A/B 替换：`<exe>` → `<exe>.prev`，新文件 → `<exe>`（同一文件系统 rename，原子）；
+7. **spawn 独立 watchdog 进程**（detached，不随父进程退出）：
+   `leadstack upgrade --watchdog --state <state.json>`；
+8. 旧进程退出（unix `syscall.Exec` 新二进制；Windows 不支持自升级 → 提前 403）。
+
+**watchdog 语义（自动回退的关键）**
+
+- 轮询 `state.json` 是否被新进程删除（新进程自检成功后删除它）；
+- 成功：清理 `.prev`（保留 N 天由配置），写 `upgrade-history`（成功记录）；
+- 超时（`rollback_timeout`）或发现新进程未监听：**回退** ——
+  1. `<exe>` → `<exe>.failed-<ts>`，`<exe>.prev` → `<exe>`；
+  2. 若本次升级执行了迁移（`schema_changed`），**把数据恢复为升级前备份**（`backup restore`，旧数据保留在 `.pre-restore-*`）；
+  3. 重启服务（`systemctl restart` / launchd kickstart；无服务管理器时直接 exec 旧二进制）；
+  4. 写 `upgrade-history`（失败记录：原因、回退时间、恢复的备份文件）。
+
+**新进程自检**（启动时，在监听成功后 ≤10s 内）：`PRAGMA integrity_check` 通过、schema 版本等于本二进制支持版本、数据目录可写 → 删除 `state.json`。任一失败则不删标记，进程退出让 watchdog 回退。
+
+**安全约束**
+- 不允许跨大版本跳跃（目标 `major` 必须相同，或用户在请求里显式 `allow_major=true`）；
+- 升级期间拒绝新的升级请求（返回 409）；
+- 全程写审计 `system.upgrade_start` / `system.upgrade_success` / `system.upgrade_rollback`；
+- 升级端点仅 `admin`。
+
+### 51.4 GitHub 主分支自动发版（CI）
+
+`.github/workflows/release-auto.yml`：
+- 触发：`push` 到 `main`（排除 `docs/**`、`**.md` 等纯文档提交；`[skip release]` 可跳过）；
+- 步骤：取最新 tag → 语义化 **patch 自增**得新版本 → 创建 tag → `goreleaser release --clean`（用 `GITHUB_TOKEN`）；
+- 产物即 5 平台 × 2 二进制 + archives + `checksums.txt`；
+- 并发保护：同一分支同时只跑一个 release（`concurrency`），避免重复 tag；
+- 保留手动触发（`workflow_dispatch`，可指定 version）。
+- `schema_changed` 的判定来源：发布前对比迁移目录 `internal/store/migrations/` 在上一 tag 与本 tag 之间是否有新增文件，写入 release body 的机器可读标记 `<!-- schema_changed: true -->`。
+
+### 51.5 验收（追加到 `scripts/verify_ops.sh`）
+
+1. `GET /system/update` 在 mock GitHub API 下返回 `current/latest/has_update/schema_changed`；断网（指向不可达地址）时返回 `error` 且**不影响** `/healthz` 与其它接口。
+2. `POST /system/update/apply` 在**备份失败**时返回错误且不替换二进制（用只读备份目录模拟）。
+3. 正常升级（本地 mock 提供 v+1 的 tarball 与 checksums）：升级后 `/healthz.version` 变为新版本，`<backup_dir>` 产生**升级前**的备份，`<exe>.prev` 存在。
+4. **失败自动回退**：mock 提供的"新版本"是一个**一启动就崩溃**的假二进制 → watchdog 超时后把 `.prev` 换回，服务恢复到旧版本且 `/healthz` 可用；`upgrade-history` 有失败与回退记录。
+5. `LEADSTACK_UPGRADE_ENABLED=false` → apply 返回 403；非 admin → 403。
+6. CI 配置：`release-auto.yml` 在 `push main` 下能算出 patch+1 的版本并创建 tag（本地用 `act` 不可用则做静态断言：触发条件、版本计算脚本可独立执行、`concurrency` 存在）。

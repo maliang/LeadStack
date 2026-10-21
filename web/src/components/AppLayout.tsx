@@ -3,11 +3,13 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { cn } from '../lib/cn'
 import { useAuth } from '../lib/auth'
 import { api } from '../lib/api'
+import { usePolling } from '../lib/hooks'
 import { usePrefs } from '../lib/prefs'
 import { useI18n } from '../i18n'
 import { NAV_GROUPS, breadcrumbsFor } from '../lib/nav'
 import { IconButton } from './Button'
 import {
+  ArrowUpCircleIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   GlobeIcon,
@@ -18,6 +20,7 @@ import {
   CloseIcon,
 } from './Icons'
 import { AppearanceDialog } from './AppearanceSettings'
+import { UpdateDialog, useUpdateNotice } from './SystemUpdate'
 
 import { t } from '../i18n'
 const roleLabelKeys: Record<string, string> = {
@@ -101,6 +104,11 @@ export function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
+  const [updateOpen, setUpdateOpen] = useState(false)
+  const update = useUpdateNotice()
+  const systemInfo = usePolling(api.systemInfo, 300_000)
+  const currentVersion = update.info?.current || systemInfo.data?.version || '—'
+  const hasUpdate = Boolean(update.info?.has_update)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -231,8 +239,14 @@ export function AppLayout() {
                   aria-haspopup="menu"
                   aria-expanded={userMenuOpen}
                 >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600 uppercase dark:bg-slate-800 dark:text-slate-300">
+                  <span className="relative flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600 uppercase dark:bg-slate-800 dark:text-slate-300">
                     {user?.username.slice(0, 1) ?? '?'}
+                    {hasUpdate ? (
+                      <span
+                        className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-indigo-500 ring-2 ring-white dark:ring-slate-950"
+                        aria-label={t('update.available')}
+                      />
+                    ) : null}
                   </span>
                   <span className="hidden flex-col leading-tight text-left sm:flex">
                     <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
@@ -259,6 +273,22 @@ export function AppLayout() {
                     >
                       <PaletteIcon className="h-4 w-4" />
                       {t('appearance.title')}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setUserMenuOpen(false)
+                        setUpdateOpen(true)
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                    >
+                      <ArrowUpCircleIcon className="h-4 w-4" />
+                      <span className="flex-1">{t('update.menuEntry')}</span>
+                      <span className="font-mono text-[11px] text-slate-400 dark:text-slate-500">
+                        {currentVersion}
+                      </span>
+                      {hasUpdate ? <span className="h-2 w-2 rounded-full bg-indigo-500" /> : null}
                     </button>
                     <Link
                       to="/settings"
@@ -295,6 +325,7 @@ export function AppLayout() {
       </div>
 
       <AppearanceDialog open={appearanceOpen} onClose={() => setAppearanceOpen(false)} />
+      <UpdateDialog open={updateOpen} onClose={() => setUpdateOpen(false)} />
     </div>
   )
 }

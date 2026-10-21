@@ -54,7 +54,8 @@ RACE_PKGS ?= ./internal/api/... ./internal/store/...
 
 .PHONY: help all build build-go web web-install web-embed webui-placeholder \
         webui-install-script cross run run-agent dev web-dev devssh test-e2e e2e \
-        test test-race vet fmt fmt-check tidy clean docker release-snapshot docker-check
+        test test-race vet fmt fmt-check tidy clean docker release-snapshot docker-check \
+        next-version
 
 help: ## 显示本帮助
 	@printf 'LeadStack 构建入口（module: %s）\n\n' '$(MODULE)'
@@ -253,6 +254,9 @@ docker: ## 构建控制端容器镜像（需要本地 docker）
 # ---------------------------------------------------------------------------
 GORELEASER ?= $(shell command -v goreleaser 2>/dev/null || echo goreleaser)
 DOCKER     ?= $(shell command -v docker 2>/dev/null || echo docker)
+
+next-version: ## 预览下一个自动发版版本号（取最新 tag 的 patch+1，CI 同口径）
+	@sh scripts/next-version.sh
 
 # 前端正在重构、不便重新构建时可用现有 internal/webui/dist：
 #   make release-snapshot BUILD_SKIP_WEB=1

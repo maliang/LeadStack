@@ -10,6 +10,11 @@
 | [leadstack.env.example](leadstack.env.example) | 控制端环境变量示例（`LEADSTACK_LISTEN` / `LEADSTACK_DATA_DIR` / `LEADSTACK_MASTER_KEY` 等） |
 | [docker-compose.yml](docker-compose.yml) | 单机容器部署（/data 卷 + healthcheck） |
 
+> **发版与升级**：主分支提交会自动发版（patch+1 → tag → goreleaser，产物 5 平台 × 2 二进制 + checksums），
+> 详细流程、跳过方式、`schema_changed` 标记与「坏 Release 怎么回滚」见
+> [docs/UPGRADE.md §9 主分支自动发版](../docs/UPGRADE.md#9-发布流程维护者视角主分支自动发版)；
+> 控制端/agent 的升级与回滚步骤见同文档 §3–§7。
+
 ## 安装 agent
 
 ```sh

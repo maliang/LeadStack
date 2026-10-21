@@ -63,10 +63,29 @@ const (
 	EnvFileMaxMB = "LEADSTACK_FILE_MAX_MB"
 	// EnvDefaultSSHPort 是新建服务器时的默认 SSH 端口。
 	EnvDefaultSSHPort = "LEADSTACK_DEFAULT_SSH_PORT"
+	// EnvUpdateRepo 是检查更新的 GitHub 仓库（owner/repo）。
+	EnvUpdateRepo = "LEADSTACK_UPDATE_REPO"
+	// EnvUpdateAPIBase 是 GitHub API 基址（测试/镜像可改为本地 mock）。
+	EnvUpdateAPIBase = "LEADSTACK_UPDATE_API_BASE"
+	// EnvUpdateCheckInterval 是自动检查更新的间隔（0 表示只在手动刷新时检查）。
+	EnvUpdateCheckInterval = "LEADSTACK_UPDATE_CHECK_INTERVAL"
+	// EnvUpgradeEnabled 是否允许控制台自升级。
+	EnvUpgradeEnabled = "LEADSTACK_UPGRADE_ENABLED"
+	// EnvUpgradeRollbackTimeout 是 watchdog 等待新版本确认成功的上限。
+	EnvUpgradeRollbackTimeout = "LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT"
 )
 
 // 默认值。
 const (
+	// DefaultUpdateRepo 是默认的检查更新仓库。
+	DefaultUpdateRepo = "maliang/leadstack"
+	// DefaultUpdateAPIBase 是默认的 GitHub API 基址。
+	DefaultUpdateAPIBase = "https://api.github.com"
+	// DefaultUpdateCheckInterval 是默认的自动检查间隔。
+	DefaultUpdateCheckInterval = 6 * time.Hour
+	// DefaultUpgradeRollbackTimeout 是默认的 watchdog 回退超时。
+	DefaultUpgradeRollbackTimeout = 120 * time.Second
+
 	DefaultListen     = "127.0.0.1:8080"
 	DefaultDataDir    = "./data"
 	DefaultDBFileName = "leadstack.db"
@@ -175,6 +194,16 @@ type Config struct {
 	CronTick time.Duration
 	// FileMaxMB 是文件上传的单文件上限（MB）。
 	FileMaxMB int
+	// UpdateRepo 是检查更新的 GitHub 仓库（owner/repo）。
+	UpdateRepo string
+	// UpdateAPIBase 是 GitHub API 基址。
+	UpdateAPIBase string
+	// UpdateCheckInterval 是自动检查间隔（0 = 只在手动刷新时检查）。
+	UpdateCheckInterval time.Duration
+	// UpgradeEnabled 是否允许控制台自升级。
+	UpgradeEnabled bool
+	// UpgradeRollbackTimeout 是 watchdog 回退超时。
+	UpgradeRollbackTimeout time.Duration
 }
 
 // Load 解析配置。version 由调用方（main）传入，args 通常为 os.Args[1:]。
@@ -208,6 +237,11 @@ func Load(version string, args []string) (*Config, error) {
 	terminalEnabled := fs.Bool("terminal-enabled", envBoolOr(EnvTerminalEnabled, false), "是否启用 Web 终端（环境变量 "+EnvTerminalEnabled+"）")
 	cronTick := fs.Duration("cron-tick", defaultDurationOr(EnvCronTick, DefaultCronTick), "定时任务检查周期，如 1m（环境变量 "+EnvCronTick+"）")
 	fileMaxMB := fs.Int("file-max-mb", envIntOr(EnvFileMaxMB, DefaultFileMaxMB), "文件上传单文件上限 MB（环境变量 "+EnvFileMaxMB+"）")
+	updateRepo := fs.String("update-repo", envOr(EnvUpdateRepo, DefaultUpdateRepo), "检查更新的 GitHub 仓库 owner/repo（环境变量 "+EnvUpdateRepo+"）")
+	updateAPIBase := fs.String("update-api-base", envOr(EnvUpdateAPIBase, DefaultUpdateAPIBase), "GitHub API 基址（环境变量 "+EnvUpdateAPIBase+"）")
+	updateInterval := fs.Duration("update-check-interval", defaultDurationOr(EnvUpdateCheckInterval, DefaultUpdateCheckInterval), "自动检查更新间隔，0=仅手动（环境变量 "+EnvUpdateCheckInterval+"）")
+	upgradeEnabled := fs.Bool("upgrade-enabled", envBoolOr(EnvUpgradeEnabled, true), "是否允许控制台自升级（环境变量 "+EnvUpgradeEnabled+"）")
+	upgradeTimeout := fs.Duration("upgrade-rollback-timeout", defaultDurationOr(EnvUpgradeRollbackTimeout, DefaultUpgradeRollbackTimeout), "升级 watchdog 回退超时（环境变量 "+EnvUpgradeRollbackTimeout+"）")
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("解析命令行参数: %w", err)
 	}
@@ -238,6 +272,11 @@ func Load(version string, args []string) (*Config, error) {
 		TerminalEnabled:        *terminalEnabled,
 		CronTick:               *cronTick,
 		FileMaxMB:              *fileMaxMB,
+		UpdateRepo:             strings.TrimSpace(*updateRepo),
+		UpdateAPIBase:          strings.TrimSuffix(strings.TrimSpace(*updateAPIBase), "/"),
+		UpdateCheckInterval:    *updateInterval,
+		UpgradeEnabled:         *upgradeEnabled,
+		UpgradeRollbackTimeout: *upgradeTimeout,
 	}
 
 	// 区分「显式传入 --listen」与「默认/环境变量值」：显式值才拥有最高优先级。
@@ -304,6 +343,18 @@ func Load(version string, args []string) (*Config, error) {
 	if cfg.FileMaxMB < 1 || cfg.FileMaxMB > 1024 {
 		return nil, errors.New("配置错误: file-max-mb 必须在 1-1024 之间")
 	}
+	if cfg.UpdateCheckInterval < 0 || cfg.UpdateCheckInterval > 30*24*time.Hour {
+		return nil, errors.New("配置错误: update-check-interval 必须在 0-720h 之间")
+	}
+	if cfg.UpgradeRollbackTimeout < 10*time.Second || cfg.UpgradeRollbackTimeout > time.Hour {
+		return nil, errors.New("配置错误: upgrade-rollback-timeout 必须在 10s-1h 之间")
+	}
+	if strings.Count(cfg.UpdateRepo, "/") != 1 {
+		return nil, errors.New("配置错误: update-repo 必须是 owner/repo 形式")
+	}
+	if !strings.HasPrefix(cfg.UpdateAPIBase, "http://") && !strings.HasPrefix(cfg.UpdateAPIBase, "https://") {
+		return nil, errors.New("配置错误: update-api-base 必须以 http:// 或 https:// 开头")
+	}
 
 	if raw := strings.TrimSpace(*masterKeyHex); raw != "" {
 		key, err := DecodeMasterKey(raw)
@@ -368,6 +419,11 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// UpgradeDir 返回升级工作目录（<data-dir>/upgrade）。
+func (c *Config) UpgradeDir() string {
+	return filepath.Join(c.DataDir, "upgrade")
 }
 
 // BackupPassFile 返回备份口令文件路径（<data-dir>/backup.pass）。

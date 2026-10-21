@@ -181,21 +181,111 @@ sudo systemctl start leadstack
 
 ---
 
-## 9. 发布流程（维护者视角）
+## 9. 发布流程（维护者视角）：主分支自动发版
 
-```bash
-# 1) 本地验证
-make test && make fmt-check && make test-e2e
+**正常情况下你什么都不用做**：往 `main`（当前仓库是 `master`，两者都支持）推代码，CI 自动发一个新版本。
 
-# 2) 打 tag 即发布（CI 会跑检查 → goreleaser 交叉编译 5 平台 → 产出 Release）
-git tag -a v0.2.0 -m "v0.2.0"
-git push origin v0.2.0
+```
+push 到主分支
+   │
+   ├─ 改动只有文档（docs/**、*.md、LICENSE…）→ 跳过发版
+   ├─ 提交信息含 [skip release]              → 跳过发版
+   │
+   ▼
+prepare：推导版本（最新 tag patch+1）+ 判定 schema 是否变化
+   │
+   ▼
+release：gofmt/vet/test 门禁 → 建 tag → goreleaser「草稿」上传 → 校验资产 → 撤销草稿正式发布
+                                          └─ 任一步失败 → 删草稿 Release + 删 tag
 ```
 
-- 发布物：5 平台 × 2 二进制（共 10 个）+ 归档 + `checksums.txt`。
-- 本地干跑（不发布）：`make release-snapshot`（产物在 `dist/`）。
-- 镜像：`make docker-check` 可本地构建并做容器内健康检查 + 备份校验。
-- 未签名的说明：当前**没有** macOS 公证与 Windows 代码签名证书，macOS 首次运行可能需要在「系统设置 → 隐私与安全性」放行；Windows 可能弹 SmartScreen。证书就绪后在 CI 里加 notarize/sign 段即可。
+### 9.1 版本号规则
+
+| 场景 | 结果 |
+|---|---|
+| 仓库还没有任何 tag | `v0.1.0`（首版） |
+| 最新 tag `v1.2.3` | `v1.2.4`（patch + 1） |
+| 最新 tag `v1.2.3-rc1` | `v1.2.4`（预发布后缀忽略） |
+| 算出来的 tag 已存在 | **跳过**并告警，不覆盖已发布版本 |
+
+本地预览（与 CI 同一脚本、同一规则）：
+
+```bash
+make next-version        # 等价于 sh scripts/next-version.sh
+```
+
+### 9.2 跳过发版
+
+| 方式 | 做法 |
+|---|---|
+| 纯文档改动 | 不用管：`paths-ignore` 里的路径（`docs/**`、`**.md`、`LICENSE`…）不会触发 |
+| 改了代码但不想发 | 提交信息里写 `[skip release]`，整个 workflow 跳过 |
+| 手工指定版本 | Actions → **Release (auto)** → Run workflow → 填 `version`（如 `v1.3.0`），留空则自动推导 |
+
+### 9.3 `schema_changed` 标记（升级前是否必须恢复数据）
+
+每次发布都会在 Release body 末尾写一行机器可读标记：
+
+```html
+<!-- schema_changed: true -->
+```
+
+判定方式：对比**上一个版本 tag** 与本次提交之间，`internal/store/migrations/` 下是否有**新增**文件。
+
+| 情况 | 标记 |
+|---|---|
+| 新增了迁移文件（数据库结构变化） | `true` —— 控制端会提示「本次升级涉及数据结构变更，升级前请备份」 |
+| 没有新增迁移文件 | `false` —— 常规版本，直接升级即可 |
+| 仓库首个版本（还没有上一个 tag） | `true` —— 保守标记，避免漏报 |
+
+> 别手动改这个标记；如果发现标错了，说明迁移文件的提交方式有问题（例如把迁移塞进了别的目录）。
+
+### 9.4 失败不留半成品（为什么可以先建 tag）
+
+流程是「先建 tag → 用 `goreleaser release --clean --draft` 上传到**草稿** Release → 校验资产数 ≥ 11（10 个归档 + checksums.txt）→ 最后 `gh release edit --draft=false` 正式发布」。
+
+- 草稿 Release 不会出现在 `/releases/latest`，也不会出现在 Releases 页面（未登录/普通访客）——**用户不会看到「有新版本但下载 404」**；
+- 任一步失败都会触发 `失败清理` 步骤：`gh release delete --yes --cleanup-tag` + `git push origin :refs/tags/<tag>`，tag 和草稿一起消失，下个提交会重新用同一个版本号。
+
+### 9.5 双重发布是怎么避免的（别把发布写回 ci.yml）
+
+- `ci.yml` 现在**只有质量门禁与发布配置验证**（`release-snapshot` 用 `goreleaser build --snapshot`，不发布、不建 tag）；
+- **真正发布只有 `release-auto.yml` 一个出口**：它负责版本推导、tag、Release notes（含 `schema_changed` 标记）与 goreleaser 发布；
+- 所以即使自动发版 workflow 建了 tag，也没有第二个 workflow 会因此再发一次。
+- 反过来说：**手工 `git push` 一个 tag 不会再触发发布**（这是有意的，避免误推 tag 就发版）。要手工发版请用 `workflow_dispatch`。
+- 历史注记：早先 `ci.yml` 有一个 tag 触发的 release job。虽然 GitHub 的 `GITHUB_TOKEN` 建 tag 默认不会触发其它 workflow，但一旦有人换成 PAT / GitHub App token，这个隐式保护就失效 —— 所以直接删掉，不依赖它。
+
+### 9.6 回滚一个坏 Release
+
+发出去的版本有问题时，按「影响面」选一种：
+
+```bash
+# A) 版本还没人升级、只是想撤掉这个 Release（会同时删 tag）
+gh release delete v1.2.4 --yes --cleanup-tag
+git push origin :refs/tags/v1.2.4     # 兜底（--cleanup-tag 已删时忽略报错）
+
+# B) 已经有人装了坏版本（推荐）：发一个新 patch 版本修掉它，不要删旧版本
+#    修好代码 → 合并 → 自动发 v1.2.5；控制端的升级提示会自然指向 v1.2.5
+
+# C) 用户机器已经升级坏了：用「升级回滚」而不是删 Release
+#    控制端会自动保留 <exe>.prev，升级失败/watchdog 超时会自动换回；
+#    数据侧用升级前那份备份恢复（见 §7）
+```
+
+> 删 Release 不会影响已经下载走的二进制；对已升级的用户，正确动作是发修复版本或引导他们用 §7 回滚。
+
+### 9.7 本地干跑（不发布）
+
+```bash
+make next-version      # 预览下一个版本号
+make release-snapshot  # goreleaser 全量构建（5 平台 × 2 二进制），产物在 dist/，不发 Release
+make docker-check      # 构建镜像 + 容器内 /healthz + 容器内备份生成/校验
+make test-e2e          # 七套端到端验收
+```
+
+发布物：5 平台 × 2 二进制（共 10 个）+ 归档 + `checksums.txt`。
+
+未签名说明：当前**没有** macOS 公证与 Windows 代码签名证书，macOS 首次运行可能需要在「系统设置 → 隐私与安全性」放行；Windows 可能弹 SmartScreen。证书就绪后在 `.goreleaser.yaml` 里打开 notarize/sign 段即可。
 
 ---
 

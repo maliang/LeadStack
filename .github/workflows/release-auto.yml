@@ -1,0 +1,240 @@
+# LeadStack 自动发版：push 到主分支 → patch+1 → 建 tag → goreleaser 发布
+#
+# 契约：docs/ARCHITECTURE.md §51.4；维护者操作手册：docs/UPGRADE.md §9
+#
+# 三个关键设计（都有明确取舍，改之前请先读 docs/UPGRADE.md）：
+#
+# 1) 唯一发布出口
+#    ci.yml 里原先 tag 触发的 release job 已删除；发布只在本 workflow 里发生。
+#    理由：版本号推导、tag、release notes（含 schema 标记）全在一处，不会两处逻辑漂移；
+#    也不必依赖「GITHUB_TOKEN 建 tag 不会触发其它 workflow」这个隐式行为
+#    （一旦有人换成 PAT / GitHub App token，隐式行为失效就会双发布）。
+#    代价：手工 `git push` 一个 tag 不再自动发版 —— 要手工发版请用 workflow_dispatch。
+#
+# 2) 失败不留半成品
+#    流程是「先建 tag → 以 --draft 上传产物 → 校验资产齐全 → 最后撤销草稿」。
+#    draft Release 对 /releases/latest 与普通访客不可见，所以构建期间用户看不到「有新版本」；
+#    任一步失败 → cleanup 步骤删除草稿 Release 与远端 tag。
+#    （备选方案「构建成功再打 tag」需要先把产物暂存、再手工上传，goreleaser 不原生支持，复杂度更高。）
+#
+# 3) schema_changed 标记
+#    对比「上一个 v* tag」与本次提交在 internal/store/migrations/ 下新增的文件，
+#    结果写成 `<!-- schema_changed: true|false -->` 追加进 Release body。
+#    控制端（/system/update）据此决定升级前是否必须做数据恢复。
+#    首个版本（还没有任何 tag）保守标记为 true。
+
+name: Release (auto)
+
+on:
+  push:
+    # 仓库当前默认分支是 master；main 也一并支持，切主分支后无需改本文件
+    branches: [main, master]
+    # 纯文档提交不发版（同时改了代码的提交仍会发版）
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
+      - ".github/ISSUE_TEMPLATE/**"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "要发布的版本（vX.Y.Z）；留空 = 最新 tag patch+1"
+        required: false
+        default: ""
+
+# goreleaser 需要建 tag / 建 release
+permissions:
+  contents: write
+
+# 同一分支同时只跑一个发版，避免两个 push 抢着建同一个 tag
+concurrency:
+  group: release-auto-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) 推导版本 + 判定 schema 是否变化（只读，不产生副作用）
+  # ---------------------------------------------------------------------------
+  prepare:
+    name: 推导版本
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 只读：推导版本/判定 schema 不需要写权限（最小权限）
+    permissions:
+      contents: read
+    # 提交信息含 [skip release] 时整体跳过（workflow_dispatch 不受影响）
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip release]') }}
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      skip: ${{ steps.ver.outputs.skip }}
+      schema_changed: ${{ steps.schema.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 需要完整 tag 历史（next-version.sh 依赖 tag 列表）
+          fetch-depth: 0
+
+      - name: 计算下一个版本号
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          manual="${{ inputs.version }}"
+          if [ -n "${manual}" ]; then
+            version="${manual}"
+            echo "使用手动指定版本：${version}"
+          else
+            version="$(sh scripts/next-version.sh)"
+            echo "自动推导版本（最新 tag patch+1）：${version}"
+          fi
+
+          # 严格三段语义化版本（允许 -rc1 这类后缀），拒绝 v1.2 / v1.2.3.4 / 无 v 前缀
+          if ! printf '%s' "${version}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::版本格式非法：${version}（要求 vX.Y.Z 或 vX.Y.Z-suffix）"
+            exit 1
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          if git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::tag ${version} 已存在，本次跳过发版（不会覆盖已发布版本）"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "将发布：${version}"
+          fi
+
+      - name: 判定 schema 是否变化（新增迁移文件）
+        id: schema
+        if: steps.ver.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          prev="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1 || true)"
+          if [ -z "${prev}" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "还没有任何版本 tag：首个版本，保守标记 schema_changed=true"
+            exit 0
+          fi
+
+          echo "对比基准：${prev}..HEAD（只看 internal/store/migrations/ 的新增文件）"
+          added="$(git diff --name-status "${prev}..HEAD" -- internal/store/migrations/ | awk '$1 ~ /^A/ {print $2}' || true)"
+          if [ -n "${added}" ]; then
+            echo "${added}" | sed 's/^/  新增迁移：/'
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "  无新增迁移文件"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # 2) 质量门禁 → 建 tag → goreleaser（草稿）→ 校验 → 撤销草稿发布
+  # ---------------------------------------------------------------------------
+  release:
+    name: 构建并发布
+    needs: prepare
+    # prepare 必须成功；且版本未被跳过（tag 已存在时不重发）
+    if: needs.prepare.result == 'success' && needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.prepare.outputs.version }}
+      SCHEMA_CHANGED: ${{ needs.prepare.outputs.schema_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # tag 之前先把质量门禁跑完：宁可不打 tag，也不要在 tag 上留一个跑不过的提交
+      - name: 质量门禁（gofmt / vet / test）
+        run: |
+          make fmt-check
+          go vet ./...
+          go test ./...
+
+      - name: 创建并推送 tag
+        run: |
+          set -euo pipefail
+          git config user.name "leadstack-release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "refs/tags/${TAG}"
+          echo "已推送 tag：${TAG}"
+
+      # --draft：产物先挂到草稿 Release（对 /releases/latest 与访客不可见）
+      - name: goreleaser 构建并上传到草稿 Release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 校验草稿资产完整（10 归档 + checksums.txt）
+        shell: bash
+        run: |
+          set -euo pipefail
+          count="$(gh release view "${TAG}" --json assets -q '.assets | length')"
+          echo "草稿资产数量：${count}（期望 ≥ 11）"
+          gh release view "${TAG}" --json assets -q '.assets[].name' | sed 's/^/  /'
+          if [ "${count}" -lt 11 ]; then
+            echo "::error::产物不完整（${count} < 11），不发布"
+            exit 1
+          fi
+
+      - name: 写入 schema_changed 标记并发布（撤销草稿）
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(gh release view "${TAG}" --json body -q '.body')"
+          {
+            printf '%s\n\n' "${body}"
+            printf '<!-- schema_changed: %s -->\n' "${SCHEMA_CHANGED}"
+          } > /tmp/release-notes.md
+          gh release edit "${TAG}" --notes-file /tmp/release-notes.md --draft=false
+          echo "已发布 ${TAG}"
+          echo "schema marker: <!-- schema_changed: ${SCHEMA_CHANGED} -->"
+
+      # 任何一步失败：删掉草稿 Release 与远端 tag，避免「有新版本提示但下载 404」
+      - name: 失败清理（删除草稿 Release 与 tag）
+        if: failure()
+        shell: bash
+        run: |
+          echo "::warning::发布流程失败，正在清理 ${TAG} 的草稿 Release 与 tag"
+
+          # 先删草稿 Release（--cleanup-tag 会顺带删远端 tag）
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release delete "${TAG}" --yes --cleanup-tag || true
+          fi
+
+          # 安全闸：只删「指向本次提交」的 tag。
+          # 如果远端同名 tag 指向别的提交（例如有人手工建过），绝不动它。
+          local_commit="$(git rev-parse -q --verify "refs/tags/${TAG}^{commit}" 2>/dev/null || true)"
+          if [ "${local_commit}" = "${GITHUB_SHA}" ]; then
+            git push origin ":refs/tags/${TAG}" || true
+            echo "已清理 tag ${TAG}（指向 ${GITHUB_SHA}）"
+          else
+            echo "::warning::tag ${TAG} 不存在或未指向本次提交（${local_commit:-无}），跳过删除"
+          fi
+          echo "清理完成（不存在的对象会忽略报错）"
