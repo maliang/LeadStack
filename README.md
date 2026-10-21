@@ -14,6 +14,8 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量节点 agent，跨平台、开箱
 
 - [快速开始（5 分钟）](#快速开始5-分钟)
 - [详细开始流程](#详细开始流程)
+- [生产部署：systemd](#生产部署systemd)
+- [版本升级与回滚](#版本升级与回滚)
 - [常见问题](#常见问题)
 - [配置参考](#配置参考)
 - [目录结构](#目录结构)
@@ -335,6 +337,120 @@ leadstack network --reset                     # 清除网络设置，回落环�
 
 ---
 
+## 生产部署：systemd
+
+**为什么要 systemd**：控制端必须常驻（检测、告警、采集都靠它）。用 `nohup` 或终端跑，一旦退出监控就静默失效。
+
+完整步骤（仓库里有现成单元模板 `deploy/leadstack.service`，已含加固项与 `StateDirectory`）：
+
+```bash
+# 1) 专用系统用户（不给登录 shell，最小权限）
+sudo useradd --system --home /var/lib/leadstack --shell /usr/sbin/nologin leadstack
+
+# 2) 目录：数据 + 配置
+sudo install -d -o leadstack -g leadstack /var/lib/leadstack /etc/leadstack
+
+# 3) 二进制（放哪都行，但推荐进 PATH）
+sudo install -m 0755 bin/leadstack /usr/local/bin/leadstack
+sudo install -m 0755 bin/leadstack-agent /usr/local/bin/leadstack-agent
+
+# 4) 环境文件（监听地址、数据目录等；0640 防泄露）
+sudo install -m 0640 deploy/leadstack.env.example /etc/leadstack/leadstack.env
+sudoedit /etc/leadstack/leadstack.env      # 至少确认 LEADSTACK_DATA_DIR=/var/lib/leadstack/data
+
+# 5) 单元文件
+sudo install -m 0644 deploy/leadstack.service /etc/systemd/system/leadstack.service
+
+# 6) 启用并启动
+sudo systemctl daemon-reload
+sudo systemctl enable --now leadstack
+
+# 7) 首次启动的初始密码在 journal 里（仅打印一次，务必立刻记下）
+sudo journalctl -u leadstack -n 50 --no-pager
+```
+
+单元文件的关键设置（照抄即可，已写在模板里）：
+
+| 项 | 值 | 作用 |
+|---|---|---|
+| `User` / `Group` | `leadstack` | 不用 root 跑 |
+| `WorkingDirectory` | `/var/lib/leadstack` | 数据目录基准 |
+| `EnvironmentFile` | `/etc/leadstack/leadstack.env` | 集中管理环境变量 |
+| `Restart=always` / `RestartSec=3` | — | 崩溃自动拉起 |
+| `TimeoutStopSec=20` | — | 给 SQLite 刷盘留时间 |
+| `StateDirectory=leadstack` | — | 自动创建并设置权限 |
+| `ProtectSystem=strict` + `ReadWritePaths` | — | 只允许写数据目录 |
+
+**不用 root 也能用的端口**：非 root 进程只能绑 ≥1024 的端口。想用 80/443 请在前面加反向代理，或给二进制加 `CAP_NET_BIND_SERVICE`（模板里默认收紧了 capability，按需放开）。
+
+**对外访问**：默认只监听 `127.0.0.1:8080`。要让 agent/浏览器从别的机器访问，把 `LEADSTACK_LISTEN` 改成 `0.0.0.0:8080`（或在控制台「设置 → 网络与端口」改），**并在前面加 TLS 反向代理**：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;      # 终端/日志需要 WebSocket
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 3600s;                     # 长连接别被掐
+}
+```
+
+日常运维命令：
+
+```bash
+sudo systemctl status leadstack          # 状态
+sudo journalctl -u leadstack -f          # 实时日志
+sudo systemctl restart leadstack         # 重启（改端口/升级后）
+leadstack network --show                 # 查看当前生效的网络配置
+```
+
+> macOS 用 launchd、Windows 用服务管理器；`deploy/install.sh` 已覆盖 agent 侧的 systemd/launchd 注册。控制端在 macOS 可先用 `launchctl` 或 `brew services` 托管，原理相同。
+
+---
+
+## 版本升级与回滚
+
+发布物在 GitHub Releases（每个 tag 产出 5 平台 × 2 二进制 + `checksums.txt`）。控制端**手动升级**（不自动联网改你的数据库），agent 支持控制台一键升级。
+
+**升级三步**：
+
+```bash
+# 1) 先备份（服务运行中也能做）
+leadstack backup --data-dir /var/lib/leadstack/data --out /root/pre-upgrade.lsbak
+leadstack backup verify --file /root/pre-upgrade.lsbak
+
+# 2) 换二进制（保留旧版用于回滚）
+sudo systemctl stop leadstack
+sudo install -m 0755 leadstack /usr/local/bin/leadstack.new
+sudo mv /usr/local/bin/leadstack /usr/local/bin/leadstack.prev
+sudo mv /usr/local/bin/leadstack.new /usr/local/bin/leadstack
+sudo systemctl start leadstack
+
+# 3) 验证（版本 + 迁移日志 + 抽查一台机器）
+curl -s http://127.0.0.1:8080/healthz | jq .
+sudo journalctl -u leadstack -n 60 --no-pager | grep 数据库迁移
+```
+
+**为什么必须先备份**：数据库迁移是**前向 only**，没有 down 迁移。升级后想退回旧版本，可靠做法是「旧二进制 + 升级前的备份」——只换回旧二进制去读新库结构，属于不受支持的做法。
+
+**回滚**：
+
+```bash
+sudo systemctl stop leadstack
+sudo mv /usr/local/bin/leadstack.prev /usr/local/bin/leadstack
+leadstack restore --file /root/pre-upgrade.lsbak --data-dir /var/lib/leadstack/data   # 数据也退回去
+sudo systemctl start leadstack
+```
+
+**Docker**：compose 里固定版本号（不要 `latest`），升级 = 改 tag → `docker compose pull && up -d`；数据在 `/data` 卷里不受影响，但升级前请把 `/data/backups` 里的归档和 `backup.pass` 拷出来。
+
+**agent**：控制台「服务器 → 批量操作 → Agent 升级」按版本批量升级；agent 用 A/B 重命名替换，校验 sha256 失败会保留旧版本不断连。
+
+> 完整 runbook（含发布流程、兼容性承诺、跨版本升级、常见坑）见 **[docs/UPGRADE.md](docs/UPGRADE.md)**。
+
+---
+
 ## 常见问题
 
 **Q：启动后打不开 `http://127.0.0.1:8080`？**
@@ -486,6 +602,7 @@ bash scripts/verify_ops.sh         # 审计、RBAC、Token、分页、导入、�
 - [架构与接口契约](docs/ARCHITECTURE.md) —— 改代码前必读
 - [产品与技术计划](docs/PLAN.md)
 - 交付报告：[基础骨架](docs/reports/bootstrap.md) · [服务器纳管](docs/reports/server-management.md) · [监控与检测](docs/reports/monitoring.md) · [告警](docs/reports/alerting.md) · [批量部署](docs/reports/deployment.md) · [备份恢复](docs/reports/backup.md) · [运维与协作](docs/reports/ops-and-collaboration.md)
+- [版本升级与回滚 runbook](docs/UPGRADE.md)（systemd / Docker / agent 升级，含回滚与兼容性承诺）
 - [发布验证记录](docs/DEPLOY-VERIFY.md)（GoReleaser / Docker 实测）
 
 ## 状态

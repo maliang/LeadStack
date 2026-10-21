@@ -50,6 +50,20 @@ journalctl -u leadstack -n 50   # 首次启动会打印随机初始管理员密�
 
 容器方式：`docker compose -f deploy/docker-compose.yml up -d --build`。
 
+升级控制端（备份 → 换二进制 → 重启 → 验证）与回滚步骤见 **[docs/UPGRADE.md](../docs/UPGRADE.md)**；
+要点：数据库迁移是前向 only，**升级前必须先备份**，回滚 = 旧二进制 + 升级前备份。
+
+### 仓库地址（若 fork 自建）
+
+发布下载地址目前硬编码为 `github.com/maliang/leadstack`，出现在两处：
+
+| 文件 | 位置 |
+|---|---|
+| `deploy/install.sh` | `DEFAULT_BASE_URL="https://github.com/${REPO}/releases/download"` |
+| `.goreleaser.yaml` | `release.github.owner` / `name` |
+
+改成你自己的 `owner/repo` 后，安装脚本与发布流水线即可指向你的仓库。
+
 ## 开发自测（本机复现完整验收）
 
 前置：Go 1.27+、Node 26 + pnpm 10、`jq`、`bash`、本地 C 工具链（race 闸门需要）；本机**不需要** sshd 与免密 sudo。
