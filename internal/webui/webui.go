@@ -76,7 +76,7 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	index, ok := h.open("index.html")
 	if !ok {
-		http.Error(w, "前端产物缺失：请先运行 make build（或 make web-embed）生成 UI", http.StatusInternalServerError)
+		h.servePlaceholder(w, r)
 		return
 	}
 	defer func() {
@@ -85,6 +85,31 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	h.serveFile(w, r, "index.html", index)
+}
+
+// placeholderHTML 是前端产物缺失时的内置占位页。
+//
+// 干净检出（dist 里只有 .gitkeep）直接用 go run 启动时，给出可操作提示比 500 更有用；
+// 真实产物由 make build / make web-embed 内嵌后，这里永远不会被用到。
+const placeholderHTML = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>LeadStack</title></head><body>
+<p>前端产物尚未构建：请运行 <code>make build</code>（开发调试可用 <code>make dev</code>）。</p>
+<p>Web UI bundle is missing: run <code>make build</code> first.</p>
+</body></html>
+`
+
+// servePlaceholder 返回内置占位页（200 + no-store），仅在前端产物缺失时触发。
+func (h *spaHandler) servePlaceholder(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+	if _, err := io.WriteString(w, placeholderHTML); err != nil {
+		slog.Warn("写入占位页失败", "err", err)
+	}
 }
 
 // open 尝试打开静态文件；目录或不存在都返回 false。
