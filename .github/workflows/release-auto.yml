@@ -197,14 +197,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 失败时把日志尾部写成注解：仓库无 admin 权限时也能从 check run 看到真正原因
-      - name: 失败摘要（goreleaser 日志尾部）
+      # 失败时把日志关键行写成注解：公开仓库 + 无 admin 权限时也能从 check run 看到真正原因
+      - name: 失败摘要（goreleaser 日志）
         if: failure()
         shell: bash
         run: |
-          if [ -s /tmp/goreleaser.log ]; then
-            tail -c 3500 /tmp/goreleaser.log | sed 's/^/::error::/'
+          set +e
+          log=/tmp/goreleaser.log
+          if [ ! -s "$log" ]; then
+            echo "::error::goreleaser 未产生日志（失败在安装或启动阶段）"
+            exit 0
           fi
+          sed -e 's/\x1b\[[0-9;]*m//g' -e 's/^[[:space:]]*//' "$log" > /tmp/goreleaser.clean
+          echo "::error::日志行数 $(wc -l < /tmp/goreleaser.clean)"
+          grep -inE 'error|failed|denied|unauthorized|unprocessable|not found|422|401|403|404|⨯' /tmp/goreleaser.clean \
+            | tail -n 20 | cut -c1-260 | sed 's/^/::error::/'
+          tail -n 20 /tmp/goreleaser.clean | cut -c1-260 | sed 's/^/::error::/'
 
       - name: 校验草稿资产完整（10 归档 + checksums.txt）
         shell: bash

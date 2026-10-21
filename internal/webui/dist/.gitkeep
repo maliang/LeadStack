@@ -1,0 +1,2 @@
+# 这个文件只有一个作用：让 //go:embed all:dist 在干净检出时也能匹配到文件。
+# 真实前端产物由 `make build` / `make web-embed` 生成在这里，且整体被 .gitignore 忽略。

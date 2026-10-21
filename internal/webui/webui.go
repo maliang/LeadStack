@@ -1,7 +1,8 @@
 // Package webui 负责把前端构建产物嵌入二进制，并提供 SPA 回退处理器。
 //
 // dist 目录是**生成物**：由 Makefile 把 web/dist 复制到 internal/webui/dist 后再编译。
-// 仓库里保留一个最小 index.html 占位，保证前端尚未构建时 go build 依然可用。
+// 仓库里只保留 internal/webui/dist/.gitkeep 占位，保证干净检出时 go build / go vet 依然可用
+// （//go:embed all:dist 要求目录里至少有一个文件；真实产物不入库，避免构建后工作区变脏）。
 package webui
 
 import (
@@ -75,7 +76,7 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	index, ok := h.open("index.html")
 	if !ok {
-		http.Error(w, "前端产物缺失 index.html", http.StatusInternalServerError)
+		http.Error(w, "前端产物缺失：请先运行 make build（或 make web-embed）生成 UI", http.StatusInternalServerError)
 		return
 	}
 	defer func() {

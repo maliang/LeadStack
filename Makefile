@@ -104,7 +104,7 @@ web: web-install ## 构建前端产物到 web/dist
 
 web-embed: web ## 把 web/dist 复制进 internal/webui/dist 供 go:embed（并内嵌安装脚本）
 	@if [ -f $(WEB_DIR)/dist/index.html ]; then \
-		rm -rf $(WEBUI_DIST); \
+		rm -rf $(WEBUI_DIST)/*; \
 		mkdir -p $(WEBUI_DIST); \
 		cp -R $(WEB_DIR)/dist/. $(WEBUI_DIST)/; \
 		printf '>> 已内嵌 UI：%s/dist -> %s\n' '$(WEB_DIR)' '$(WEBUI_DIST)'; \
