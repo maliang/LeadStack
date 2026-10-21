@@ -89,6 +89,9 @@ func (e *realExecutor) Exec(ctx context.Context, serverID, command string, timeo
 		defer cancel()
 	}
 	cmd := exec.CommandContext(runCtx, "sh", "-c", command)
+	// 与 agent 侧 job.exec 同语义：命令独占进程组，超时杀整组，
+	// 否则 sh 派生的子进程会一直攥着输出管道，Run 要等它自然退出（Linux/dash 上必现）。
+	configureRealExec(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
