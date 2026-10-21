@@ -114,7 +114,9 @@ func (a *API) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 	// 后台执行；HTTP 立即返回 202，让前端能持续轮询 status。
 	go a.runUpgrade(job, asset, info.SchemaChanged, os.Args)
 
-	writeData(w, http.StatusAccepted, map[string]any{"job_id": job.JobID, "status": job})
+	// 注意：不能把 job 指针直接序列化——runUpgrade 的 goroutine 正在并发写它，
+	// json 编码会与那些写入构成数据竞争。getJob() 在锁内做值拷贝，返回安全快照。
+	writeData(w, http.StatusAccepted, map[string]any{"job_id": job.JobID, "status": a.upgrader.getJob()})
 }
 
 // handleUpdateStatus 处理 GET /api/v1/system/update/status。

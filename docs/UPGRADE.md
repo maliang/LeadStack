@@ -42,7 +42,25 @@ leadstack --version | tee /root/leadstack-version-before.txt
 
 ---
 
-## 3. systemd 部署的升级（推荐方式）
+## 2.5 控制台一键升级（推荐，含自动回退）
+
+控制端支持「在控制台里点一下完成升级」，不需要命令行：
+
+1. 控制台右上角用户菜单 →「版本与升级」（有更新时会有红点），或「设置 → 网络与端口」旁的升级卡片；
+2. 面板会显示 当前版本 → 最新版本、release notes，以及**风险提示**：会自动备份；若含数据库迁移会额外红色警示；
+3. 点击「立即升级」→ 二次确认 → 自动执行 **备份 → 下载并校验 sha256 → A/B 替换 → 重启**；
+4. 失败/崩溃时，独立 watchdog 会在超时后**自动回退**到旧版本（有迁移时连同数据一起恢复到升级前备份）；
+5. 重启期间页面会短暂失联，面板会自动重连并显示新版本。
+
+> 关键设计：watchdog 运行在独立会话中，与 systemd 解耦；回退完成后立刻删除 `upgrade/state.json`，
+> 因此 `Restart=always` 下一次拉起的已经是旧版本——不会出现"无限重启坏二进制"。
+>
+> 关闭它：`LEADSTACK_UPGRADE_ENABLED=false`（或 `--upgrade-enabled=false`）。
+> 相关参数：`LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT`（默认 120s，最小 10s）、`LEADSTACK_UPDATE_REPO`、
+> `LEADSTACK_UPDATE_API_BASE`、`LEADSTACK_UPDATE_CHECK_INTERVAL`（默认 6h，0=只手动检查）。
+> 升级历史在 `<data_dir>/upgrade/upgrade-history.jsonl`，控制台状态接口也会返回最近 10 条。
+
+## 3. systemd 部署的升级（手动方式）
 
 ```bash
 # 1) 下载新版本并校验（以 linux/amd64 为例）
