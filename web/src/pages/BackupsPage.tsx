@@ -36,6 +36,7 @@ import {
 import { InlineLoading } from '../components/Loading'
 import { Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
+import { useAuth } from '../lib/auth'
 
 import { t } from '../i18n'
 const inputClass =
@@ -65,6 +66,10 @@ interface VerifyState {
 
 export default function BackupsPage() {
   const { toast } = useToast()
+  const { can } = useAuth()
+  const canWrite = can('backup.write')
+  const canDelete = can('backup.delete')
+  const canRestore = can('backup.restore')
   const backupsQuery = usePolling(api.backups, 10_000)
   const settingsQuery = usePolling(api.backupSettings, 30_000)
 
@@ -321,7 +326,12 @@ export default function BackupsPage() {
               {t('s.0862')}
             </p>
           </div>
-          <Button onClick={() => void handleCreate()} loading={creating} icon={<ArchiveIcon className="h-4 w-4" />}>
+          <Button
+            onClick={() => void handleCreate()}
+            loading={creating}
+            disabled={!canWrite}
+            icon={<ArchiveIcon className="h-4 w-4" />}
+          >
             {t('s.0861')}
           </Button>
         </div>
@@ -371,8 +381,8 @@ export default function BackupsPage() {
             icon={<ArchiveIcon className="h-6 w-6" />}
             title={t('s.0869')}
             description={t('s.0870')}
-            actionLabel={t('s.0861')}
-            onAction={() => void handleCreate()}
+            actionLabel={canWrite ? t('s.0861') : undefined}
+            onAction={canWrite ? () => void handleCreate() : undefined}
           />
         ) : (
           <div className="overflow-x-auto">
@@ -437,11 +447,13 @@ export default function BackupsPage() {
                         >
                           <DownloadIcon className="h-4 w-4" />
                         </IconButton>
-                        <IconButton label={t('s.0875')} onClick={() => void handleVerify(backup)}>
+                        <IconButton label={t('s.0875')}
+                          disabled={!canWrite} onClick={() => void handleVerify(backup)}>
                           <ShieldCheckIcon className="h-4 w-4" />
                         </IconButton>
                         <IconButton
                           label={t('s.0876')}
+                          disabled={!canDelete}
                           tone="danger"
                           onClick={() => {
                             setDeleteError(null)
@@ -461,6 +473,7 @@ export default function BackupsPage() {
       </section>
 
       {/* 从备份恢复 */}
+      {canRestore ? (
       <section className="rounded-xl border border-rose-200 bg-white p-4 shadow-sm dark:border-rose-500/30 dark:bg-slate-900">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
@@ -576,7 +589,10 @@ export default function BackupsPage() {
         ) : null}
       </section>
 
+      ) : null}
+
       {/* 备份设置 */}
+      {canWrite ? (
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
@@ -709,6 +725,7 @@ export default function BackupsPage() {
           ) : null}
         </div>
       </section>
+      ) : null}
 
       <p className="text-xs text-slate-400 dark:text-slate-500">
         {t('s.0920')}{' '}

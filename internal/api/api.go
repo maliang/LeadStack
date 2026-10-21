@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -96,11 +97,17 @@ type API struct {
 	agentTerms       sync.Map // sessionID → *agentTermSession
 	// backupWake 用于「设置变更后立即重排定时备份」，容量 1 的非阻塞信号。
 	backupWake chan struct{}
-	logger     *slog.Logger
-	version    string
-	startedAt  time.Time
-	web        http.Handler
-	hub        *Hub
+	// authzCache / authzGen 缓存角色权限与资源范围（契约 §52.4），
+	// 角色、分组、成员变更后调用 invalidateAuthz() 失效。
+	authzCache sync.Map
+	authzGen   atomic.Int64
+	// login 是登录 IP 限流与未知用户名临时锁定的进程内状态（契约 §54）。
+	login     *loginThrottle
+	logger    *slog.Logger
+	version   string
+	startedAt time.Time
+	web       http.Handler
+	hub       *Hub
 }
 
 // New 校验依赖并构造 API。
@@ -159,11 +166,17 @@ func New(opts Options) (*API, error) {
 			version, cfgUpdateInterval(opts.Config), logger),
 		upgrader:   &upgrader{},
 		backupWake: make(chan struct{}, 1),
-		logger:     logger,
-		version:    version,
-		startedAt:  startedAt,
-		web:        webui.Handler(),
-		hub:        hub,
+		login: newLoginThrottle(loginPolicy{
+			MaxAttempts:  opts.Config.LoginMaxAttempts,
+			LockDuration: opts.Config.LoginLockDuration,
+			IPLimit:      opts.Config.LoginIPLimit,
+			IPWindow:     opts.Config.LoginIPWindow,
+		}),
+		logger:    logger,
+		version:   version,
+		startedAt: startedAt,
+		web:       webui.Handler(),
+		hub:       hub,
 	}, nil
 }
 

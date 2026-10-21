@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { api, type Server } from '../lib/api'
+import { api, type Server, type ServerGroup } from '../lib/api'
 import { errorMessage } from '../lib/errors'
 import { validateServerHost, parsePort } from '../lib/network'
 import { formatLatency } from '../lib/format'
@@ -7,6 +7,7 @@ import { Button } from './Button'
 import { Modal } from './Modal'
 import { useToast } from './Toast'
 import { AlertTriangleIcon } from './Icons'
+import { SearchMultiSelect } from './SearchMultiSelect'
 import { t } from '../i18n'
 
 interface EditServerDialogProps {
@@ -28,6 +29,8 @@ export function EditServerDialog({ server, onClose, onSaved }: EditServerDialogP
   const [name, setName] = useState('')
   const [host, setHost] = useState('')
   const [port, setPort] = useState('')
+  const [groupIds, setGroupIds] = useState<string[]>([])
+  const [serverGroups, setServerGroups] = useState<ServerGroup[]>([])
   const [saving, setSaving] = useState(false)
   const [errors, setErrors] = useState<FieldErrors>({})
 
@@ -36,8 +39,26 @@ export function EditServerDialog({ server, onClose, onSaved }: EditServerDialogP
     setName(server.name)
     setHost(server.host)
     setPort(server.port === null ? '' : String(server.port))
+    setGroupIds(server.group_ids)
     setErrors({})
     setSaving(false)
+  }, [server])
+
+  // 授权分组候选：每次打开时加载（避免长期缓存陈旧）
+  useEffect(() => {
+    if (!server) return
+    let cancelled = false
+    api
+      .serverGroups()
+      .then((groups) => {
+        if (!cancelled) setServerGroups(groups)
+      })
+      .catch(() => {
+        /* 分组接口不可用时保持空列表 */
+      })
+    return () => {
+      cancelled = true
+    }
   }, [server])
 
   const addressChanged =
@@ -63,6 +84,7 @@ export function EditServerDialog({ server, onClose, onSaved }: EditServerDialogP
         name: trimmedName,
         host: host.trim(),
         port: parsedPort ?? 22,
+        group_ids: groupIds,
       })
       toast(t('server.edit.saved'), 'success')
       onSaved()
@@ -196,6 +218,24 @@ export function EditServerDialog({ server, onClose, onSaved }: EditServerDialogP
             {errors.port ? (
               <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{t(errors.port)}</p>
             ) : null}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">
+            {t('groups.authorizedGroups')}
+          </label>
+          <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
+            {t('groups.authorizedGroupsHint')}
+          </p>
+          <div className="mt-1.5">
+            <SearchMultiSelect
+              options={serverGroups.map((group) => ({ id: group.id, label: group.name }))}
+              value={groupIds}
+              onChange={setGroupIds}
+              placeholder={t('groups.searchGroups')}
+              emptyText={t('groups.noGroups')}
+            />
           </div>
         </div>
 

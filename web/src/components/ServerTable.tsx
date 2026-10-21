@@ -24,6 +24,8 @@ interface ServerTableProps {
   onToggle: (id: string) => void
   onToggleAll: (checked: boolean) => void
   onEdit: (server: Server) => void
+  canEdit?: boolean
+  canDelete?: boolean
   onDelete: (server: Server) => void
   onEditTags: (server: Server) => void
 }
@@ -88,6 +90,8 @@ export function ServerTable({
   onToggle,
   onToggleAll,
   onEdit,
+  canEdit = true,
+  canDelete = true,
   onDelete,
   onEditTags,
 }: ServerTableProps) {
@@ -177,6 +181,14 @@ export function ServerTable({
                         {tag}
                       </span>
                     ))}
+                    {server.group_names.map((name) => (
+                      <span
+                        key={`group-${name}`}
+                        className="rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300"
+                      >
+                        {name}
+                      </span>
+                    ))}
                     {server.mode === 'agent' && server.agent_version ? (
                       <span className="text-[11px] text-slate-400 dark:text-slate-500">
                         agent {server.agent_version}
@@ -194,7 +206,19 @@ export function ServerTable({
                   <StatusBadge status={server.status} />
                 </td>
                 <td className="px-4 py-3 align-top">
-                  {server.group ? (
+                  {server.group_names.length > 0 ? (
+                    <div className="flex max-w-[180px] flex-wrap gap-1">
+                      {server.group_names.map((name) => (
+                        <span
+                          key={name}
+                          className="inline-flex items-center gap-1 rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300"
+                        >
+                          <FolderIcon className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{name}</span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : server.group ? (
                     <span className="inline-flex max-w-[140px] items-center gap-1 text-xs text-slate-600 dark:text-slate-300">
                       <FolderIcon className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                       <span className="truncate">{server.group}</span>
@@ -236,12 +260,16 @@ export function ServerTable({
                     <IconButton label={t('s.0544')} onClick={() => onEditTags(server)}>
                       <TagIcon className="h-4 w-4" />
                     </IconButton>
-                    <IconButton label={t('server.edit.action')} onClick={() => onEdit(server)}>
-                      <PencilIcon className="h-4 w-4" />
-                    </IconButton>
-                    <IconButton label={t('s.0513')} tone="danger" onClick={() => onDelete(server)}>
-                      <TrashIcon className="h-4 w-4" />
-                    </IconButton>
+                    {canEdit ? (
+                      <IconButton label={t('server.edit.action')} onClick={() => onEdit(server)}>
+                        <PencilIcon className="h-4 w-4" />
+                      </IconButton>
+                    ) : null}
+                    {canDelete ? (
+                      <IconButton label={t('s.0513')} tone="danger" onClick={() => onDelete(server)}>
+                        <TrashIcon className="h-4 w-4" />
+                      </IconButton>
+                    ) : null}
                   </div>
                 </td>
               </tr>

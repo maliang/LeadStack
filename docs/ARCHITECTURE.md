@@ -1580,3 +1580,214 @@ GET  /system/update/status                        -> 进度与结果
 4. **失败自动回退**：mock 提供的"新版本"是一个**一启动就崩溃**的假二进制 → watchdog 超时后把 `.prev` 换回，服务恢复到旧版本且 `/healthz` 可用；`upgrade-history` 有失败与回退记录。
 5. `LEADSTACK_UPGRADE_ENABLED=false` → apply 返回 403；非 admin → 403。
 6. CI 配置：`release-auto.yml` 在 `push main` 下能算出 patch+1 的版本并创建 tag（本地用 `act` 不可用则做静态断言：触发条件、版本计算脚本可独立执行、`concurrency` 存在）。
+
+## 52. 权限模型（权限点 / 内置角色 / 自定义角色）
+
+> 本节冻结「谁能做什么」。**权限按能力判定，不再只看角色等级**；角色等级（admin > operator > viewer）只保留给兼容校验与「最后一个管理员」这类保护。
+
+### 52.1 权限点（冻结，共 24 个）
+
+| key | 含义 | 可授予自定义角色 |
+|---|---|---|
+| `server.read` | 查看服务器/分组/指标 | ✅ |
+| `server.write` | 纳管、改配置、测试连通、刷新主机信息、调整分组归属 | ✅ |
+| `server.delete` | 删除服务器 | ✅ |
+| `terminal.use` | 终端 / 文件 / 日志 / 进程 / 端口 | ✅ |
+| `check.read` | 查看检测项与结果 | ✅ |
+| `check.write` | 增删改检测项、设目标、立即运行 | ✅ |
+| `alert.read` | 查看告警 | ✅ |
+| `alert.write` | 规则 / 渠道 / 静默 / 确认 | ✅ |
+| `deploy.read` | 查看应用、模板、制品、发布 | ✅ |
+| `deploy.write` | 应用/模板/制品/发布，含重试、回滚、取消 | ✅ |
+| `backup.read` | 查看备份与备份设置 | ✅ |
+| `backup.write` | 创建备份、改备份设置 | ✅ |
+| `backup.delete` | 删除备份 | ✅ |
+| `backup.restore` | 校验与恢复（含上传恢复） | ✅ |
+| `task.read` | 查看定时任务与执行历史 | ✅ |
+| `task.write` | 增删改定时任务、立即执行 | ✅ |
+| `group.write` | 分组 CRUD 与成员调整（**额外要求 scope=all**） | ✅ |
+| `agent.upgrade` | 单机/批量升级 agent | ✅ |
+| `user.manage` | 用户增删改、解锁 | ❌ 仅内置 admin |
+| `role.manage` | 角色与范围管理 | ❌ 仅内置 admin |
+| `token.manage` | API Token 管理 | ❌ 仅内置 admin |
+| `enroll.manage` | 注册令牌管理 | ❌ 仅内置 admin |
+| `system.manage` | 系统设置、网络、自升级 | ❌ 仅内置 admin |
+| `audit.read` | 审计日志 | ❌ 仅内置 admin |
+
+### 52.2 内置角色权限集合（冻结）
+
+| 角色 | 权限 |
+|---|---|
+| `viewer` | `server.read` `check.read` `alert.read` `deploy.read` `backup.read` `task.read` |
+| `operator` | viewer 全部 + `server.write` `terminal.use` `check.write` `alert.write` `deploy.write` `backup.write` `task.write` `group.write` |
+| `admin` | 全部 24 个（含 6 个管理权限） |
+
+内置角色**不可改名、不可改权限、不可删除**（403）。它们的范围恒为 `all`。
+
+### 52.3 自定义角色
+
+- `key`：`r_` + 8 位小写十六进制（服务端生成）；`name`：1–32 字符且唯一；`description` ≤ 200；
+- `permissions`：必须是非空的**可授予**子集（含管理权限 → 400，防止自我提权），重复项去重后落库；
+- `scope`：`all` / `groups` / `servers`（见 §53）；
+- 删除前必须无用户引用（409）；改名不影响 `users.role`（引用的是 key）；
+- **即时生效**：JWT 只携带角色 key，权限每次请求按 key 解析，不做 JWT 内嵌。
+
+### 52.4 中间件
+
+- `RequirePerm(perm)`：解析调用者角色的权限集合，缺失 → 403 `codeForbidden`（消息含所需权限 key），并写审计与日志；
+- 路由**逐条**声明所需权限（同一路径的 GET 与写方法可以不同权限）；
+- `RequireRole(minRole)` 保留，仅用于「必须是内置等级」的兼容场景（如最后一个管理员保护）。
+
+## 53. 服务器分组与资源级授权
+
+### 53.1 分组（新增一等公民）
+
+- 平铺分组（无嵌套）；服务器与分组**多对多**；分组名 1–32 字符唯一；
+- `servers.tags`（自由标签，用于筛选）保留，与分组并存、互不影响：**标签=筛选口径，分组=授权单元**；
+- 删除分组：一并清理成员关系与 `role_scopes` 中对该分组的引用，不删服务器；
+- 分组写操作（创建/改名/删除/调整成员）需要 `group.write` **且** 调用者范围必须是 `all`（否则可自我扩权）。
+
+### 53.2 角色范围
+
+`roles.scope_mode` + `role_scopes(role_key, kind, target_id)`，`kind ∈ {group, server}`：
+
+| mode | 可见/可操作服务器 |
+|---|---|
+| `all` | 全部 |
+| `groups` | 授权分组内服务器 ∪ 显式授权的单台服务器 |
+| `servers` | 仅显式授权的单台服务器 |
+
+允许 `groups`/`servers` 混用（两者求并集）；`mode=all` 时忽略 `role_scopes` 行（落库时清空）。
+
+### 53.3 判定规则（冻结）
+
+1. **对象级**（`/servers/{id}/…` 全部子资源，含终端、文件、日志、进程、端口、指标、agent 升级、发布运行）：目标不在范围内 → **404**（不泄露存在性），不返回 403。
+2. **列表级**（servers / checks / alerts / releases / scheduled-tasks）：只返回范围内对象；范围为空 → 空数组（不是 403）。
+   - checks：只要有**任一**目标服务器在范围内即可见；写操作（`check.write`）要求**所有**目标都在范围内；
+   - alerts：按 `server_id` 判定；规则级（无 `server_id`）告警仅 `all` 范围可见；
+   - releases / scheduled-tasks：按目标服务器判定，创建/重试/运行要求目标全部在范围内。
+3. **全局资源**（要求 `scope=all`，且具备对应权限）：备份与备份设置、审计日志、系统设置/网络/自升级、用户/角色/Token/注册令牌、应用与模板定义、告警规则与渠道（规则是全局策略，不允许局部持有）。
+4. **写越界** → 403；**读越界** → 404。删除/批量操作对越界目标整体失败并列出服务器名。
+
+### 53.4 实现与代价
+
+- 每个请求解析一次范围（1–3 条 SQLite 查询），列表过滤在内存完成；
+- 分页语义：**先过滤后分页**，受限用户单页可能少于 `limit`（`docs` 明示该限制）。
+
+## 54. 登录限流与失败锁定
+
+- **账号维度（持久化）**：连续失败达到 `login_max_attempts`（默认 **5**）→ 锁定 `login_lock_duration`（默认 **15m**）；锁定期内即使密码正确也拒绝；成功登录清零；管理员改密码同时清零；
+- **IP 维度（进程内滑动窗口）**：`login_ip_window`（默认 60s）内最多 `login_ip_limit`（默认 20）次登录请求，超出 → 429；
+- **响应**：
+  - 凭据错误 → 401，响应体 `error.details.remaining_attempts` 仅在剩余次数 ≥1 时给出；
+  - 账号锁定 → 429，`error.code = "login_locked"`，`error.details.retry_after_s`，并带 `Retry-After` 头；
+  - IP 限流 → 429，`error.code = "rate_limited"`，同上。
+- **解锁**：`POST /api/v1/users/{userID}/unlock`（`user.manage`）清零失败计数与锁定；响应 `{ok:true}`；
+- **审计**：`login_locked`、`login_rate_limited`、`user_unlock` 三类事件入审计日志（`audit_logs`），失败登录沿用既有 `login` 事件；
+- **未知用户名**也计入进程内按用户名计数（不落库），避免用户名枚举与内存放大（LRU 上限 4096 条）；
+- **CLI**：`--login-max-attempts`、`--login-lock-duration`、`--login-ip-limit`、`--login-ip-window`（0 表示关闭对应保护）。
+
+## 55. REST 新增与变更（本节即契约）
+
+### 55.1 权限目录
+
+`GET /api/v1/permissions`（`role.manage`）→
+```json
+[{"key":"server.read","name":"查看服务器","description":"…","admin_only":false}]
+```
+
+### 55.2 角色
+
+`GET /api/v1/roles`（`role.manage`）→
+```json
+[{"key":"operator","name":"运维","description":"…","builtin":true,
+  "permissions":["server.read","…"],"scope":{"mode":"all","group_ids":[],"server_ids":[]},
+  "user_count":2,"created_at":1750000000000,"updated_at":1750000000000}]
+```
+- `POST /api/v1/roles`：`{"name":"发布员","description":"…","permissions":["deploy.read","deploy.write"],"scope":{"mode":"groups","group_ids":["g1"],"server_ids":[]}}` → 201（返回同上结构）
+- `PATCH /api/v1/roles/{key}`：字段均可选；`scope` 整包替换（`group_ids`/`server_ids` 传空数组表示清空）
+- `DELETE /api/v1/roles/{key}`：内置 403、被引用 409、`scope` 中引用了不存在分组 → 400
+
+### 55.3 分组
+
+- `GET /api/v1/server-groups`（`server.read`）→ `[{"id","name","description","member_count","created_at","updated_at"}]`
+- `POST /api/v1/server-groups`（`group.write` + 全局范围）：`{"name","description"}` → 201
+- `PATCH /api/v1/server-groups/{groupID}`：`{"name?","description?"}`
+- `DELETE /api/v1/server-groups/{groupID}` → `{"ok":true}`
+- `PUT /api/v1/server-groups/{groupID}/servers`：`{"server_ids":["s1","s2"]}`（整包替换）
+- `GET /api/v1/server-groups/{groupID}/servers`（`server.read`）→ 服务器精简列表
+
+### 55.4 服务器载荷
+
+`GET /servers`、`GET /servers/{id}`、`PATCH /servers/{id}` 增加：
+- 请求：`group_ids: []string`（整包替换；缺省表示不改）
+- 响应：`group_ids: []string`、`group_names: []string`
+
+### 55.5 用户
+
+- `GET /users` 每条增加：`role_name`、`locked`(bool)、`locked_until`(ms)、`failed_attempts`(int)
+- `POST /users` / `PATCH /users/{id}` 的 `role` 必须是已存在角色 key（内置或自定义），否则 400
+- `POST /api/v1/users/{userID}/unlock`（`user.manage`）→ `{"ok":true}`
+
+### 55.6 登录与当前用户
+
+- `POST /api/v1/auth/login` 成功响应增加 `permissions: []string`、`role_name`、`scope:{"mode":"all|groups|servers","group_ids":[],"server_ids":[]}`
+- `GET /api/v1/auth/me` 同步增加上述字段
+- 失败响应见 §54（401 / 429 两类）
+
+## 56. 迁移 0008 与验收
+
+### 56.1 迁移 `0008_permissions.sql`（`currentSchemaVersion = 8`）
+
+```sql
+CREATE TABLE IF NOT EXISTS roles (
+    key         TEXT PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    permissions TEXT NOT NULL DEFAULT '[]',
+    builtin     INTEGER NOT NULL DEFAULT 0,
+    scope_mode  TEXT NOT NULL DEFAULT 'all',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS role_scopes (
+    role_key  TEXT NOT NULL,
+    kind      TEXT NOT NULL,      -- group | server
+    target_id TEXT NOT NULL,
+    PRIMARY KEY (role_key, kind, target_id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS server_groups (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS server_group_members (
+    group_id  TEXT NOT NULL,
+    server_id TEXT NOT NULL,
+    PRIMARY KEY (group_id, server_id)
+) WITHOUT ROWID;
+
+ALTER TABLE users ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN locked_until    INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN last_failed_at  INTEGER NOT NULL DEFAULT 0;
+```
+
+内置角色不落 `roles` 表（代码常量），`GET /roles` 会把它们与自定义角色合并返回（`builtin:true`）。
+
+### 56.2 验收（`scripts/verify_authz.sh`）
+
+1. 权限目录 24 项；内置角色权限集合与 §52.2 一致；
+2. 自定义角色：`deploy.write` 之外不含 `server.write` 时，创建发布成功、添加服务器 403；
+3. 防提权：自定义角色带 `user.manage` → 400；
+4. 分组：创建分组、加服务器、按分组授权角色后，受限用户只看到该分组服务器；访问分组外服务器 → 404；越界写 → 403；
+5. 列表过滤：受限用户的 `/servers`、`/checks`、`/alerts`、`/releases`、`/scheduled-tasks` 只返回范围内对象；
+6. `group.write` 但 `scope=groups` 的用户 → 写分组 403；
+7. 锁定：连续 5 次错误密码 → 第 6 次即使密码正确也 429 `login_locked`；管理员 `unlock` 后可登录；锁定与解锁均出现在审计日志；
+8. IP 限流：窗口内超限 → 429 `rate_limited` + `Retry-After`；
+9. 内置角色不可改不可删（403/409 语义）；
+10. 被用户引用的自定义角色删除 → 409。

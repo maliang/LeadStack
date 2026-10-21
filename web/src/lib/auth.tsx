@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { api, clearToken, getToken, onUnauthorized, setToken, type User } from './api'
+import { api, clearToken, getToken, onUnauthorized, setToken, type RoleScope, type User } from './api'
 
 import { t } from '../i18n'
 export type AuthStatus = 'loading' | 'authenticated' | 'anonymous'
@@ -15,9 +15,15 @@ export type AuthStatus = 'loading' | 'authenticated' | 'anonymous'
 interface AuthContextValue {
   status: AuthStatus
   user: User | null
+  permissions: string[]
+  scope: RoleScope
+  /** 权限判定：只看后端返回的 permissions，不按角色名硬编码 */
+  can: (permission: string) => boolean
   login: (username: string, password: string) => Promise<void>
   logout: () => Promise<void>
 }
+
+const EMPTY_SCOPE: RoleScope = { mode: 'all', group_ids: [], server_ids: [] }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
@@ -97,9 +103,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus('anonymous')
   }, [])
 
+  const permissions = useMemo(() => user?.permissions ?? [], [user])
+  const scope = user?.scope ?? EMPTY_SCOPE
+
+  const can = useCallback((permission: string) => permissions.includes(permission), [permissions])
+
   const value = useMemo<AuthContextValue>(
-    () => ({ status, user, login, logout }),
-    [status, user, login, logout],
+    () => ({ status, user, permissions, scope, can, login, logout }),
+    [status, user, permissions, scope, can, login, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

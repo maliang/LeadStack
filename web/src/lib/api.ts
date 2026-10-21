@@ -18,12 +18,20 @@ const TOKEN_STORAGE_KEY = 'leadstack_token'
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
+  /** 后端 error.details（登录限流剩余次数、retry_after_s 等） */
+  readonly details: Record<string, unknown> | null
 
-  constructor(status: number, code: string, message: string) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    details: Record<string, unknown> | null = null,
+  ) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
+    this.details = details
   }
 }
 
@@ -83,6 +91,7 @@ interface ErrorEnvelope {
   error?: {
     code?: string
     message?: string
+    details?: Record<string, unknown> | null
   }
 }
 
@@ -122,6 +131,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       response.status,
       envelope?.error?.code ?? 'http_error',
       envelope?.error?.message ?? t('s.0579', { '0': response.status }),
+      toRecord(envelope?.error?.details),
     )
     if (response.status === 401 && auth) {
       clearToken()
@@ -197,6 +207,7 @@ async function requestMultipart<T>(
       response.status,
       envelope?.error?.code ?? 'http_error',
       envelope?.error?.message ?? t('s.0579', { '0': response.status }),
+      toRecord(envelope?.error?.details),
     )
     if (response.status === 401 && auth) {
       clearToken()
@@ -217,10 +228,21 @@ async function requestMultipart<T>(
 
 export type ServerStatus = 'online' | 'offline' | 'unknown'
 
+export type ScopeMode = 'all' | 'groups' | 'servers'
+
+export interface RoleScope {
+  mode: ScopeMode
+  group_ids: string[]
+  server_ids: string[]
+}
+
 export interface User {
   id: string
   username: string
   role: string
+  role_name: string | null
+  permissions: string[]
+  scope: RoleScope
 }
 
 export interface LoginResult {
@@ -366,6 +388,9 @@ export interface Server {
   created_at: number | null
   /** 纳管 扩展字段（契约第 10 节） */
   group: string | null
+  /** 授权分组（契约第 55.4 节） */
+  group_ids: string[]
+  group_names: string[]
   credential_id: string | null
   last_error: string | null
   host_info: HostInfo | null
@@ -795,11 +820,51 @@ export interface AuditFilters {
 
 export type UserRole = 'admin' | 'operator' | 'viewer'
 
+export interface Permission {
+  key: string
+  name: string
+  description: string
+  /** true = 仅内置管理员可拥有，自定义角色不可授予 */
+  admin_only: boolean
+}
+
+export interface Role {
+  key: string
+  name: string
+  description: string
+  builtin: boolean
+  permissions: string[]
+  scope: RoleScope
+  user_count: number
+  created_at: number | null
+  updated_at: number | null
+}
+
+export interface RolePayload {
+  name: string
+  description: string
+  permissions: string[]
+  scope: RoleScope
+}
+
+export interface ServerGroup {
+  id: string
+  name: string
+  description: string
+  member_count: number
+  created_at: number | null
+  updated_at: number | null
+}
+
 export interface ManagedUser {
   id: string
   username: string
-  role: UserRole | string
+  role: string
+  role_name: string | null
   disabled: boolean
+  locked: boolean
+  locked_until: number | null
+  failed_attempts: number
   created_at: number | null
   updated_at: number | null
 }
@@ -1703,13 +1768,77 @@ export function normalizeAuditLog(input: unknown): AuditLogEntry {
   }
 }
 
+export function normalizeRoleScope(input: unknown): RoleScope {
+  const raw = toRecord(input) ?? {}
+  const modeRaw = toText(raw.mode)
+  const mode: ScopeMode = modeRaw === 'groups' || modeRaw === 'servers' ? modeRaw : 'all'
+  return {
+    mode,
+    group_ids: toStringArray(raw.group_ids ?? raw.groupIds),
+    server_ids: toStringArray(raw.server_ids ?? raw.serverIds),
+  }
+}
+
+export function normalizeUser(input: unknown): User {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: String(raw.id ?? ''),
+    username: toText(raw.username) ?? '',
+    role: toText(raw.role) ?? 'viewer',
+    role_name: toText(raw.role_name ?? raw.roleName),
+    permissions: toStringArray(raw.permissions),
+    scope: normalizeRoleScope(raw.scope),
+  }
+}
+
+export function normalizePermission(input: unknown): Permission {
+  const raw = toRecord(input) ?? {}
+  return {
+    key: toText(raw.key) ?? '',
+    name: toText(raw.name) ?? toText(raw.key) ?? '',
+    description: toText(raw.description) ?? '',
+    admin_only: toBool(raw.admin_only),
+  }
+}
+
+export function normalizeRole(input: unknown): Role {
+  const raw = toRecord(input) ?? {}
+  return {
+    key: toText(raw.key) ?? '',
+    name: toText(raw.name) ?? '',
+    description: toText(raw.description) ?? '',
+    builtin: toBool(raw.builtin),
+    permissions: toStringArray(raw.permissions),
+    scope: normalizeRoleScope(raw.scope),
+    user_count: toNumber(raw.user_count) ?? 0,
+    created_at: toNumber(raw.created_at),
+    updated_at: toNumber(raw.updated_at),
+  }
+}
+
+export function normalizeServerGroup(input: unknown): ServerGroup {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: String(raw.id ?? ''),
+    name: toText(raw.name) ?? '',
+    description: toText(raw.description) ?? '',
+    member_count: toNumber(raw.member_count) ?? 0,
+    created_at: toNumber(raw.created_at),
+    updated_at: toNumber(raw.updated_at),
+  }
+}
+
 export function normalizeManagedUser(input: unknown): ManagedUser {
   const raw = toRecord(input) ?? {}
   return {
     id: String(raw.id ?? ''),
     username: toText(raw.username) ?? '',
     role: toText(raw.role) ?? 'viewer',
+    role_name: toText(raw.role_name ?? raw.roleName),
     disabled: toBool(raw.disabled),
+    locked: toBool(raw.locked),
+    locked_until: toNumber(raw.locked_until),
+    failed_attempts: toNumber(raw.failed_attempts) ?? 0,
     created_at: toNumber(raw.created_at),
     updated_at: toNumber(raw.updated_at),
   }
@@ -1883,6 +2012,8 @@ export function normalizeServer(input: unknown): Server {
     metrics_summary: metrics,
     created_at: toNumber(raw.created_at),
     group: toText(raw.group),
+    group_ids: toStringArray(raw.group_ids ?? raw.groupIds),
+    group_names: toStringArray(raw.group_names ?? raw.groupNames),
     credential_id: toText(raw.credential_id),
     last_error: toText(raw.last_error),
     host_info: normalizeHostInfo(raw.host_info),
@@ -1940,6 +2071,8 @@ export interface UpdateServerPayload {
   port?: number
   tags?: string[]
   group?: string | null
+  /** 整包替换；缺省表示不改（契约第 55.4 节） */
+  group_ids?: string[]
 }
 
 /** POST /servers 请求体（纳管 扩展字段，契约第 10 节）。 */
@@ -1950,6 +2083,7 @@ export interface CreateServerPayload {
   mode: 'agent' | 'ssh'
   credential_id?: string
   group?: string
+  group_ids?: string[]
   tags?: string[]
   host_key_policy?: 'insecure' | 'accept-new' | 'strict'
 }
@@ -1995,10 +2129,17 @@ export interface BatchPayload {
 
 export const api = {
   login(username: string, password: string): Promise<LoginResult> {
-    return request<LoginResult>('/auth/login', {
+    return request<unknown>('/auth/login', {
       method: 'POST',
       body: { username, password },
       auth: false,
+    }).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      const userRaw = toRecord(record.user) ?? record
+      return {
+        token: toText(record.token) ?? '',
+        user: normalizeUser(userRaw),
+      }
     })
   },
 
@@ -2007,7 +2148,7 @@ export const api = {
   },
 
   me(): Promise<User> {
-    return request<User>('/auth/me')
+    return request<unknown>('/auth/me').then(normalizeUser)
   },
 
   /** GET /system/update —— 检查更新（缓存） */
@@ -2067,6 +2208,80 @@ export const api = {
     return request<unknown>('/system/network/reset', { method: 'POST' }).then(
       normalizeNetworkConfig,
     )
+  },
+
+  /* ---------------------- 权限 / 角色 / 分组（契约 §52–§55） ---------------------- */
+
+  permissions(): Promise<Permission[]> {
+    return request<unknown>('/permissions').then((raw) =>
+      extractList(raw, ['permissions', 'items']).map(normalizePermission),
+    )
+  },
+
+  roles(): Promise<Role[]> {
+    return request<unknown>('/roles').then((raw) =>
+      extractList(raw, ['roles', 'items']).map(normalizeRole),
+    )
+  },
+
+  createRole(payload: RolePayload): Promise<Role> {
+    return request<unknown>('/roles', { method: 'POST', body: payload }).then(normalizeRole)
+  },
+
+  updateRole(key: string, payload: Partial<RolePayload>): Promise<Role> {
+    return request<unknown>(`/roles/${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      body: payload,
+    }).then(normalizeRole)
+  },
+
+  deleteRole(key: string): Promise<unknown> {
+    return request<unknown>(`/roles/${encodeURIComponent(key)}`, { method: 'DELETE' })
+  },
+
+  serverGroups(): Promise<ServerGroup[]> {
+    return request<unknown>('/server-groups').then((raw) =>
+      extractList(raw, ['groups', 'items']).map(normalizeServerGroup),
+    )
+  },
+
+  createServerGroup(payload: { name: string; description: string }): Promise<ServerGroup> {
+    return request<unknown>('/server-groups', { method: 'POST', body: payload }).then(
+      normalizeServerGroup,
+    )
+  },
+
+  updateServerGroup(
+    id: string,
+    payload: { name?: string; description?: string },
+  ): Promise<ServerGroup> {
+    return request<unknown>(`/server-groups/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: payload,
+    }).then(normalizeServerGroup)
+  },
+
+  deleteServerGroup(id: string): Promise<unknown> {
+    return request<unknown>(`/server-groups/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  /** 整包替换分组成员 */
+  setServerGroupMembers(id: string, serverIds: string[]): Promise<unknown> {
+    return request<unknown>(`/server-groups/${encodeURIComponent(id)}/servers`, {
+      method: 'PUT',
+      body: { server_ids: serverIds },
+    })
+  },
+
+  serverGroupServers(id: string): Promise<Server[]> {
+    return request<unknown>(`/server-groups/${encodeURIComponent(id)}/servers`).then((raw) => {
+      const list = Array.isArray(raw) ? raw : extractList(raw, ['servers', 'items'])
+      return list.map(normalizeServer)
+    })
+  },
+
+  unlockUser(id: string): Promise<unknown> {
+    return request<unknown>(`/users/${encodeURIComponent(id)}/unlock`, { method: 'POST' })
   },
 
   systemInfo(): Promise<SystemInfo> {
@@ -2598,13 +2813,13 @@ export const api = {
     )
   },
 
-  createUser(payload: { username: string; password: string; role: UserRole }): Promise<ManagedUser> {
+  createUser(payload: { username: string; password: string; role: string }): Promise<ManagedUser> {
     return request<unknown>('/users', { method: 'POST', body: payload }).then(normalizeManagedUser)
   },
 
   updateUser(
     id: string,
-    payload: { role?: UserRole; disabled?: boolean; password?: string },
+    payload: { role?: string; disabled?: boolean; password?: string },
   ): Promise<ManagedUser> {
     return request<unknown>(`/users/${encodeURIComponent(id)}`, {
       method: 'PATCH',

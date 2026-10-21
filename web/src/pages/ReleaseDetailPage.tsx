@@ -18,6 +18,7 @@ import {
 import { InlineLoading } from '../components/Loading'
 import { ReleaseLogPanel } from '../components/ReleaseLogPanel'
 import { useToast } from '../components/Toast'
+import { useAuth } from '../lib/auth'
 
 import { t } from '../i18n'
 function summarize(release: Release) {
@@ -33,6 +34,8 @@ function summarize(release: Release) {
 export default function ReleaseDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { toast } = useToast()
+  const { can } = useAuth()
+  const canWrite = can('deploy.write')
 
   const [activeServerId, setActiveServerId] = useState<string>('')
   const [actionKind, setActionKind] = useState<'retry' | 'rollback' | 'cancel' | null>(null)
@@ -152,6 +155,7 @@ export default function ReleaseDetailPage() {
             {stats && stats.failed > 0 ? (
               <Button
                 variant="secondary"
+                disabled={!canWrite}
                 onClick={() => {
                   setActionError(null)
                   setActionKind('retry')
@@ -164,6 +168,7 @@ export default function ReleaseDetailPage() {
             {stats && stats.success > 0 ? (
               <Button
                 variant="secondary"
+                disabled={!canWrite}
                 onClick={() => {
                   setActionError(null)
                   setActionKind('rollback')
@@ -175,6 +180,7 @@ export default function ReleaseDetailPage() {
             {stats && stats.active > 0 ? (
               <Button
                 variant="danger"
+                disabled={!canWrite}
                 onClick={() => {
                   setActionError(null)
                   setActionKind('cancel')

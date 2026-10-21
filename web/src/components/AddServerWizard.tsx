@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import {
   api,
+  type ServerGroup,
   resolveControlUrl,
   type Credential,
   type EnrollToken,
@@ -16,6 +17,7 @@ import { InlineLoading } from './Loading'
 import { Modal } from './Modal'
 import { useToast } from './Toast'
 import { KeyIcon, ServerIcon } from './Icons'
+import { SearchMultiSelect } from './SearchMultiSelect'
 
 import { t } from '../i18n'
 type WizardMode = 'agent' | 'ssh'
@@ -78,6 +80,8 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
   const [sshCredentialId, setSshCredentialId] = useState('')
   const [sshPolicy, setSshPolicy] = useState('accept-new')
   const [sshGroup, setSshGroup] = useState('')
+  const [sshGroupIds, setSshGroupIds] = useState<string[]>([])
+  const [serverGroups, setServerGroups] = useState<ServerGroup[]>([])
   const [sshTags, setSshTags] = useState('')
   const [sshSaving, setSshSaving] = useState(false)
   const [sshError, setSshError] = useState<string | null>(null)
@@ -102,6 +106,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
     setSshCredentialId('')
     setSshPolicy('accept-new')
     setSshGroup('')
+    setSshGroupIds([])
     setSshTags('')
     setSshSaving(false)
     setSshError(null)
@@ -127,14 +132,17 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
   useEffect(() => {
     if (!open || mode !== 'ssh') return
     let cancelled = false
-    Promise.allSettled([api.credentials(), api.groups()]).then(([credentialResult, groupResult]) => {
-      if (cancelled) return
-      if (credentialResult.status === 'fulfilled') {
-        setCredentials(credentialResult.value)
-        setSshCredentialId((current) => current || credentialResult.value[0]?.id || '')
-      }
-      if (groupResult.status === 'fulfilled') setGroups(groupResult.value)
-    })
+    Promise.allSettled([api.credentials(), api.groups(), api.serverGroups()]).then(
+      ([credentialResult, groupResult, serverGroupResult]) => {
+        if (cancelled) return
+        if (credentialResult.status === 'fulfilled') {
+          setCredentials(credentialResult.value)
+          setSshCredentialId((current) => current || credentialResult.value[0]?.id || '')
+        }
+        if (groupResult.status === 'fulfilled') setGroups(groupResult.value)
+        if (serverGroupResult.status === 'fulfilled') setServerGroups(serverGroupResult.value)
+      },
+    )
     return () => {
       cancelled = true
     }
@@ -207,6 +215,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
         mode: 'ssh',
         credential_id: sshCredentialId,
         group: sshGroup.trim() || undefined,
+        group_ids: sshGroupIds,
         tags: sshTags
           .split(',')
           .map((tag) => tag.trim())
@@ -519,6 +528,21 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
                   placeholder={t('s.0067')}
                   className={inputClass + ' mt-1.5'}
                 />
+              </div>
+              <div className="sm:col-span-2">
+                <label className={labelClass}>{t('groups.authorizedGroups')}</label>
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  {t('groups.authorizedGroupsHint')}
+                </p>
+                <div className="mt-1.5">
+                  <SearchMultiSelect
+                    options={serverGroups.map((group) => ({ id: group.id, label: group.name }))}
+                    value={sshGroupIds}
+                    onChange={setSshGroupIds}
+                    placeholder={t('groups.searchGroups')}
+                    emptyText={t('groups.noGroups')}
+                  />
+                </div>
               </div>
             </div>
 

@@ -110,6 +110,11 @@ func newTestEnv(t *testing.T) *testEnv {
 		UpdateAPIBase:          "https://api.github.com",
 		UpdateCheckInterval:    6 * time.Hour,
 		UpgradeRollbackTimeout: 120 * time.Second,
+		// 登录保护：测试默认开启账号锁定、关闭 IP 限流（限流用例自行收紧）。
+		LoginMaxAttempts:  5,
+		LoginLockDuration: 15 * time.Minute,
+		LoginIPLimit:      0,
+		LoginIPWindow:     time.Minute,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 
@@ -141,7 +146,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	a, err := New(Options{
 		Config: cfg, Store: st, Auth: manager, Cipher: cipher, SSH: sshStub,
 		CheckRunner: runner, Jobs: jobRouter, Alerts: alertEngine, Notifier: notifier,
-		Deploy: deployStub, Backups: backupStub, MaxSchemaVersion: 7,
+		Deploy: deployStub, Backups: backupStub, MaxSchemaVersion: 8,
 		Logger: logger, Version: "test",
 	})
 	if err != nil {

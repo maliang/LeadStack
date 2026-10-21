@@ -27,12 +27,15 @@ import { InlineLoading } from '../components/Loading'
 import { ReleaseWizard } from '../components/ReleaseWizard'
 import { TemplateDialog } from '../components/TemplateDialog'
 import { useToast } from '../components/Toast'
+import { useAuth } from '../lib/auth'
 
 import { t } from '../i18n'
 type Tab = 'apps' | 'templates'
 
 export default function AppsPage() {
   const { toast } = useToast()
+  const { can } = useAuth()
+  const canWrite = can('deploy.write')
   const navigate = useNavigate()
 
   const [tab, setTab] = useState<Tab>('apps')
@@ -158,6 +161,7 @@ export default function AppsPage() {
             <>
               <Button
                 variant="secondary"
+                disabled={!canWrite}
                 icon={<PlusIcon className="h-4 w-4" />}
                 onClick={() => {
                   setEditingApp(null)
@@ -168,6 +172,7 @@ export default function AppsPage() {
               </Button>
               <Button
                 icon={<PlayIcon className="h-4 w-4" />}
+                disabled={!canWrite}
                 onClick={() => {
                   setWizardAppId(undefined)
                   setWizardOpen(true)

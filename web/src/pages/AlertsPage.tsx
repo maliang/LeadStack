@@ -42,6 +42,7 @@ import {
 import { InlineLoading } from '../components/Loading'
 import { Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
+import { useAuth } from '../lib/auth'
 
 import { t } from '../i18n'
 type Tab = 'alerts' | 'rules' | 'channels'
@@ -72,6 +73,8 @@ interface AlertDetailState {
 
 export default function AlertsPage() {
   const { toast } = useToast()
+  const { can } = useAuth()
+  const canWrite = can('alert.write')
   const now = useNow(1_000)
 
   const [tab, setTab] = useState<Tab>('alerts')
@@ -335,6 +338,7 @@ export default function AlertsPage() {
           </Button>
           {tab === 'rules' ? (
             <Button
+              disabled={!canWrite}
               icon={<PlusIcon className="h-4 w-4" />}
               onClick={() => {
                 setEditingRule(null)
@@ -346,6 +350,7 @@ export default function AlertsPage() {
           ) : null}
           {tab === 'channels' ? (
             <Button
+              disabled={!canWrite}
               icon={<PlusIcon className="h-4 w-4" />}
               onClick={() => {
                 setEditingChannel(null)
@@ -655,7 +660,7 @@ export default function AlertsPage() {
                                 <Button
                                   size="sm"
                                   variant="secondary"
-                                  disabled={alert.status !== 'firing'}
+                                  disabled={alert.status !== 'firing' || !canWrite}
                                   loading={ackingId === alert.id}
                                   onClick={() => void handleAck(alert)}
                                   icon={<CheckIcon className="h-3.5 w-3.5" />}

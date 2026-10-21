@@ -164,6 +164,8 @@ func (a *API) handleListChecks(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	// 资源范围过滤（先过滤后分页，契约 §53.3/§53.4）。
+	payloads = a.filterCheckPayloadsByScope(r, payloads)
 	params, perr := parsePage(r)
 	if perr != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, perr.Error())
@@ -185,6 +187,9 @@ func (a *API) handleGetCheck(w http.ResponseWriter, r *http.Request) {
 	payloads, err := a.buildCheckPayloads(r.Context(), []store.Check{*c})
 	if err != nil {
 		a.internalError(w, r, err)
+		return
+	}
+	if !writeNotFoundIfInvisible(w, a.canAccessAnyServer(r, payloads[0].ServerIDs)) {
 		return
 	}
 	writeData(w, http.StatusOK, payloads[0])
@@ -250,6 +255,9 @@ func (a *API) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 		a.writeStoreError(w, r, err)
 		return
 	}
+	if !a.requireServersInScope(w, r, serverIDs) {
+		return
+	}
 
 	check := &store.Check{
 		ID:         uuid.NewString(),
@@ -289,6 +297,14 @@ func (a *API) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 func (a *API) handlePatchCheck(w http.ResponseWriter, r *http.Request) {
 	c, err := a.loadCheck(w, r)
 	if err != nil {
+		return
+	}
+	targets, terr := a.st.ListCheckTargets(r.Context(), c.ID)
+	if terr != nil {
+		a.internalError(w, r, terr)
+		return
+	}
+	if !writeNotFoundIfInvisible(w, a.canAccessAnyServer(r, targets)) {
 		return
 	}
 	var req patchCheckRequest
@@ -377,6 +393,9 @@ func (a *API) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	if !writeNotFoundIfInvisible(w, a.checkVisible(r, c.ID)) {
+		return
+	}
 	if err := a.st.DeleteCheck(r.Context(), c.ID); err != nil {
 		a.writeStoreError(w, r, err)
 		return
@@ -392,6 +411,9 @@ func (a *API) handleSetCheckTargets(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	if !writeNotFoundIfInvisible(w, a.checkVisible(r, c.ID)) {
+		return
+	}
 	var req setTargetsRequest
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
@@ -401,6 +423,9 @@ func (a *API) handleSetCheckTargets(w http.ResponseWriter, r *http.Request) {
 	serverIDs, err := a.validateServerIDs(ctx, req.ServerIDs)
 	if err != nil {
 		a.writeStoreError(w, r, err)
+		return
+	}
+	if !a.requireServersInScope(w, r, serverIDs) {
 		return
 	}
 	if err := a.st.SetCheckTargets(ctx, c.ID, serverIDs); err != nil {
@@ -429,6 +454,10 @@ func (a *API) handleRunCheck(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	if !writeNotFoundIfInvisible(w, a.canAccessAnyServer(r, serverIDs)) {
+		return
+	}
+	serverIDs = a.filterServerIDsByScope(r, serverIDs)
 
 	results := make([]checkRunItem, len(serverIDs))
 	sem := make(chan struct{}, checkRunConcurrency)
@@ -473,6 +502,9 @@ func (a *API) handleRunCheck(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleListCheckResults(w http.ResponseWriter, r *http.Request) {
 	c, err := a.loadCheck(w, r)
 	if err != nil {
+		return
+	}
+	if !writeNotFoundIfInvisible(w, a.checkVisible(r, c.ID)) {
 		return
 	}
 
@@ -1046,4 +1078,22 @@ func toIntParam(v any) (int, error) {
 // round2 四舍五入保留两位小数。
 func round2(v float64) float64 {
 	return float64(int64(v*100+0.5)) / 100
+}
+
+// filterCheckPayloadsByScope 按资源范围过滤检测项：只要有任一目标服务器在范围内即可见。
+func (a *API) filterCheckPayloadsByScope(r *http.Request, in []checkPayload) []checkPayload {
+	allowed := a.allowedServers(r)
+	if allowed == nil {
+		return in
+	}
+	out := make([]checkPayload, 0, len(in))
+	for _, p := range in {
+		for _, sid := range p.ServerIDs {
+			if _, ok := allowed[sid]; ok {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
 }

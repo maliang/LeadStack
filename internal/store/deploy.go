@@ -742,3 +742,35 @@ func (s *Store) DeleteReleaseLogsBefore(ctx context.Context, before int64) (int6
 	}
 	return n, nil
 }
+
+// ReleaseServerIDs 返回发布 -> 目标服务器 ID 集合（来自 release_runs）。
+//
+// 资源级授权用它判定「该发布是否与调用者范围有交集」。
+func (s *Store) ReleaseServerIDs(ctx context.Context, releaseIDs []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(releaseIDs))
+	if len(releaseIDs) == 0 {
+		return out, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(releaseIDs)), ",")
+	args := make([]any, 0, len(releaseIDs))
+	for _, id := range releaseIDs {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT release_id, server_id FROM release_runs WHERE release_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("查询发布目标服务器: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var releaseID, serverID string
+		if err := rows.Scan(&releaseID, &serverID); err != nil {
+			return nil, fmt.Errorf("扫描发布目标服务器: %w", err)
+		}
+		out[releaseID] = append(out[releaseID], serverID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历发布目标服务器: %w", err)
+	}
+	return out, nil
+}

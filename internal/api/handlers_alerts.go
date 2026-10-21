@@ -627,7 +627,12 @@ func (a *API) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]alertPayload, 0, len(alerts))
 	for _, item := range alerts {
-		out = append(out, a.toAlertPayload(item, names, nil))
+		payload := a.toAlertPayload(item, names, nil)
+		// 资源范围：按告警所属服务器过滤；规则级告警仅全局范围可见（契约 §53.3）。
+		if !a.optionalServerVisible(r, item.ServerID) {
+			continue
+		}
+		out = append(out, payload)
 	}
 	start, end, meta := params.window(len(out))
 	if !params.Paged {
@@ -640,6 +645,9 @@ func (a *API) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 	alert, err := a.loadAlert(w, r)
 	if err != nil {
+		return
+	}
+	if !writeNotFoundIfInvisible(w, a.optionalServerVisible(r, alert.ServerID)) {
 		return
 	}
 	events, err := a.st.ListAlertEvents(r.Context(), alert.ID, alertEventsDefault)
@@ -662,6 +670,9 @@ func (a *API) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleAckAlert(w http.ResponseWriter, r *http.Request) {
 	alert, err := a.loadAlert(w, r)
 	if err != nil {
+		return
+	}
+	if !writeNotFoundIfInvisible(w, a.optionalServerVisible(r, alert.ServerID)) {
 		return
 	}
 	if alert.Status == store.AlertStatusResolved {

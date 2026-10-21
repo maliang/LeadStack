@@ -98,6 +98,14 @@ func (a *API) handleBatchAgentUpgrade(w http.ResponseWriter, r *http.Request) {
 	for _, id := range normalizeIDList(req.ServerIDs) {
 		filter[id] = true
 	}
+	// 资源范围：显式指定的目标必须在范围内；未指定时只升级范围内的服务器。
+	if !a.scopeIsAll(r) {
+		if len(filter) > 0 {
+			if !a.requireServersInScope(w, r, normalizeIDList(req.ServerIDs)) {
+				return
+			}
+		}
+	}
 
 	results := make([]upgradeResult, 0, len(servers))
 	for _, srv := range servers {
@@ -112,6 +120,9 @@ func (a *API) handleBatchAgentUpgrade(w http.ResponseWriter, r *http.Request) {
 				results = append(results, upgradeResult{ServerID: srv.ID, Error: "agent 未在线"})
 			}
 			continue
+		}
+		if !a.canAccessServer(r, srv.ID) {
+			continue // 范围外：不升级也不报错（不泄露存在性）
 		}
 		if len(filter) == 0 && srv.AgentVersion != nil && *srv.AgentVersion == req.Version {
 			continue // 已是目标版本，跳过

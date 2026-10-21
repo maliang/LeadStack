@@ -328,7 +328,7 @@ func TestExtractBinaryAndSelfCheck(t *testing.T) {
 		t.Fatal("自检失败时不应删除 state.json")
 	}
 	// 版本匹配 → 通过
-	result, _, err = RunUpgradeSelfCheck(context.Background(), env.cfg.DBPath, env.cfg.DataDir, 7)
+	result, _, err = RunUpgradeSelfCheck(context.Background(), env.cfg.DBPath, env.cfg.DataDir, defaultMaxSchemaVersion)
 	if err != nil {
 		t.Fatalf("自检执行失败: %v", err)
 	}

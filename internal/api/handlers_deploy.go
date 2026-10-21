@@ -661,6 +661,25 @@ func (a *API) handleListReleases(w http.ResponseWriter, r *http.Request) {
 	if releases == nil {
 		releases = []store.Release{}
 	}
+	// 资源范围：只保留目标服务器与调用者范围有交集的发布（契约 §53.3）。
+	if !a.scopeIsAll(r) && len(releases) > 0 {
+		ids := make([]string, 0, len(releases))
+		for _, rel := range releases {
+			ids = append(ids, rel.ID)
+		}
+		releaseServers, rerr := a.st.ReleaseServerIDs(r.Context(), ids)
+		if rerr != nil {
+			a.internalError(w, r, rerr)
+			return
+		}
+		filtered := make([]store.Release, 0, len(releases))
+		for _, rel := range releases {
+			if a.canAccessAnyServer(r, releaseServers[rel.ID]) {
+				filtered = append(filtered, rel)
+			}
+		}
+		releases = filtered
+	}
 	start, end, meta := params.window(len(releases))
 	if !params.Paged {
 		start, end = 0, len(releases)
@@ -698,6 +717,9 @@ func (a *API) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 	if len(serverIDs) > maxBatchIDs {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument,
 			fmt.Sprintf("一次发布最多 %d 台服务器", maxBatchIDs))
+		return
+	}
+	if !a.requireServersInScope(w, r, serverIDs) {
 		return
 	}
 	concurrency := a.cfg.DeployConcurrency
@@ -797,6 +819,9 @@ func (a *API) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	if !writeNotFoundIfInvisible(w, a.releaseVisible(r, release.ID)) {
+		return
+	}
 	runs, err := a.st.ListReleaseRuns(r.Context(), release.ID)
 	if err != nil {
 		a.internalError(w, r, err)
@@ -876,6 +901,9 @@ func (a *API) handleRetryRelease(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	if !writeNotFoundIfInvisible(w, a.releaseVisible(r, release.ID)) {
+		return
+	}
 	var req struct {
 		ServerIDs []string `json:"server_ids"`
 	}
@@ -890,6 +918,20 @@ func (a *API) handleRetryRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serverIDs := normalizeIDList(req.ServerIDs)
+	if !a.scopeIsAll(r) {
+		if len(serverIDs) > 0 {
+			if !a.requireServersInScope(w, r, serverIDs) {
+				return
+			}
+		} else {
+			ids, serr := a.releaseServerIDs(r, release.ID)
+			if serr != nil {
+				a.internalError(w, r, serr)
+				return
+			}
+			serverIDs = ids
+		}
+	}
 	n, err := a.deploy.Retry(release.ID, serverIDs)
 	if err != nil {
 		a.writeStoreError(w, r, err)
@@ -905,6 +947,9 @@ func (a *API) handleRollbackRelease(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	if !writeNotFoundIfInvisible(w, a.releaseVisible(r, release.ID)) {
+		return
+	}
 	var req struct {
 		ServerIDs []string `json:"server_ids"`
 	}
@@ -918,7 +963,22 @@ func (a *API) handleRollbackRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, codeInternal, "发布编排器未启用")
 		return
 	}
-	n, err := a.deploy.Rollback(release.ID, normalizeIDList(req.ServerIDs))
+	rollbackIDs := normalizeIDList(req.ServerIDs)
+	if !a.scopeIsAll(r) {
+		if len(rollbackIDs) > 0 {
+			if !a.requireServersInScope(w, r, rollbackIDs) {
+				return
+			}
+		} else {
+			ids, serr := a.releaseServerIDs(r, release.ID)
+			if serr != nil {
+				a.internalError(w, r, serr)
+				return
+			}
+			rollbackIDs = ids
+		}
+	}
+	n, err := a.deploy.Rollback(release.ID, rollbackIDs)
 	if err != nil {
 		a.writeStoreError(w, r, err)
 		return
@@ -931,6 +991,9 @@ func (a *API) handleRollbackRelease(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleCancelRelease(w http.ResponseWriter, r *http.Request) {
 	release, err := a.loadRelease(w, r)
 	if err != nil {
+		return
+	}
+	if !writeNotFoundIfInvisible(w, a.releaseVisible(r, release.ID)) {
 		return
 	}
 	var req struct {
@@ -1001,3 +1064,25 @@ func (a *API) loadRelease(w http.ResponseWriter, r *http.Request) (*store.Releas
 
 // deployRender 是 deploy.Render 的间接调用点（便于测试替换；渲染**不执行**任何命令）。
 var deployRender = deploy.Render
+
+// releaseVisible 判断发布是否与调用者资源范围有交集；全局范围恒 true。
+func (a *API) releaseVisible(r *http.Request, releaseID string) bool {
+	if a.scopeIsAll(r) {
+		return true
+	}
+	servers, err := a.st.ReleaseServerIDs(r.Context(), []string{releaseID})
+	if err != nil {
+		a.logger.Warn("查询发布目标服务器失败", "release_id", releaseID, "err", err)
+		return false
+	}
+	return a.canAccessAnyServer(r, servers[releaseID])
+}
+
+// releaseServerIDs 返回该发布中属于调用者范围的服务器 ID 列表。
+func (a *API) releaseServerIDs(r *http.Request, releaseID string) ([]string, error) {
+	servers, err := a.st.ReleaseServerIDs(r.Context(), []string{releaseID})
+	if err != nil {
+		return nil, err
+	}
+	return a.filterServerIDsByScope(r, servers[releaseID]), nil
+}

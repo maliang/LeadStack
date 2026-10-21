@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { api, type ManagedUser, type UserRole } from '../lib/api'
+import { api, type ManagedUser, type Role } from '../lib/api'
 import { usePolling } from '../lib/hooks'
 import { useI18n } from '../i18n'
 import { errorMessage } from '../lib/errors'
@@ -9,13 +9,11 @@ import { useAuth } from '../lib/auth'
 import { Button, IconButton } from '../components/Button'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { EmptyState } from '../components/EmptyState'
-import { PencilIcon, PlusIcon, RefreshIcon, TrashIcon, UsersIcon } from '../components/Icons'
+import { LockIcon, PencilIcon, PlusIcon, RefreshIcon, TrashIcon, UnlockIcon, UsersIcon } from '../components/Icons'
 import { InlineLoading } from '../components/Loading'
 import { Modal } from '../components/Modal'
 import { PageHeader } from '../components/PageHeader'
 import { useToast } from '../components/Toast'
-
-const ROLES: UserRole[] = ['admin', 'operator', 'viewer']
 
 const inputClass =
   'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100'
@@ -25,15 +23,17 @@ const labelClass = 'block text-sm font-medium text-slate-700 dark:text-slate-200
 interface UserFormState {
   username: string
   password: string
-  role: UserRole
+  role: string
 }
 
 export default function UsersPage() {
   const { t } = useI18n()
-  const { user: me } = useAuth()
+  const { user: me, can } = useAuth()
   const { toast } = useToast()
   const query = usePolling(api.users, 10_000)
+  const rolesQuery = usePolling(api.roles, 60_000)
   const users = query.data ?? []
+  const roles: Role[] = rolesQuery.data ?? []
 
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState<UserFormState>({ username: '', password: '', role: 'viewer' })
@@ -82,7 +82,7 @@ export default function UsersPage() {
     }
   }
 
-  const handleRoleChange = async (target: ManagedUser, role: UserRole) => {
+  const handleRoleChange = async (target: ManagedUser, role: string) => {
     setActionError(null)
     try {
       await api.updateUser(target.id, { role })
@@ -169,6 +169,16 @@ export default function UsersPage() {
     }
   }
 
+  const handleUnlock = async (target: ManagedUser) => {
+    try {
+      await api.unlockUser(target.id)
+      toast(t('users.unlocked', { name: target.username }), 'success')
+      void query.refresh()
+    } catch (caught) {
+      toast(errorMessage(caught, t('common.error')), 'error')
+    }
+  }
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -252,13 +262,13 @@ export default function UsersPage() {
                         <select
                           value={target.role}
                           disabled={isSelf}
-                          onChange={(event) => void handleRoleChange(target, event.target.value as UserRole)}
+                          onChange={(event) => void handleRoleChange(target, event.target.value)}
                           className="h-8 rounded border border-slate-300 bg-white px-2 text-xs text-slate-700 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                           aria-label={t('users.role')}
                         >
-                          {ROLES.map((role) => (
-                            <option key={role} value={role}>
-                              {t(`role.${role}`)}
+                          {roles.map((role) => (
+                            <option key={role.key} value={role.key}>
+                              {role.name}
                             </option>
                           ))}
                         </select>
@@ -274,12 +284,38 @@ export default function UsersPage() {
                         >
                           {target.disabled ? t('common.disabled') : t('common.enabled')}
                         </span>
+                        {target.locked ? (
+                          <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-600/20 dark:bg-rose-500/10 dark:text-rose-300">
+                            <LockIcon className="h-3 w-3" />
+                            {t('users.locked')}
+                          </span>
+                        ) : null}
+                        {target.failed_attempts > 0 ? (
+                          <span className="mt-1 block text-[11px] text-slate-400 dark:text-slate-500">
+                            {t('users.failedAttempts', { count: target.failed_attempts })}
+                          </span>
+                        ) : null}
+                        {target.locked && target.locked_until ? (
+                          <span className="mt-0.5 block text-[11px] text-rose-500 dark:text-rose-400">
+                            {t('users.lockedUntil', { time: formatDateTime(target.locked_until) })}
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 align-top text-xs text-slate-500 dark:text-slate-400">
                         {formatDateTime(target.created_at)}
                       </td>
                       <td className="px-4 py-3 align-top">
                         <div className="flex items-center justify-end gap-0.5">
+                          {target.locked && can('user.manage') ? (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => void handleUnlock(target)}
+                              icon={<UnlockIcon className="h-3.5 w-3.5" />}
+                            >
+                              {t('users.unlock')}
+                            </Button>
+                          ) : null}
                           <Button
                             size="sm"
                             variant="secondary"
@@ -392,12 +428,12 @@ export default function UsersPage() {
             <select
               id="new-role"
               value={form.role}
-              onChange={(event) => setForm({ ...form, role: event.target.value as UserRole })}
+              onChange={(event) => setForm({ ...form, role: event.target.value })}
               className={inputClass + ' mt-1.5'}
             >
-              {ROLES.map((role) => (
-                <option key={role} value={role}>
-                  {t(`role.${role}`)}
+              {roles.map((role) => (
+                <option key={role.key} value={role.key}>
+                  {role.name}
                 </option>
               ))}
             </select>

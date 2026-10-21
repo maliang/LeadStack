@@ -48,11 +48,15 @@ type serverPayload struct {
 	HostKeyPolicy string          `json:"host_key_policy"`
 	LastError     *string         `json:"last_error"`
 	HostInfo      json.RawMessage `json:"host_info"`
+	// 一等公民分组（授权单元，契约 §53.1）；与上面的自由文本 group 并存。
+	GroupIDs   []string `json:"group_ids"`
+	GroupNames []string `json:"group_names"`
 }
 
 // createServerRequest 是新增服务器请求体（纳管 扩展 credential_id/mode/group/tags/host_key_policy）。
 type createServerRequest struct {
 	Name          string    `json:"name"`
+	GroupIDs      *[]string `json:"group_ids"`
 	Host          string    `json:"host"`
 	Port          *int      `json:"port"`
 	Mode          string    `json:"mode"`
@@ -72,6 +76,8 @@ type patchServerRequest struct {
 	// Host / Port 允许事后修改（契约 49.2）：改完需重新测试连通性。
 	Host *string `json:"host"`
 	Port *int    `json:"port"`
+	// GroupIDs 整包替换服务器的一等公民分组归属（缺省表示不改）。
+	GroupIDs *[]string `json:"group_ids"`
 }
 
 // handleListServers 处理 GET /api/v1/servers，支持 ?group=&tag=&status=&mode= 过滤。
@@ -123,9 +129,15 @@ func (a *API) handleListServers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 资源范围过滤必须在分页之前（契约 §53.3/§53.4：先过滤后分页）。
+	servers = a.filterServersByScope(r, servers)
 	out := make([]serverPayload, 0, len(servers))
 	for _, srv := range servers {
 		out = append(out, toServerPayload(srv, nowMS, metrics[srv.ID], hostInfoRaw(hostInfos, srv.ID)))
+	}
+	if err := a.attachServerGroups(ctx, out); err != nil {
+		a.internalError(w, r, err)
+		return
 	}
 	start, end, meta := params.window(len(out))
 	if !params.Paged {
@@ -158,7 +170,12 @@ func (a *API) handleGetServer(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	writeData(w, http.StatusOK, toServerPayload(*srv, a.nowMS(), metrics[id], hostInfoRaw(hostInfos, id)))
+	payload := toServerPayload(*srv, a.nowMS(), metrics[id], hostInfoRaw(hostInfos, id))
+	if err := a.attachServerGroups(ctx, []serverPayload{payload}); err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, payload)
 }
 
 // handleCreateServer 处理 POST /api/v1/servers。
@@ -261,9 +278,17 @@ func (a *API) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 		a.writeStoreError(w, r, err)
 		return
 	}
+	if !a.applyServerGroups(ctx, w, r, srv.ID, req.GroupIDs) {
+		return
+	}
 	a.logger.Info("新增服务器",
 		"server_id", srv.ID, "name", srv.Name, "host", srv.Host, "mode", srv.Mode, "group", req.Group)
-	writeData(w, http.StatusCreated, toServerPayload(*srv, a.nowMS(), nil, nil))
+	payload := toServerPayload(*srv, a.nowMS(), nil, nil)
+	if err := a.attachServerGroups(ctx, []serverPayload{payload}); err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusCreated, payload)
 }
 
 // handlePatchServer 处理 PATCH /api/v1/servers/{id}。
@@ -279,7 +304,7 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
 		return
 	}
-	if req.Name == nil && req.Tags == nil && req.Group == nil &&
+	if req.Name == nil && req.Tags == nil && req.Group == nil && req.GroupIDs == nil &&
 		req.HostKeyPolicy == nil && req.CredentialID == nil &&
 		req.Host == nil && req.Port == nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument,
@@ -414,7 +439,15 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 			"server_id", id, "old", fmt.Sprintf("%s:%d", oldHost, oldPort),
 			"new", fmt.Sprintf("%s:%d", newHost, newPort))
 	}
-	writeData(w, http.StatusOK, toServerPayload(*srv, a.nowMS(), metrics[id], hostInfoRaw(hostInfos, id)))
+	if !a.applyServerGroups(ctx, w, r, id, req.GroupIDs) {
+		return
+	}
+	payload := toServerPayload(*srv, a.nowMS(), metrics[id], hostInfoRaw(hostInfos, id))
+	if err := a.attachServerGroups(ctx, []serverPayload{payload}); err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	writeData(w, http.StatusOK, payload)
 }
 
 // handleDeleteServer 处理 DELETE /api/v1/servers/{id}。

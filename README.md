@@ -299,7 +299,9 @@ leadstack restore --file /tmp/leadstack.lsbak --data-dir ./data
 
 | 能力 | 说明 |
 |---|---|
-| **用户与角色** | `admin` 全部权限 / `operator` 日常运维（不可管用户、不可读审计、不可恢复备份）/ `viewer` 只读 |
+| **用户与角色** | 内置 `admin`（全部）/`operator`（日常运维）/`viewer`（只读）；另有 **自定义角色**：24 个权限点自由勾选 |
+| **服务器分组与资源级授权** | 分组是一等公民（可建/改/删/管成员）；角色可限定「全部 / 指定分组 / 指定服务器」，受限用户只能看到并操作范围内的机器与检测、告警、发布、定时任务 |
+| **登录保护** | 连续失败 `N` 次锁定账号（默认 5 次 / 15 分钟），同 IP 有频率上限；管理员可一键解锁；锁定与解锁均进审计 |
 | **API Token** | 「系统 → API Token」创建 `lsk_` 令牌供 CI/脚本调用；**明文只显示一次**，可撤销、可设过期 |
 | **审计日志** | 所有写操作自动记录（谁、何时、哪个 IP、改了什么），敏感字段脱敏；保留 180 天 |
 | **凭证安全** | SSH 密码/私钥 AES-256-GCM 加密、接口不回显；主机密钥变更即拒绝连接 |
@@ -519,6 +521,10 @@ sudo systemctl start leadstack
 | `LEADSTACK_TERMINAL_ENABLED` | `false` | Web 终端开关 |
 | `LEADSTACK_CRON_TICK` | `1m` | 定时任务扫描间隔 |
 | `LEADSTACK_FILE_MAX_MB` | `8` | 文件传输单文件上限 |
+| `LEADSTACK_LOGIN_MAX_ATTEMPTS` | `5` | 账号连续登录失败锁定阈值（0=关闭） |
+| `LEADSTACK_LOGIN_LOCK_DURATION` | `15m` | 账号锁定时长 |
+| `LEADSTACK_LOGIN_IP_LIMIT` | `20` | 同一 IP 在窗口内的登录请求上限（0=关闭） |
+| `LEADSTACK_LOGIN_IP_WINDOW` | `1m` | IP 限流窗口 |
 
 > ⚠️ `master.key` 丢失 → 已存凭证无法解密；`backup.pass` 丢失 → 备份永久无法解密。两者都要与数据目录一并备份，且**分开保管**。
 
@@ -573,7 +579,7 @@ make build          # 构建（含前端）
 make test           # Go 测试
 make fmt-check      # gofmt 闸门
 make test-race      # 竞态检测（api + store）
-make test-e2e       # 端到端验收（7 个脚本，共 228 项断言）
+make test-e2e       # 端到端验收（8 个脚本，逐段断言）
 make dev            # 开发模式（另开 make web-dev 走前端热更新）
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check   # Docker 构建 + 容器内健康检查 + 备份校验
@@ -589,6 +595,7 @@ bash scripts/verify_alerts.sh      # 渠道、firing、去重、确认、恢复�
 bash scripts/verify_deploy.sh      # 发布、产物落盘校验、失败保护、回滚、批量、重试、注入防护
 bash scripts/verify_backup.sh      # 加密有效性、篡改检测、离线恢复、暂存恢复、定时与保留
 bash scripts/verify_ops.sh         # 审计、RBAC、Token、分页、导入、终端、文件、定时任务、端口
+bash scripts/verify_authz.sh       # 权限点、自定义角色、分组与资源级授权、登录限流与失败锁定
 ```
 
 ---
@@ -607,7 +614,7 @@ bash scripts/verify_ops.sh         # 审计、RBAC、Token、分页、导入、�
 
 - [架构与接口契约](docs/ARCHITECTURE.md) —— 改代码前必读
 - [产品与技术计划](docs/PLAN.md)
-- 交付报告：[基础骨架](docs/reports/bootstrap.md) · [服务器纳管](docs/reports/server-management.md) · [监控与检测](docs/reports/monitoring.md) · [告警](docs/reports/alerting.md) · [批量部署](docs/reports/deployment.md) · [备份恢复](docs/reports/backup.md) · [运维与协作](docs/reports/ops-and-collaboration.md)
+- 交付报告：[基础骨架](docs/reports/bootstrap.md) · [服务器纳管](docs/reports/server-management.md) · [监控与检测](docs/reports/monitoring.md) · [告警](docs/reports/alerting.md) · [批量部署](docs/reports/deployment.md) · [备份恢复](docs/reports/backup.md) · [运维与协作](docs/reports/ops-and-collaboration.md) · [权限体系](docs/reports/roles-and-authz.md)
 - [版本升级与回滚 runbook](docs/UPGRADE.md)（systemd / Docker / agent 升级，含回滚与兼容性承诺）
 - [发布验证记录](docs/DEPLOY-VERIFY.md)（GoReleaser / Docker 实测）
 

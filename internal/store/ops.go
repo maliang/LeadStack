@@ -157,12 +157,16 @@ type UserRecord struct {
 	Disabled     bool
 	CreatedAt    int64
 	UpdatedAt    *int64
+	// 登录限流/失败锁定字段（契约 §54）。
+	FailedAttempts int
+	LockedUntil    int64
+	LastFailedAt   int64
 }
 
 // ListUsers 返回全部用户（按创建时间升序）。
 func (s *Store) ListUsers(ctx context.Context) ([]UserRecord, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, role, disabled, created_at, updated_at
+		`SELECT id, username, password_hash, role, disabled, created_at, updated_at, failed_attempts, locked_until, last_failed_at
 		   FROM users ORDER BY created_at ASC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询用户列表: %w", err)
@@ -176,7 +180,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]UserRecord, error) {
 			disabled int
 			updated  sql.NullInt64
 		)
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &disabled, &u.CreatedAt, &updated); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &disabled, &u.CreatedAt, &updated, &u.FailedAttempts, &u.LockedUntil, &u.LastFailedAt); err != nil {
 			return nil, fmt.Errorf("扫描用户: %w", err)
 		}
 		u.Disabled = disabled != 0
@@ -197,8 +201,8 @@ func (s *Store) GetUserRecord(ctx context.Context, id string) (*UserRecord, erro
 		updated  sql.NullInt64
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, role, disabled, created_at, updated_at FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &disabled, &u.CreatedAt, &updated)
+		`SELECT id, username, password_hash, role, disabled, created_at, updated_at, failed_attempts, locked_until, last_failed_at FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &disabled, &u.CreatedAt, &updated, &u.FailedAttempts, &u.LockedUntil, &u.LastFailedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询用户: %w", ErrNotFound)
@@ -218,8 +222,8 @@ func (s *Store) GetUserRecordByUsername(ctx context.Context, username string) (*
 		updated  sql.NullInt64
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, role, disabled, created_at, updated_at FROM users WHERE username = ?`, username).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &disabled, &u.CreatedAt, &updated)
+		`SELECT id, username, password_hash, role, disabled, created_at, updated_at, failed_attempts, locked_until, last_failed_at FROM users WHERE username = ?`, username).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &disabled, &u.CreatedAt, &updated, &u.FailedAttempts, &u.LockedUntil, &u.LastFailedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询用户: %w", ErrNotFound)

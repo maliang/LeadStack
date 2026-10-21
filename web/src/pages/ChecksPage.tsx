@@ -27,6 +27,7 @@ import {
 import { InlineLoading } from '../components/Loading'
 import { RunResultsDialog } from '../components/RunResultsDialog'
 import { useToast } from '../components/Toast'
+import { useAuth } from '../lib/auth'
 
 import { t } from '../i18n'
 interface RunState {
@@ -45,6 +46,8 @@ const STATE_FILTERS: { value: CheckState | ''; label: string }[] = [
 
 export default function ChecksPage() {
   const { toast } = useToast()
+  const { can } = useAuth()
+  const canWrite = can('check.write')
   const checksQuery = usePolling(api.checks, 10_000)
   const summaryQuery = usePolling(api.checksSummary, 10_000)
   const serversQuery = usePolling(api.servers, 30_000)
@@ -167,15 +170,17 @@ export default function ChecksPage() {
           >
             {t('s.0689')}
           </Button>
-          <Button
-            onClick={() => {
-              setEditing(null)
-              setFormOpen(true)
-            }}
-            icon={<PlusIcon className="h-4 w-4" />}
-          >
-            {t('s.0348')}
-          </Button>
+          {canWrite ? (
+            <Button
+              onClick={() => {
+                setEditing(null)
+                setFormOpen(true)
+              }}
+              icon={<PlusIcon className="h-4 w-4" />}
+            >
+              {t('s.0348')}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -273,11 +278,15 @@ export default function ChecksPage() {
             icon={<ShieldCheckIcon className="h-6 w-6" />}
             title={t('s.0951')}
             description={t('s.0952')}
-            actionLabel={t('s.0348')}
-            onAction={() => {
-              setEditing(null)
-              setFormOpen(true)
-            }}
+            actionLabel={canWrite ? t('s.0348') : undefined}
+            onAction={
+              canWrite
+                ? () => {
+                    setEditing(null)
+                    setFormOpen(true)
+                  }
+                : undefined
+            }
           />
         ) : visibleChecks.length === 0 ? (
           <EmptyState
@@ -319,7 +328,9 @@ export default function ChecksPage() {
                       <td className="max-w-[220px] px-4 py-3 align-top">
                         <button
                           type="button"
+                          disabled={!canWrite}
                           onClick={() => {
+                            if (!canWrite) return
                             setEditing(check)
                             setFormOpen(true)
                           }}
@@ -400,7 +411,9 @@ export default function ChecksPage() {
                         <EnableSwitch
                           checked={check.enabled}
                           loading={togglingId === check.id}
-                          onChange={() => void handleToggleEnabled(check)}
+                          onChange={() => {
+                            if (canWrite) void handleToggleEnabled(check)
+                          }}
                         />
                       </td>
                       <td className="px-4 py-3 align-top">
@@ -408,12 +421,13 @@ export default function ChecksPage() {
                           <IconButton
                             label={t('s.0966')}
                             onClick={() => void handleRun(check)}
-                            disabled={runState?.loading ?? false}
+                            disabled={!canWrite || (runState?.loading ?? false)}
                           >
                             <PlayIcon className="h-4 w-4" />
                           </IconButton>
                           <IconButton
                             label={t('s.0347')}
+                            disabled={!canWrite}
                             onClick={() => {
                               setEditing(check)
                               setFormOpen(true)
@@ -424,6 +438,7 @@ export default function ChecksPage() {
                           <IconButton
                             label={t('s.0967')}
                             tone="danger"
+                            disabled={!canWrite}
                             onClick={() => {
                               setDeleteError(null)
                               setDeleting(check)

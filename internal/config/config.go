@@ -22,7 +22,12 @@ const (
 	EnvListen        = "LEADSTACK_LISTEN"
 	EnvDataDir       = "LEADSTACK_DATA_DIR"
 	EnvAdminPassword = "LEADSTACK_ADMIN_PASSWORD"
-	EnvLogLevel      = "LEADSTACK_LOG_LEVEL"
+	// 登录保护（契约 §54）。
+	EnvLoginMaxAttempts  = "LEADSTACK_LOGIN_MAX_ATTEMPTS"
+	EnvLoginLockDuration = "LEADSTACK_LOGIN_LOCK_DURATION"
+	EnvLoginIPLimit      = "LEADSTACK_LOGIN_IP_LIMIT"
+	EnvLoginIPWindow     = "LEADSTACK_LOGIN_IP_WINDOW"
+	EnvLogLevel          = "LEADSTACK_LOG_LEVEL"
 	// EnvMasterKey 直接提供 32 字节 hex 主密钥；设置后不再读取 master.key 文件。
 	EnvMasterKey = "LEADSTACK_MASTER_KEY"
 	// EnvSSHInterval 是 agentless（mode=ssh）采集间隔，支持 Go duration 字符串（如 30s、3s）。
@@ -92,6 +97,11 @@ const (
 	DefaultLogLevel   = "info"
 	// DefaultTokenTTL 是登录 JWT 的有效期。
 	DefaultTokenTTL = 12 * time.Hour
+	// 登录保护默认值（契约 §54）：连续 5 次失败锁定 15 分钟，同一 IP 每分钟 20 次。
+	DefaultLoginMaxAttempts  = 5
+	DefaultLoginLockDuration = 15 * time.Minute
+	DefaultLoginIPLimit      = 20
+	DefaultLoginIPWindow     = time.Minute
 	// DefaultShutdownTimeout 是优雅关闭的最长等待时间。
 	DefaultShutdownTimeout = 10 * time.Second
 	// DefaultSSHInterval 是 agentless 采集的默认间隔。
@@ -149,6 +159,14 @@ type Config struct {
 	LogLevel slog.Level
 	// TokenTTL 是登录 JWT 的有效期。
 	TokenTTL time.Duration
+	// LoginMaxAttempts 是账号连续失败锁定阈值（0=关闭）。
+	LoginMaxAttempts int
+	// LoginLockDuration 是账号锁定时长。
+	LoginLockDuration time.Duration
+	// LoginIPLimit 是同一 IP 在 LoginIPWindow 内允许的登录请求数（0=关闭）。
+	LoginIPLimit int
+	// LoginIPWindow 是 IP 限流窗口。
+	LoginIPWindow time.Duration
 	// ShutdownTimeout 是优雅关闭的最长等待时间。
 	ShutdownTimeout time.Duration
 	// Version 是构建版本号，由 main 传入（-ldflags 注入）。
@@ -216,6 +234,10 @@ func Load(version string, args []string) (*Config, error) {
 	adminPassword := fs.String("admin-password", os.Getenv(EnvAdminPassword), "初始管理员密码；留空则随机生成（环境变量 "+EnvAdminPassword+"）")
 	logLevel := fs.String("log-level", envOr(EnvLogLevel, DefaultLogLevel), "日志级别：debug|info|warn|error")
 	tokenTTL := fs.Duration("token-ttl", DefaultTokenTTL, "登录令牌有效期")
+	loginMaxAttempts := fs.Int("login-max-attempts", envIntOr(EnvLoginMaxAttempts, DefaultLoginMaxAttempts), "账号连续登录失败锁定阈值，0=关闭（环境变量 "+EnvLoginMaxAttempts+"）")
+	loginLockDuration := fs.Duration("login-lock-duration", defaultDurationOr(EnvLoginLockDuration, DefaultLoginLockDuration), "账号锁定时长，如 15m（环境变量 "+EnvLoginLockDuration+"）")
+	loginIPLimit := fs.Int("login-ip-limit", envIntOr(EnvLoginIPLimit, DefaultLoginIPLimit), "同一 IP 限流窗口内的登录请求上限，0=关闭（环境变量 "+EnvLoginIPLimit+"）")
+	loginIPWindow := fs.Duration("login-ip-window", defaultDurationOr(EnvLoginIPWindow, DefaultLoginIPWindow), "IP 限流窗口，如 1m（环境变量 "+EnvLoginIPWindow+"）")
 	shutdownTimeout := fs.Duration("shutdown-timeout", DefaultShutdownTimeout, "优雅关闭最长等待时间")
 	masterKeyHex := fs.String("master-key", os.Getenv(EnvMasterKey), "32 字节 hex 主密钥；留空则读取 <data-dir>/master.key（环境变量 "+EnvMasterKey+"）")
 	sshInterval := fs.Duration("ssh-interval", defaultSSHInterval(), "agentless 采集间隔，如 30s（环境变量 "+EnvSSHInterval+"）")
@@ -251,6 +273,10 @@ func Load(version string, args []string) (*Config, error) {
 		DataDir:                strings.TrimSpace(*dataDir),
 		AdminPassword:          *adminPassword,
 		TokenTTL:               *tokenTTL,
+		LoginMaxAttempts:       *loginMaxAttempts,
+		LoginLockDuration:      *loginLockDuration,
+		LoginIPLimit:           *loginIPLimit,
+		LoginIPWindow:          *loginIPWindow,
 		ShutdownTimeout:        *shutdownTimeout,
 		Version:                version,
 		SSHInterval:            *sshInterval,
@@ -290,6 +316,18 @@ func Load(version string, args []string) (*Config, error) {
 	}
 	if cfg.DataDir == "" {
 		return nil, errors.New("配置错误: 数据目录不能为空")
+	}
+	if cfg.LoginMaxAttempts < 0 {
+		return nil, errors.New("配置错误: login-max-attempts 不能为负数（0 表示关闭）")
+	}
+	if cfg.LoginLockDuration < 0 {
+		return nil, errors.New("配置错误: login-lock-duration 不能为负数")
+	}
+	if cfg.LoginIPLimit < 0 {
+		return nil, errors.New("配置错误: login-ip-limit 不能为负数（0 表示关闭）")
+	}
+	if cfg.LoginIPWindow < 0 {
+		return nil, errors.New("配置错误: login-ip-window 不能为负数")
 	}
 	if cfg.TokenTTL <= 0 {
 		return nil, errors.New("配置错误: token-ttl 必须为正数")

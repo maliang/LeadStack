@@ -25,6 +25,8 @@ export interface NavItem {
   icon: ComponentType<SVGProps<SVGSVGElement>>
   /** 精确匹配（避免 '/' 总是高亮） */
   end?: boolean
+  /** 需要的权限点；缺省表示所有已登录用户可见 */
+  permission?: string
 }
 
 export interface NavGroup {
@@ -39,40 +41,42 @@ export const NAV_GROUPS: NavGroup[] = [
     key: 'monitoring',
     labelKey: 'nav.group.monitoring',
     items: [
-      { to: '/', labelKey: 'nav.overview', icon: LayoutDashboardIcon, end: true },
-      { to: '/servers', labelKey: 'nav.servers', icon: ServerIcon },
-      { to: '/checks', labelKey: 'nav.checks', icon: PulseIcon },
-      { to: '/alerts', labelKey: 'nav.alerts', icon: BellIcon },
+      { to: '/', labelKey: 'nav.overview', icon: LayoutDashboardIcon, end: true, permission: 'server.read' },
+      { to: '/servers', labelKey: 'nav.servers', icon: ServerIcon, permission: 'server.read' },
+      { to: '/checks', labelKey: 'nav.checks', icon: PulseIcon, permission: 'check.read' },
+      { to: '/alerts', labelKey: 'nav.alerts', icon: BellIcon, permission: 'alert.read' },
     ],
   },
   {
     key: 'ops',
     labelKey: 'nav.group.ops',
     items: [
-      { to: '/terminal', labelKey: 'nav.terminal', icon: TerminalIcon },
-      { to: '/files', labelKey: 'nav.files', icon: FolderIcon },
-      { to: '/scheduled-tasks', labelKey: 'nav.scheduledTasks', icon: ClockIcon },
-      { to: '/logs', labelKey: 'nav.logs', icon: FileTextIcon },
-      { to: '/import', labelKey: 'nav.import', icon: PlusIcon },
+      { to: '/terminal', labelKey: 'nav.terminal', icon: TerminalIcon, permission: 'terminal.use' },
+      { to: '/files', labelKey: 'nav.files', icon: FolderIcon, permission: 'terminal.use' },
+      { to: '/scheduled-tasks', labelKey: 'nav.scheduledTasks', icon: ClockIcon, permission: 'task.read' },
+      { to: '/logs', labelKey: 'nav.logs', icon: FileTextIcon, permission: 'terminal.use' },
+      { to: '/import', labelKey: 'nav.import', icon: PlusIcon, permission: 'server.write' },
     ],
   },
   {
     key: 'release',
     labelKey: 'nav.group.release',
     items: [
-      { to: '/apps', labelKey: 'nav.apps', icon: ListChecksIcon },
-      { to: '/releases', labelKey: 'nav.releases', icon: PlayIcon },
+      { to: '/apps', labelKey: 'nav.apps', icon: ListChecksIcon, permission: 'deploy.read' },
+      { to: '/releases', labelKey: 'nav.releases', icon: PlayIcon, permission: 'deploy.read' },
     ],
   },
   {
     key: 'system',
     labelKey: 'nav.group.system',
     items: [
-      { to: '/credentials', labelKey: 'nav.credentials', icon: KeyIcon },
-      { to: '/users', labelKey: 'nav.users', icon: UsersIcon },
-      { to: '/tokens', labelKey: 'nav.tokens', icon: KeyRoundIcon },
-      { to: '/audit', labelKey: 'nav.audit', icon: ShieldCheckIcon },
-      { to: '/backups', labelKey: 'nav.backups', icon: ArchiveIcon },
+      { to: '/credentials', labelKey: 'nav.credentials', icon: KeyIcon, permission: 'server.write' },
+      { to: '/users', labelKey: 'nav.users', icon: UsersIcon, permission: 'user.manage' },
+      { to: '/tokens', labelKey: 'nav.tokens', icon: KeyRoundIcon, permission: 'token.manage' },
+      { to: '/roles', labelKey: 'nav.roles', icon: ShieldCheckIcon, permission: 'role.manage' },
+      { to: '/groups', labelKey: 'nav.groups', icon: FolderIcon, permission: 'server.read' },
+      { to: '/audit', labelKey: 'nav.audit', icon: ShieldCheckIcon, permission: 'audit.read' },
+      { to: '/backups', labelKey: 'nav.backups', icon: ArchiveIcon, permission: 'backup.read' },
       { to: '/settings', labelKey: 'nav.settings', icon: SettingsIcon },
     ],
   },
@@ -97,6 +101,8 @@ const SIMPLE_CRUMBS: Record<string, Crumb> = {
   '/credentials': { labelKey: 'nav.credentials' },
   '/users': { labelKey: 'nav.users' },
   '/tokens': { labelKey: 'nav.tokens' },
+  '/roles': { labelKey: 'nav.roles' },
+  '/groups': { labelKey: 'nav.groups' },
   '/audit': { labelKey: 'nav.audit' },
   '/backups': { labelKey: 'nav.backups' },
   '/settings': { labelKey: 'nav.settings' },

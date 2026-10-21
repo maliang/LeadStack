@@ -60,7 +60,13 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 				writeError(w, http.StatusUnauthorized, codeUnauthorized, err.Error())
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(withActor(r.Context(), claims)))
+			az, azErr := a.authzForRole(r.Context(), claims.Role)
+			if azErr != nil {
+				a.internalError(w, r, azErr)
+				return
+			}
+			ctx := withAuthz(withActor(r.Context(), claims), az)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
@@ -83,9 +89,14 @@ func (a *API) requireAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusForbidden, codeForbidden, "该用户已被禁用，请联系管理员")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(withActor(r.Context(), &actorClaims{
-			ID: record.ID, Username: record.Username, Role: record.Role,
-		})))
+		claimsFromDB := &actorClaims{ID: record.ID, Username: record.Username, Role: record.Role}
+		az, azErr := a.authzForRole(r.Context(), record.Role)
+		if azErr != nil {
+			a.internalError(w, r, azErr)
+			return
+		}
+		ctx := withAuthz(withActor(r.Context(), claimsFromDB), az)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

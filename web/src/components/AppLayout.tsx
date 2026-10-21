@@ -17,6 +17,7 @@ import {
   MenuIcon,
   PaletteIcon,
   SettingsIcon,
+  ShieldCheckIcon,
   CloseIcon,
 } from './Icons'
 import { AppearanceDialog } from './AppearanceSettings'
@@ -51,19 +52,23 @@ function Logo() {
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useI18n()
+  const { can } = useAuth()
   return (
     <div className="flex h-full flex-col overflow-y-auto">
       <div className="flex h-14 shrink-0 items-center border-b border-slate-200 px-4 dark:border-slate-800">
         <Logo />
       </div>
       <nav className="flex-1 space-y-4 px-2 py-3" aria-label={t('nav.main')}>
-        {NAV_GROUPS.map((group) => (
+        {NAV_GROUPS.map((group) => {
+          const items = group.items.filter((item) => !item.permission || can(item.permission))
+          if (items.length === 0) return null
+          return (
           <div key={group.key}>
             <p className="px-3 pb-1 text-[11px] font-semibold tracking-wider text-slate-400 uppercase dark:text-slate-500">
               {t(group.labelKey)}
             </p>
             <ul className="space-y-0.5">
-              {group.items.map((item) => {
+              {items.map((item) => {
                 const Icon = item.icon
                 return (
                   <li key={item.to}>
@@ -88,7 +93,8 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
               })}
             </ul>
           </div>
-        ))}
+          )
+        })}
       </nav>
     </div>
   )
@@ -96,7 +102,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
 export function AppLayout() {
   const { t } = useI18n()
-  const { user, logout } = useAuth()
+  const { user, logout, can } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const prefs = usePrefs()
@@ -155,7 +161,13 @@ export function AppLayout() {
   }, [location.pathname])
 
   const crumbs = breadcrumbsFor(location.pathname)
-  const roleLabel = user ? t(roleLabelKeys[user.role] ?? 'role.viewer') : ''
+  const isBuiltinRole = user ? ['admin', 'operator', 'viewer'].includes(user.role) : false
+  const roleLabel = user
+    ? isBuiltinRole
+      ? t(roleLabelKeys[user.role] ?? 'role.viewer')
+      : user.role_name ?? user.role
+    : ''
+  const limitedScope = user ? user.scope.mode !== 'all' : false
 
   return (
     <div className="flex min-h-full">
@@ -223,6 +235,18 @@ export function AppLayout() {
             </nav>
 
             <div className="ml-auto flex items-center gap-1">
+              {limitedScope ? (
+                <span
+                  className="hidden items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700 sm:flex dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+                  title={t('authz.scopeLimitedHint', {
+                    groups: user?.scope.group_ids.length ?? 0,
+                    servers: user?.scope.server_ids.length ?? 0,
+                  })}
+                >
+                  <ShieldCheckIcon className="h-3 w-3" />
+                  {t('authz.scopeLimited')}
+                </span>
+              ) : null}
               <span className="hidden items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-500 sm:flex dark:border-slate-700 dark:text-slate-400">
                 <GlobeIcon className="h-3 w-3" />
                 {prefs.language === 'en-US' ? 'EN' : t('s.0254')}
@@ -274,6 +298,7 @@ export function AppLayout() {
                       <PaletteIcon className="h-4 w-4" />
                       {t('appearance.title')}
                     </button>
+                    {can('system.manage') ? (
                     <button
                       type="button"
                       role="menuitem"
@@ -290,6 +315,7 @@ export function AppLayout() {
                       </span>
                       {hasUpdate ? <span className="h-2 w-2 rounded-full bg-indigo-500" /> : null}
                     </button>
+                    ) : null}
                     <Link
                       to="/settings"
                       role="menuitem"

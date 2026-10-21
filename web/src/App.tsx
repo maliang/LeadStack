@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppLayout } from './components/AppLayout'
 import { RequireAuth } from './components/RequireAuth'
+import { PermissionGate } from './components/PermissionGate'
 import { ToastProvider } from './components/Toast'
 import { AuthProvider } from './lib/auth'
 import { PrefsProvider } from './lib/prefs'
@@ -11,6 +12,8 @@ import AppsPage from './pages/AppsPage'
 import BackupsPage from './pages/BackupsPage'
 import ChecksPage from './pages/ChecksPage'
 import CredentialsPage from './pages/CredentialsPage'
+import GroupsPage from './pages/GroupsPage'
+import RolesPage from './pages/RolesPage'
 import DashboardPage from './pages/DashboardPage'
 import ImportPage from './pages/ImportPage'
 import LoginPage from './pages/LoginPage'
@@ -52,10 +55,12 @@ export default function App() {
               <Route path="/releases" element={<ReleasesPage />} />
               <Route path="/releases/:id" element={<ReleaseDetailPage />} />
               <Route path="/credentials" element={<CredentialsPage />} />
-              <Route path="/users" element={<UsersPage />} />
-              <Route path="/tokens" element={<TokensPage />} />
-              <Route path="/audit" element={<AuditPage />} />
-              <Route path="/backups" element={<BackupsPage />} />
+              <Route path="/users" element={<PermissionGate permission="user.manage"><UsersPage /></PermissionGate>} />
+              <Route path="/roles" element={<PermissionGate permission="role.manage"><RolesPage /></PermissionGate>} />
+              <Route path="/groups" element={<GroupsPage />} />
+              <Route path="/tokens" element={<PermissionGate permission="token.manage"><TokensPage /></PermissionGate>} />
+              <Route path="/audit" element={<PermissionGate permission="audit.read"><AuditPage /></PermissionGate>} />
+              <Route path="/backups" element={<PermissionGate permission="backup.read"><BackupsPage /></PermissionGate>} />
               <Route path="/import" element={<ImportPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/setup" element={<SetupPage />} />

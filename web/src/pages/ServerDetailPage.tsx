@@ -42,6 +42,7 @@ import { TerminalTab } from '../components/server/TerminalTab'
 import { FilesTab } from '../components/server/FilesTab'
 import { ServerLogsTab } from '../components/server/ServerLogsTab'
 import { useI18n } from '../i18n'
+import { useAuth } from '../lib/auth'
 import { useToast } from '../components/Toast'
 import { cn } from '../lib/cn'
 
@@ -115,6 +116,7 @@ export default function ServerDetailPage() {
   const query = usePolling(() => api.server(id ?? ''), 10_000, Boolean(id))
 
   const { t } = useI18n()
+  const { can } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
   const detailTabs = ['overview', 'checks', 'monitor', 'terminal', 'files', 'logs'] as const
@@ -293,14 +295,14 @@ export default function ServerDetailPage() {
 
         <div className="mt-4 flex items-center gap-1 border-b border-slate-200 dark:border-slate-800">
           {(
-            [
+            ([
               { key: 'overview', labelKey: 'serverTab.overview' },
               { key: 'checks', labelKey: 'serverTab.checks' },
               { key: 'monitor', labelKey: 'serverTab.monitor' },
-              { key: 'terminal', labelKey: 'serverTab.terminal' },
-              { key: 'files', labelKey: 'serverTab.files' },
-              { key: 'logs', labelKey: 'serverTab.logs' },
-            ] as const
+              { key: 'terminal', labelKey: 'serverTab.terminal', permission: 'terminal.use' },
+              { key: 'files', labelKey: 'serverTab.files', permission: 'terminal.use' },
+              { key: 'logs', labelKey: 'serverTab.logs', permission: 'terminal.use' },
+            ] as const).filter((option) => !('permission' in option) || can(option.permission))
           ).map((option) => (
             <button
               key={option.key}
@@ -323,11 +325,11 @@ export default function ServerDetailPage() {
         <ServerChecksTab serverId={server.id} />
       ) : tab === 'monitor' ? (
         <MonitorTab serverId={server.id} />
-      ) : tab === 'terminal' ? (
+      ) : tab === 'terminal' && can('terminal.use') ? (
         <TerminalTab serverId={server.id} />
-      ) : tab === 'files' ? (
+      ) : tab === 'files' && can('terminal.use') ? (
         <FilesTab serverId={server.id} />
-      ) : tab === 'logs' ? (
+      ) : tab === 'logs' && can('terminal.use') ? (
         <ServerLogsTab serverId={server.id} />
       ) : (
         <>
@@ -392,7 +394,22 @@ export default function ServerDetailPage() {
             <InfoRow label={t('s.1094')}>
               {server.mode === 'agent' ? t('s.1095') : t('s.0036')}
             </InfoRow>
-            <InfoRow label={t('s.0062')}>{server.group ?? '—'}</InfoRow>
+            <InfoRow label={t('s.0062')}>
+              {server.group_names.length > 0 ? (
+                <span className="inline-flex flex-wrap justify-end gap-1">
+                  {server.group_names.map((name) => (
+                    <span
+                      key={name}
+                      className="rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-normal text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300"
+                    >
+                      {name}
+                    </span>
+                  ))}
+                </span>
+              ) : (
+                server.group ?? '—'
+              )}
+            </InfoRow>
             <InfoRow label={t('s.0075')}>
               {server.tags.length > 0 ? (
                 <span className="inline-flex flex-wrap justify-end gap-1">

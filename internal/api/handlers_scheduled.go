@@ -56,6 +56,15 @@ func (a *API) handleListScheduledTasks(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	if a.allowedServers(r) != nil {
+		filtered := make([]store.ScheduledTask, 0, len(tasks))
+		for _, task := range tasks {
+			if a.canAccessAnyServer(r, task.ServerIDs) {
+				filtered = append(filtered, task)
+			}
+		}
+		tasks = filtered
+	}
 	if tasks == nil {
 		tasks = []store.ScheduledTask{}
 	}
@@ -66,6 +75,9 @@ func (a *API) handleListScheduledTasks(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleGetScheduledTask(w http.ResponseWriter, r *http.Request) {
 	task, err := a.loadScheduledTask(w, r)
 	if err != nil {
+		return
+	}
+	if !writeNotFoundIfInvisible(w, a.canAccessAnyServer(r, task.ServerIDs)) {
 		return
 	}
 	writeData(w, http.StatusOK, task)
@@ -116,6 +128,9 @@ func (a *API) handleCreateScheduledTask(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx := r.Context()
 	serverIDs := normalizeIDList(req.ServerIDs)
+	if len(serverIDs) > 0 && !a.requireServersInScope(w, r, serverIDs) {
+		return
+	}
 	if len(serverIDs) == 0 {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "server_ids 不能为空")
 		return
@@ -147,6 +162,9 @@ func (a *API) handleCreateScheduledTask(w http.ResponseWriter, r *http.Request) 
 func (a *API) handlePatchScheduledTask(w http.ResponseWriter, r *http.Request) {
 	task, err := a.loadScheduledTask(w, r)
 	if err != nil {
+		return
+	}
+	if !writeNotFoundIfInvisible(w, a.taskVisible(r, task.ServerIDs)) {
 		return
 	}
 	var req createScheduledTaskRequest
@@ -222,6 +240,9 @@ func (a *API) handleDeleteScheduledTask(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		return
 	}
+	if !writeNotFoundIfInvisible(w, a.taskVisible(r, task.ServerIDs)) {
+		return
+	}
 	if err := a.st.DeleteScheduledTask(r.Context(), task.ID); err != nil {
 		a.writeStoreError(w, r, err)
 		return
@@ -234,6 +255,9 @@ func (a *API) handleDeleteScheduledTask(w http.ResponseWriter, r *http.Request) 
 func (a *API) handleRunScheduledTask(w http.ResponseWriter, r *http.Request) {
 	task, err := a.loadScheduledTask(w, r)
 	if err != nil {
+		return
+	}
+	if !writeNotFoundIfInvisible(w, a.canAccessAnyServer(r, task.ServerIDs)) {
 		return
 	}
 	results := a.executeScheduledTask(r.Context(), *task)

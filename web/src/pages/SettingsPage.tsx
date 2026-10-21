@@ -21,7 +21,7 @@ const labelClass = 'block text-sm font-medium text-slate-700 dark:text-slate-200
 
 export default function SettingsPage() {
   const { t } = useI18n()
-  const { user } = useAuth()
+  const { user, can } = useAuth()
   const prefs = usePrefs()
   const { toast } = useToast()
   const infoQuery = usePolling(api.systemInfo, 30_000)
@@ -64,9 +64,13 @@ export default function SettingsPage() {
 
       <NetworkFallbackBanner />
 
-      <UpdateSettingsCard onOpenDetails={() => setUpdateOpen(true)} />
+      {can('system.manage') ? (
+        <>
+          <UpdateSettingsCard onOpenDetails={() => setUpdateOpen(true)} />
 
-      <NetworkSettingsCard />
+          <NetworkSettingsCard />
+        </>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -111,7 +115,48 @@ export default function SettingsPage() {
                 {t('nav.credentials')}
               </Button>
             </Link>
+            {can('role.manage') ? (
+              <Link to="/roles" className="mt-3 ml-2 inline-block">
+                <Button size="sm" variant="secondary">
+                  {t('nav.roles')}
+                </Button>
+              </Link>
+            ) : null}
+            {can('server.read') ? (
+              <Link to="/groups" className="mt-3 ml-2 inline-block">
+                <Button size="sm" variant="secondary">
+                  {t('nav.groups')}
+                </Button>
+              </Link>
+            ) : null}
           </section>
+
+          {can('role.manage') || can('server.read') ? (
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                {t('settings.accessControl')}
+              </h2>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {t('settings.accessControlHint')}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {can('role.manage') ? (
+                  <Link to="/roles">
+                    <Button size="sm" variant="secondary">
+                      {t('nav.roles')}
+                    </Button>
+                  </Link>
+                ) : null}
+                {can('server.read') ? (
+                  <Link to="/groups">
+                    <Button size="sm" variant="secondary">
+                      {t('nav.groups')}
+                    </Button>
+                  </Link>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
 
           <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">

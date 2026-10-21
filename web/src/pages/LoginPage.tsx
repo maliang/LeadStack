@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
+import { ApiError } from '../lib/api'
+import { formatDuration } from '../lib/format'
 import { errorMessage } from '../lib/errors'
 import { Button } from '../components/Button'
 import { PageLoading } from '../components/Loading'
@@ -31,7 +33,22 @@ export default function LoginPage() {
       await login(username.trim(), password)
       navigate('/', { replace: true })
     } catch (caught) {
-      setError(errorMessage(caught, t('s.1037')))
+      if (caught instanceof ApiError) {
+        const details = caught.details ?? {}
+        const retryAfter = Number(details.retry_after_s)
+        const remaining = Number(details.remaining_attempts)
+        if (caught.code === 'login_locked') {
+          setError(t('login.locked', { time: formatDuration(Number.isFinite(retryAfter) ? retryAfter : null) }))
+        } else if (caught.code === 'rate_limited') {
+          setError(t('login.rateLimited', { time: formatDuration(Number.isFinite(retryAfter) ? retryAfter : null) }))
+        } else if (caught.status === 401 && Number.isFinite(remaining) && remaining >= 1) {
+          setError(t('login.remainingAttempts', { count: remaining }))
+        } else {
+          setError(errorMessage(caught, t('s.1037')))
+        }
+      } else {
+        setError(errorMessage(caught, t('s.1037')))
+      }
     } finally {
       setSubmitting(false)
     }

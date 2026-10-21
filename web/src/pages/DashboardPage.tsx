@@ -38,6 +38,7 @@ import { ReleaseStatusBadge } from '../components/DeployBadges'
 import { StatCard } from '../components/StatCard'
 import { TagsDialog } from '../components/TagsDialog'
 import { useToast } from '../components/Toast'
+import { useAuth } from '../lib/auth'
 
 import { t } from '../i18n'
 interface BatchState {
@@ -50,12 +51,15 @@ interface BatchState {
 
 export default function DashboardPage() {
   const { toast } = useToast()
+  const { can } = useAuth()
   const [filters, setFilters] = useState<ServerFilters>({})
+  const [groupId, setGroupId] = useState('')
   const filterKey = JSON.stringify(filters)
 
   const serversQuery = usePolling(() => api.servers(filters), 10_000, true, filterKey)
   const infoQuery = usePolling(api.systemInfo, 10_000)
   const groupsQuery = usePolling(api.groups, 10_000)
+  const serverGroupsQuery = usePolling(api.serverGroups, 30_000)
   const checksSummaryQuery = usePolling(api.checksSummary, 10_000)
   const alertsSummaryQuery = usePolling(api.alertsSummary, 10_000)
   const releasesQuery = usePolling(() => api.releases({ limit: 5 }), 10_000)
@@ -78,13 +82,18 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false)
 
   const servers = serversQuery.data ?? []
+  const visibleServers = groupId
+    ? servers.filter((server) => server.group_ids.includes(groupId))
+    : servers
   const info = infoQuery.data
   const totalCount = info?.server_count ?? servers.length
   const onlineCount = info?.online_count ?? servers.filter((s) => s.status === 'online').length
   const offlineCount = Math.max(totalCount - onlineCount, 0)
   const onlineRate =
     totalCount > 0 ? `${Math.round((onlineCount / totalCount) * 100)}%` : t('s.0991')
-  const hasFilters = Boolean(filters.group || filters.tag || filters.status || filters.mode)
+  const hasFilters = Boolean(
+    filters.group || filters.tag || filters.status || filters.mode || groupId,
+  )
 
   const checkSummary = checksSummaryQuery.data
   const checkCounts = {
@@ -214,9 +223,11 @@ export default function DashboardPage() {
           >
             {t('s.0689')}
           </Button>
+          {can('server.write') ? (
           <Button onClick={() => setWizardOpen(true)} icon={<PlusIcon className="h-4 w-4" />}>
             {t('s.0029')}
           </Button>
+          ) : null}
         </div>
       </div>
 
@@ -481,7 +492,7 @@ export default function DashboardPage() {
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0087')}</h2>
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                {servers.length}
+                {visibleServers.length}
                 {hasFilters ? t('s.1024') : ''}
               </span>
             </div>
@@ -490,6 +501,9 @@ export default function DashboardPage() {
               groups={groupsQuery.data ?? []}
               tags={tagOptions}
               onChange={setFilters}
+              serverGroups={serverGroupsQuery.data ?? []}
+              groupId={groupId}
+              onGroupIdChange={setGroupId}
             />
           </div>
           <p className="text-xs text-slate-400 dark:text-slate-500">
@@ -499,6 +513,7 @@ export default function DashboardPage() {
           </p>
         </div>
 
+        {can('server.write') ? (
         <BatchActionBar
           selected={selectedServers}
           pending={batch?.loading ?? false}
@@ -516,17 +531,21 @@ export default function DashboardPage() {
           onSetGroup={(group) => void runBatch(t('s.1026'), 'set-group', { group })}
           onDelete={() => void runBatch(t('s.0513'), 'delete')}
         />
+        ) : null}
 
         {serversQuery.loading && serversQuery.data === null ? (
           <InlineLoading label={t('s.1027')} />
-        ) : servers.length === 0 ? (
+        ) : visibleServers.length === 0 ? (
           hasFilters ? (
             <EmptyState
               icon={<ServerIcon className="h-6 w-6" />}
               title={t('s.1028')}
               description={t('s.1029')}
               actionLabel={t('s.0525')}
-              onAction={() => setFilters({})}
+              onAction={() => {
+                setFilters({})
+                setGroupId('')
+              }}
             />
           ) : (
             <EmptyState
@@ -539,7 +558,9 @@ export default function DashboardPage() {
           )
         ) : (
           <ServerTable
-            servers={servers}
+            canEdit={can('server.write')}
+            canDelete={can('server.delete')}
+            servers={visibleServers}
             now={now}
             selected={selected}
             onToggle={(id) =>
@@ -551,7 +572,7 @@ export default function DashboardPage() {
               })
             }
             onToggleAll={(checked) =>
-              setSelected(checked ? new Set(servers.map((server) => server.id)) : new Set())
+              setSelected(checked ? new Set(visibleServers.map((server) => server.id)) : new Set())
             }
             onEdit={(server) => setRenaming(server)}
             onDelete={(server) => setDeleting(server)}

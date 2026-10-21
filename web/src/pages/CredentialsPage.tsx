@@ -10,6 +10,7 @@ import { EmptyState } from '../components/EmptyState'
 import { KeyIcon, PlusIcon, RefreshIcon, TrashIcon } from '../components/Icons'
 import { InlineLoading } from '../components/Loading'
 import { useToast } from '../components/Toast'
+import { useAuth } from '../lib/auth'
 import { IconButton } from '../components/Button'
 import { t } from '../i18n'
 
@@ -31,6 +32,8 @@ function KindBadge({ kind }: { kind: string }) {
 
 export default function CredentialsPage() {
   const { toast } = useToast()
+  const { can } = useAuth()
+  const canWrite = can('server.write')
   const query = usePolling(api.credentials, 10_000)
   const [createOpen, setCreateOpen] = useState(false)
   const [deleting, setDeleting] = useState<Credential | null>(null)
@@ -81,7 +84,7 @@ export default function CredentialsPage() {
           >
             {t('s.0689')}
           </Button>
-          <Button onClick={() => setCreateOpen(true)} icon={<PlusIcon className="h-4 w-4" />}>
+          <Button disabled={!canWrite} onClick={() => setCreateOpen(true)} icon={<PlusIcon className="h-4 w-4" />}>
             {t('s.0070')}
           </Button>
         </div>
