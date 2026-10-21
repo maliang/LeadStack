@@ -182,14 +182,29 @@ jobs:
           echo "已推送 tag：${TAG}"
 
       # --draft：产物先挂到草稿 Release（对 /releases/latest 与访客不可见）
-      - name: goreleaser 构建并上传到草稿 Release
+      - name: 安装 goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean --draft
+          install-only: true
+
+      - name: goreleaser 构建并上传到草稿 Release
+        shell: bash
+        run: |
+          set -o pipefail
+          goreleaser release --clean --draft 2>&1 | tee /tmp/goreleaser.log
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 失败时把日志尾部写成注解：仓库无 admin 权限时也能从 check run 看到真正原因
+      - name: 失败摘要（goreleaser 日志尾部）
+        if: failure()
+        shell: bash
+        run: |
+          if [ -s /tmp/goreleaser.log ]; then
+            tail -c 3500 /tmp/goreleaser.log | sed 's/^/::error::/'
+          fi
 
       - name: 校验草稿资产完整（10 归档 + checksums.txt）
         shell: bash
