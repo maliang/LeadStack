@@ -6,6 +6,7 @@ import { api } from '../lib/api'
 import { usePolling } from '../lib/hooks'
 import { usePrefs } from '../lib/prefs'
 import { useI18n } from '../i18n'
+import { BrandMark } from './BrandMark'
 import { NAV_GROUPS, breadcrumbsFor } from '../lib/nav'
 import { IconButton } from './Button'
 import {
@@ -34,11 +35,7 @@ function Logo() {
   return (
     <Link to="/" className="flex shrink-0 items-center gap-2.5" aria-label="LeadStack">
       <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white shadow-sm">
-        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden="true">
-          <rect x="4" y="4.5" width="16" height="3.6" rx="1" />
-          <rect x="4" y="10.2" width="16" height="3.6" rx="1" opacity="0.8" />
-          <rect x="4" y="15.9" width="16" height="3.6" rx="1" opacity="0.6" />
-        </svg>
+        <BrandMark className="h-5 w-5" />
       </span>
       <span className="flex items-baseline gap-1.5">
         <span className="text-[15px] font-semibold tracking-tight text-slate-900 dark:text-slate-100">

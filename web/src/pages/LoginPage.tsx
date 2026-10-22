@@ -7,6 +7,7 @@ import { errorMessage } from '../lib/errors'
 import { Button } from '../components/Button'
 import { PageLoading } from '../components/Loading'
 import { ThemeToggle } from '../components/ThemeToggle'
+import { BrandMark } from '../components/BrandMark'
 import { t } from '../i18n'
 
 export default function LoginPage() {
@@ -68,11 +69,7 @@ export default function LoginPage() {
       <div className="relative w-full max-w-sm">
         <div className="flex flex-col items-center text-center">
           <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-lg shadow-indigo-600/25">
-            <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor" aria-hidden="true">
-              <rect x="4" y="4.5" width="16" height="3.6" rx="1" />
-              <rect x="4" y="10.2" width="16" height="3.6" rx="1" opacity="0.8" />
-              <rect x="4" y="15.9" width="16" height="3.6" rx="1" opacity="0.6" />
-            </svg>
+            <BrandMark className="h-6 w-6" />
           </span>
           <h1 className="mt-4 flex items-baseline gap-1.5 text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
             LeadStack

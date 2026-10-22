@@ -1,4 +1,8 @@
-# LeadStack 领栈
+<p align="center">
+  <img src="docs/images/logo.svg" width="96" height="96" alt="LeadStack 领栈">
+</p>
+
+<h1 align="center">LeadStack 领栈</h1>
 
 > 多服务器 **部署** 与 **检测** 平台 —— 把 N 台服务器的「上线 + 值守」收进一个界面。
 

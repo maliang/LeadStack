@@ -97,18 +97,18 @@ const shots = [
   { file: 'users.png', path: '/#/users', title: '用户：角色指派、锁定与解锁', fullPage: true },
 ]
 
-async function settle(selector) {
-  await page.waitForLoadState('networkidle').catch(() => {})
-  await page.waitForSelector(selector, { timeout: 15000 }).catch(() => {})
-  await page.waitForTimeout(600)
+async function settle(targetPage, selector) {
+  await targetPage.waitForLoadState('networkidle').catch(() => {})
+  await targetPage.waitForSelector(selector, { timeout: 15000 }).catch(() => {})
+  await targetPage.waitForTimeout(600)
 }
 
 // 截一张：先量「真实内容底部」（布局有 min-height，按 scrollHeight 截会留大片空白），
 // 再按内容高度调整视口，最后整屏截图。
-async function capture(path, file) {
-  await page.goto(BASE + path, { waitUntil: 'domcontentloaded' })
-  await settle('header')
-  const contentHeight = await page.evaluate(() => {
+async function capture(targetPage, path, file) {
+  await targetPage.goto(BASE + path, { waitUntil: 'domcontentloaded' })
+  await settle(targetPage, 'header')
+  const contentHeight = await targetPage.evaluate(() => {
     const root = document.querySelector('main') || document.body
     let bottom = 0
     for (const el of root.querySelectorAll('*')) {
@@ -120,20 +120,40 @@ async function capture(path, file) {
     return Math.ceil(bottom)
   })
   const targetHeight = Math.min(Math.max(contentHeight + 24, 640), 2400)
-  await page.setViewportSize({ width: 1680, height: targetHeight })
-  await page.waitForTimeout(400)
-  await page.screenshot({ path: join(OUT, file) })
+  await targetPage.setViewportSize({ width: 1680, height: targetHeight })
+  await targetPage.waitForTimeout(400)
+  await targetPage.screenshot({ path: join(OUT, file) })
 }
 
 for (const shot of shots) {
-  await capture(shot.path, shot.file)
+  await capture(page, shot.path, shot.file)
   console.log(`✓ ${shot.file}  ${shot.title}`)
 }
 
-// 深色主题（主题能力演示）
-await page.evaluate(() => window.localStorage.setItem('leadstack.theme', 'dark'))
-await capture('/#/', 'dashboard-dark.png')
+// 深色主题（主题能力演示）：单独开一个 context，在 init script 里直接写 dark，
+// 避免与浅色 context 的初始化互相覆盖（否则首屏仍按 light 渲染）。
+const darkContext = await browser.newContext({
+  viewport: { width: 1680, height: 1000 },
+  deviceScaleFactor: DPR,
+  locale: 'zh-CN',
+  timezoneId: 'Asia/Shanghai',
+  reducedMotion: 'reduce',
+})
+await darkContext.addInitScript(
+  ([t]) => {
+    window.localStorage.setItem('leadstack_token', t)
+    window.localStorage.setItem('leadstack.lang', 'zh-CN')
+    window.localStorage.setItem('leadstack.accent', 'indigo')
+    window.localStorage.setItem('leadstack.fontSize', 'normal')
+    window.localStorage.setItem('leadstack.density', 'comfortable')
+    window.localStorage.setItem('leadstack.theme', 'dark')
+  },
+  [token],
+)
+const darkPage = await darkContext.newPage()
+await capture(darkPage, '/#/', 'dashboard-dark.png')
 console.log('✓ dashboard-dark.png  深色主题总览')
+await darkContext.close()
 
 await browser.close()
 console.log(`\n完成：${OUT}/ 共 ${shots.length + 1} 张`)
