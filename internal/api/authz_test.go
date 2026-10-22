@@ -438,3 +438,30 @@ func TestLoginIPRateLimit(t *testing.T) {
 	}
 	_ = admin
 }
+
+// TestServerDetailCarriesGroups 校验单台服务器响应也带分组（历史 bug：切片拷贝导致丢字段）。
+func TestServerDetailCarriesGroups(t *testing.T) {
+	env := newTestEnv(t)
+	admin := env.login()
+	srv := env.createServerVia(admin, map[string]any{"name": "grouped", "host": "10.0.0.7"})
+	groupID := env.createGroupVia(admin, "详情分组")
+	env.setGroupMembers(admin, groupID, []string{srv.ID})
+
+	var detail serverPayload
+	_, raw := env.request(http.MethodGet, "/api/v1/servers/"+srv.ID, admin, nil)
+	decodeData(t, raw, &detail)
+	if len(detail.GroupIDs) != 1 || detail.GroupIDs[0] != groupID {
+		t.Fatalf("详情应携带 group_ids，实际 %+v", detail.GroupIDs)
+	}
+	if len(detail.GroupNames) != 1 || detail.GroupNames[0] != "详情分组" {
+		t.Fatalf("详情应携带 group_names，实际 %+v", detail.GroupNames)
+	}
+	// PATCH 响应同样要带（前端保存后即时渲染）。
+	var patched serverPayload
+	_, raw = env.request(http.MethodPatch, "/api/v1/servers/"+srv.ID, admin,
+		map[string]any{"name": "grouped-2"})
+	decodeData(t, raw, &patched)
+	if len(patched.GroupNames) != 1 {
+		t.Fatalf("PATCH 响应应携带 group_names，实际 %+v", patched.GroupNames)
+	}
+}

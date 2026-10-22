@@ -170,12 +170,12 @@ func (a *API) handleGetServer(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	payload := toServerPayload(*srv, a.nowMS(), metrics[id], hostInfoRaw(hostInfos, id))
-	if err := a.attachServerGroups(ctx, []serverPayload{payload}); err != nil {
+	payloads := []serverPayload{toServerPayload(*srv, a.nowMS(), metrics[id], hostInfoRaw(hostInfos, id))}
+	if err := a.attachServerGroups(ctx, payloads); err != nil {
 		a.internalError(w, r, err)
 		return
 	}
-	writeData(w, http.StatusOK, payload)
+	writeData(w, http.StatusOK, payloads[0])
 }
 
 // handleCreateServer 处理 POST /api/v1/servers。
@@ -283,12 +283,12 @@ func (a *API) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 	}
 	a.logger.Info("新增服务器",
 		"server_id", srv.ID, "name", srv.Name, "host", srv.Host, "mode", srv.Mode, "group", req.Group)
-	payload := toServerPayload(*srv, a.nowMS(), nil, nil)
-	if err := a.attachServerGroups(ctx, []serverPayload{payload}); err != nil {
+	payloads := []serverPayload{toServerPayload(*srv, a.nowMS(), nil, nil)}
+	if err := a.attachServerGroups(ctx, payloads); err != nil {
 		a.internalError(w, r, err)
 		return
 	}
-	writeData(w, http.StatusCreated, payload)
+	writeData(w, http.StatusCreated, payloads[0])
 }
 
 // handlePatchServer 处理 PATCH /api/v1/servers/{id}。
@@ -442,12 +442,12 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 	if !a.applyServerGroups(ctx, w, r, id, req.GroupIDs) {
 		return
 	}
-	payload := toServerPayload(*srv, a.nowMS(), metrics[id], hostInfoRaw(hostInfos, id))
-	if err := a.attachServerGroups(ctx, []serverPayload{payload}); err != nil {
+	payloads := []serverPayload{toServerPayload(*srv, a.nowMS(), metrics[id], hostInfoRaw(hostInfos, id))}
+	if err := a.attachServerGroups(ctx, payloads); err != nil {
 		a.internalError(w, r, err)
 		return
 	}
-	writeData(w, http.StatusOK, payload)
+	writeData(w, http.StatusOK, payloads[0])
 }
 
 // handleDeleteServer 处理 DELETE /api/v1/servers/{id}。

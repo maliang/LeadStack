@@ -36,7 +36,7 @@ const zhCN: Record<string, string> = {
   'groups.emptyDescription': '创建分组并按分组授权角色，实现资源级权限隔离。',
   'groups.readOnlyHint': '当前角色没有分组写权限，或范围不是「全部」：只能查看分组。',
   'groups.filterByGroup': '按授权分组筛选',
-  'groups.allGroups': '全部分组',
+  'groups.allGroups': '全部授权分组',
   'groups.authorizedGroups': '授权分组',
   'groups.authorizedGroupsHint': '可选：把这台服务器加入这些分组（角色可按分组授权）',
   'roles.title': '角色与权限',
