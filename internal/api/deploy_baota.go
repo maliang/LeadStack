@@ -461,6 +461,29 @@ func (o *deployOrchestrator) buildPlanFor(ctx context.Context, templateContent, 
 	artifact *store.Artifact, release *store.Release, app *store.App, root, prevReleaseID string,
 	logf func(stream, chunk string)) (deploy.Plan, error) {
 
+	if app.DeployMode == store.DeployModeScript {
+		workDir := strings.TrimSpace(derefStr(app.TargetDir))
+		if workDir == "" {
+			workDir = strings.TrimSpace(derefStr(app.Root))
+		}
+		if workDir == "" {
+			return deploy.Plan{}, errors.New("脚本模式需要填写工作目录（target_dir 或 root）")
+		}
+		if strings.TrimSpace(templateContent) == "" {
+			return deploy.Plan{}, errors.New("脚本模式需要模板内容作为更新脚本（选 binary 模板并填写脚本）")
+		}
+		logf("system", "脚本模式：工作目录 "+workDir+"（执行模板脚本，无制品）\n")
+		return deploy.BuildScript(deploy.ScriptParams{
+			AppSlug:       app.Slug,
+			ReleaseID:     release.ID,
+			Version:       release.Version,
+			WorkDir:       workDir,
+			Script:        templateContent,
+			Rollback:      derefStr(app.RollbackScript),
+			PrevReleaseID: prevReleaseID,
+			Now:           store.NowMS(),
+		})
+	}
 	if app.DeployMode == store.DeployModeInplace {
 		target := strings.TrimSpace(derefStr(app.TargetDir))
 		if target == "" {
@@ -513,10 +536,14 @@ func (o *deployOrchestrator) rollbackAfterHealthFailure(ctx context.Context, run
 		logf("system", "没有可用的回滚步骤（首次部署或模板未提供）\n")
 		return
 	}
-	rb := deploy.Plan{AppSlug: plan.AppSlug, ReleaseID: plan.ReleaseID, Version: plan.Version, Root: plan.Root, Steps: plan.RollbackSteps}
-	for i := range rb.Steps {
-		rb.Steps[i].Name = "rollback:" + rb.Steps[i].Name
+	// 与 deploy.Executor 的约定一致：RollbackSteps 按**逆序**执行。
+	steps := make([]deploy.Step, 0, len(plan.RollbackSteps))
+	for i := len(plan.RollbackSteps) - 1; i >= 0; i-- {
+		st := plan.RollbackSteps[i]
+		st.Name = "rollback:" + st.Name
+		steps = append(steps, st)
 	}
+	rb := deploy.Plan{AppSlug: plan.AppSlug, ReleaseID: plan.ReleaseID, Version: plan.Version, Root: plan.Root, Steps: steps}
 	hooks := deploy.Hooks{
 		OnStep: func(index int, name string) {
 			logf("system", fmt.Sprintf("--- 回滚 [%d/%d] %s ---\n", index+1, len(rb.Steps), name))
@@ -537,15 +564,16 @@ type appDeployConfig struct {
 	EnvJSON         *string
 	KeepPaths       *string
 	HealthcheckPort *int
+	RollbackScript  *string
 }
 
 // normalizeAppDeployV2 校验部署 v2 字段（nil 表示不改）。
-func normalizeAppDeployV2(deployMode, targetDir, restartCmd, initScript, envJSON, keepPaths *string, healthPort *int) (appDeployConfig, error) {
+func normalizeAppDeployV2(deployMode, targetDir, restartCmd, initScript, envJSON, keepPaths, rollbackScript *string, healthPort *int) (appDeployConfig, error) {
 	out := appDeployConfig{}
 	if deployMode != nil {
 		v := strings.ToLower(strings.TrimSpace(*deployMode))
-		if v != store.DeployModeRelease && v != store.DeployModeInplace {
-			return out, fmt.Errorf("deploy_mode 只能是 release 或 inplace")
+		if v != store.DeployModeRelease && v != store.DeployModeInplace && v != store.DeployModeScript {
+			return out, fmt.Errorf("deploy_mode 只能是 release / inplace / script")
 		}
 		out.DeployMode = &v
 	}
@@ -608,6 +636,13 @@ func normalizeAppDeployV2(deployMode, targetDir, restartCmd, initScript, envJSON
 			}
 		}
 		out.KeepPaths = &v
+	}
+	if rollbackScript != nil {
+		v := *rollbackScript
+		if len(v) > 64<<10 {
+			return out, fmt.Errorf("rollback_script 过长（≤64KB）")
+		}
+		out.RollbackScript = &v
 	}
 	if healthPort != nil {
 		if *healthPort < 0 || *healthPort > 65535 {

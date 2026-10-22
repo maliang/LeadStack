@@ -139,15 +139,9 @@ func BuildInplace(p InplaceParams) (Plan, error) {
 	}))
 
 	plan.Steps = steps
-	plan.RollbackSteps = []Step{
-		{
-			Name:           StepRollbackRestore,
-			Command:        "tar -xzf " + shQuote(backup) + " -C " + shQuote(target),
-			TimeoutS:       timeoutRollbackRestore,
-			IgnoreFailure:  false,
-			RollbackMarker: true,
-		},
-	}
+	// 注意：执行器按 RollbackSteps 的**逆序**执行（见 deploy.Executor），
+	// 所以这里按「期望顺序的倒序」书写：先声明重启、再声明恢复，实际执行即 恢复 → 重启。
+	plan.RollbackSteps = make([]Step, 0, 2)
 	if cmd := strings.TrimSpace(p.RestartCmd); cmd != "" {
 		plan.RollbackSteps = append(plan.RollbackSteps, Step{
 			Name:           "restart",
@@ -157,6 +151,12 @@ func BuildInplace(p InplaceParams) (Plan, error) {
 			RollbackMarker: true,
 		})
 	}
+	plan.RollbackSteps = append(plan.RollbackSteps, Step{
+		Name:           StepRollbackRestore,
+		Command:        "tar -xzf " + shQuote(backup) + " -C " + shQuote(target),
+		TimeoutS:       timeoutRollbackRestore,
+		RollbackMarker: true,
+	})
 	return plan, nil
 }
 

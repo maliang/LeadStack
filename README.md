@@ -319,6 +319,11 @@ db-01.internal
 - 首版可用 `init_script` 做一次性初始化（每台服务器只执行一次），`env_json` 会写成 `.leadstack.env`（0600）；
 - 配了 `healthcheck_path` + `healthcheck_port` 时，部署后控制端会真实发 HTTP 检查，失败自动回滚到上一版。
 
+**脚本模式**（适合「服务器上已有项目、更新就是 git pull + 重启」）：
+- 应用「部署方式 = 自定义脚本」，工作目录填项目根；发布时执行 **binary 模板的内容**（需要制品的机会都没有）；
+- 模板里写完整更新流程，例如 `cd /www/wwwroot/tuoluojiang && git pull --ff-only && bash start.sh restart`；
+- 可选「回滚脚本」（`git reset --hard HEAD@{1} && bash start.sh restart`），发布失败或健康检查不通过时自动执行。
+
 保证可靠性的三个设计：
 - 每次发布写独立的 `releases/<id>` 目录，**成功后才原子切换 `current` 符号链接** —— 失败绝不破坏线上；
 - **回滚是秒级的**（`current` 指回上一版本，不重新下载）；

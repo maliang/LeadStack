@@ -129,15 +129,16 @@ func TestInplaceRollbackRestoresBackup(t *testing.T) {
 	if len(plan.RollbackSteps) < 2 {
 		t.Fatalf("回滚步骤不足: %v", plan.RollbackSteps)
 	}
-	restore := plan.RollbackSteps[0]
+	// 执行器逆序执行：RollbackSteps[1] 先跑（恢复备份），RollbackSteps[0] 后跑（重启）
+	restore := plan.RollbackSteps[len(plan.RollbackSteps)-1]
 	if restore.Name != StepRollbackRestore {
-		t.Fatalf("首个回滚步骤应为恢复备份: %s", restore.Name)
+		t.Fatalf("逆序执行时应先恢复备份，最后一步应为此: %s", restore.Name)
 	}
 	if !strings.Contains(restore.Command, "backup-rel-1.tar.gz") || !strings.Contains(restore.Command, "/www/wwwroot/shop") {
 		t.Fatalf("恢复命令不符: %s", restore.Command)
 	}
-	if plan.RollbackSteps[1].Name != "restart" || !plan.RollbackSteps[1].IgnoreFailure {
-		t.Fatalf("回滚应重启服务且允许失败: %+v", plan.RollbackSteps[1])
+	if plan.RollbackSteps[0].Name != "restart" || !plan.RollbackSteps[0].IgnoreFailure {
+		t.Fatalf("回滚应（在逆序执行时最后）重启服务且允许失败: %+v", plan.RollbackSteps[0])
 	}
 }
 

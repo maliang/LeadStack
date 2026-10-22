@@ -177,17 +177,25 @@ export function DeployModeBadge({
   className?: string
 }) {
   const isInplace = mode === 'inplace'
+  const isScript = mode === 'script'
+  const tone = isScript
+    ? 'bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-500/10 dark:text-violet-300 dark:ring-violet-400/30'
+    : isInplace
+      ? 'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/30'
+      : 'bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-400/30'
   return (
     <span
       className={cn(
         'inline-flex items-center whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset',
-        isInplace
-          ? 'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/30'
-          : 'bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-400/30',
+        tone,
         className,
       )}
     >
-      {isInplace ? t('apps.modeInplaceBadge') : t('apps.modeReleaseBadge')}
+      {isScript
+        ? t('apps.modeScriptBadge')
+        : isInplace
+          ? t('apps.modeInplaceBadge')
+          : t('apps.modeReleaseBadge')}
     </span>
   )
 }

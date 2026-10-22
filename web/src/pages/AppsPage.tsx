@@ -299,7 +299,7 @@ export default function AppsPage() {
                               })}
                             </span>
                           ) : null}
-                          {app.deploy_mode === 'inplace' && app.target_dir ? (
+                          {(app.deploy_mode === 'inplace' || app.deploy_mode === 'script') && app.target_dir ? (
                             <span
                               className="mt-0.5 block truncate font-mono text-[11px] text-slate-500 dark:text-slate-400"
                               title={app.target_dir}

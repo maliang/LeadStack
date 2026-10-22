@@ -127,6 +127,7 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 		EnvJSON         string `json:"env_json"`
 		KeepPaths       string `json:"keep_paths"`
 		HealthcheckPort *int   `json:"healthcheck_port"`
+		RollbackScript  string `json:"rollback_script"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
@@ -162,7 +163,8 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	}
 	dv2, err := normalizeAppDeployV2(
 		strPtrOrNil(req.DeployMode), strPtrOrNil(req.TargetDir), strPtrOrNil(req.RestartCmd),
-		strPtrOrNil(req.InitScript), strPtrOrNil(req.EnvJSON), strPtrOrNil(req.KeepPaths), req.HealthcheckPort)
+		strPtrOrNil(req.InitScript), strPtrOrNil(req.EnvJSON), strPtrOrNil(req.KeepPaths),
+		strPtrOrNil(req.RollbackScript), req.HealthcheckPort)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
 		return
@@ -171,8 +173,10 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	if dv2.DeployMode != nil {
 		app.DeployMode = *dv2.DeployMode
 	}
-	if app.DeployMode == store.DeployModeInplace && dv2.TargetDir == nil && app.Root == nil {
-		writeError(w, http.StatusBadRequest, codeInvalidArgument, "inplace 模式需要 target_dir 或 root")
+	if (app.DeployMode == store.DeployModeInplace || app.DeployMode == store.DeployModeScript) &&
+		dv2.TargetDir == nil && app.Root == nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument,
+			"inplace/script 模式需要 target_dir 或 root")
 		return
 	}
 	app.TargetDir = dv2.TargetDir
@@ -181,6 +185,7 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	app.EnvJSON = dv2.EnvJSON
 	app.KeepPaths = dv2.KeepPaths
 	app.HealthcheckPort = dv2.HealthcheckPort
+	app.RollbackScript = dv2.RollbackScript
 	if req.Root != "" {
 		root := strings.TrimSpace(req.Root)
 		if !strings.HasPrefix(root, "/") {
@@ -237,6 +242,7 @@ func (a *API) handlePatchApp(w http.ResponseWriter, r *http.Request) {
 		EnvJSON         *string `json:"env_json"`
 		KeepPaths       *string `json:"keep_paths"`
 		HealthcheckPort *int    `json:"healthcheck_port"`
+		RollbackScript  *string `json:"rollback_script"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
@@ -245,7 +251,7 @@ func (a *API) handlePatchApp(w http.ResponseWriter, r *http.Request) {
 	if req.Name == nil && req.Root == nil && req.Description == nil && req.Provider == nil &&
 		req.SiteName == nil && req.SitePort == nil && req.SiteType == nil && req.HealthcheckPath == nil &&
 		req.DeployMode == nil && req.TargetDir == nil && req.RestartCmd == nil && req.InitScript == nil &&
-		req.EnvJSON == nil && req.KeepPaths == nil && req.HealthcheckPort == nil {
+		req.EnvJSON == nil && req.KeepPaths == nil && req.HealthcheckPort == nil && req.RollbackScript == nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument,
 			"至少需要提供 name/root/description/provider/site_name/site_port/site_type/healthcheck_path 之一")
 		return
@@ -284,14 +290,14 @@ func (a *API) handlePatchApp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.DeployMode != nil || req.TargetDir != nil || req.RestartCmd != nil || req.InitScript != nil ||
-		req.EnvJSON != nil || req.KeepPaths != nil || req.HealthcheckPort != nil {
-		dv2, derr := normalizeAppDeployV2(req.DeployMode, req.TargetDir, req.RestartCmd, req.InitScript, req.EnvJSON, req.KeepPaths, req.HealthcheckPort)
+		req.EnvJSON != nil || req.KeepPaths != nil || req.HealthcheckPort != nil || req.RollbackScript != nil {
+		dv2, derr := normalizeAppDeployV2(req.DeployMode, req.TargetDir, req.RestartCmd, req.InitScript, req.EnvJSON, req.KeepPaths, req.RollbackScript, req.HealthcheckPort)
 		if derr != nil {
 			writeError(w, http.StatusBadRequest, codeInvalidArgument, derr.Error())
 			return
 		}
 		if err := a.st.UpdateAppDeploy(r.Context(), app.ID, dv2.DeployMode, dv2.TargetDir, dv2.RestartCmd,
-			dv2.InitScript, dv2.EnvJSON, dv2.KeepPaths, dv2.HealthcheckPort); err != nil {
+			dv2.InitScript, dv2.EnvJSON, dv2.KeepPaths, dv2.RollbackScript, dv2.HealthcheckPort); err != nil {
 			a.writeStoreError(w, r, err)
 			return
 		}
@@ -834,6 +840,19 @@ func (a *API) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.writeStoreError(w, r, err)
 		return
+	}
+	// 脚本模式：模板内容就是更新脚本，必须是 binary 模板且非空；制品可省略。
+	if app.DeployMode == store.DeployModeScript {
+		if tmpl.Kind != store.TemplateKindBinary {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument,
+				"脚本模式的模板必须是 binary 类型（模板内容即更新脚本）")
+			return
+		}
+		if strings.TrimSpace(tmpl.Content) == "" {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument,
+				"脚本模式的模板内容不能为空（它就是更新脚本）")
+			return
+		}
 	}
 	var artifact *store.Artifact
 	if strings.TrimSpace(req.ArtifactID) != "" {

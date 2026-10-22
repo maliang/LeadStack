@@ -301,6 +301,7 @@ type App struct {
 	EnvJSON         *string `json:"env_json"`
 	KeepPaths       *string `json:"keep_paths"`
 	HealthcheckPort *int    `json:"healthcheck_port"`
+	RollbackScript  *string `json:"rollback_script"`
 }
 
 // DeployTemplate 是部署模板（版本化文本，发布时冻结快照）。

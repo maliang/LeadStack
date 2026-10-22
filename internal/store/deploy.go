@@ -17,14 +17,14 @@ func (s *Store) CreateApp(ctx context.Context, app *App) error {
 	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO apps (id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
-		                   deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                   deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		app.ID, app.Name, app.Slug, nullableStr(app.Root), nullableStr(app.Description), app.CreatedAt,
 		defaultProvider(app.Provider), nullableStr(app.SiteName), nullableIntFromPtr(app.SitePort),
 		nullableStr(app.SiteType), nullableStr(app.HealthcheckPath),
 		defaultDeployMode(app.DeployMode), nullableStr(app.TargetDir), nullableStr(app.RestartCmd),
 		nullableStr(app.InitScript), nullableStr(app.EnvJSON), nullableStr(app.KeepPaths),
-		nullableIntFromPtr(app.HealthcheckPort))
+		nullableIntFromPtr(app.HealthcheckPort), nullableStr(app.RollbackScript))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return fmt.Errorf("创建应用 %s: %w", app.Slug, ErrConflict)
@@ -38,7 +38,7 @@ func (s *Store) CreateApp(ctx context.Context, app *App) error {
 func (s *Store) GetApp(ctx context.Context, id string) (*App, error) {
 	return scanApp(s.db.QueryRowContext(ctx,
 		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
-		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port FROM apps WHERE id = ?`, id))
+		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script FROM apps WHERE id = ?`, id))
 }
 
 // GetAppBySlug 按 slug 查询应用。
@@ -163,10 +163,11 @@ func scanApp(row interface{ Scan(...any) error }) (*App, error) {
 		envJSON    sql.NullString
 		keepPaths  sql.NullString
 		healthPort sql.NullInt64
+		rbScript   sql.NullString
 	)
 	err := row.Scan(&app.ID, &app.Name, &app.Slug, &root, &desc, &app.CreatedAt,
 		&provider, &siteName, &sitePort, &siteType, &health,
-		&deployMode, &targetDir, &restartCmd, &initScript, &envJSON, &keepPaths, &healthPort)
+		&deployMode, &targetDir, &restartCmd, &initScript, &envJSON, &keepPaths, &healthPort, &rbScript)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询应用: %w", ErrNotFound)
@@ -199,6 +200,7 @@ func scanApp(row interface{ Scan(...any) error }) (*App, error) {
 		v := int(healthPort.Int64)
 		app.HealthcheckPort = &v
 	}
+	app.RollbackScript = strPtr(rbScript)
 	return &app, nil
 }
 
@@ -212,6 +214,7 @@ const (
 const (
 	DeployModeRelease = "release"
 	DeployModeInplace = "inplace"
+	DeployModeScript  = "script"
 )
 
 // defaultDeployMode 把空值归一为 release。
@@ -284,7 +287,7 @@ func (s *Store) UpdateAppSite(ctx context.Context, id string, provider, siteName
 
 // UpdateAppDeploy 更新部署 v2 字段（PATCH 语义，nil 表示不改）。
 func (s *Store) UpdateAppDeploy(ctx context.Context, id string,
-	deployMode, targetDir, restartCmd, initScript, envJSON, keepPaths *string, healthPort *int) error {
+	deployMode, targetDir, restartCmd, initScript, envJSON, keepPaths, rollbackScript *string, healthPort *int) error {
 	sets := make([]string, 0, 7)
 	args := make([]any, 0, 8)
 	add := func(col string, v any) { sets = append(sets, col+" = ?"); args = append(args, v) }
@@ -305,6 +308,9 @@ func (s *Store) UpdateAppDeploy(ctx context.Context, id string,
 	}
 	if keepPaths != nil {
 		add("keep_paths", nullableStr(emptyToNil(*keepPaths)))
+	}
+	if rollbackScript != nil {
+		add("rollback_script", nullableStr(emptyToNil(*rollbackScript)))
 	}
 	if healthPort != nil {
 		add("healthcheck_port", *healthPort)

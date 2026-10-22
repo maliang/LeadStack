@@ -33,6 +33,10 @@ const (
 	StepInit               = "write-init-script"
 	StepInitRun            = "run-init-script"
 	StepRollbackRestore    = "rollback-restore-backup"
+	StepWriteScript        = "write-deploy-script"
+	StepRunScript          = "run-deploy-script"
+	StepWriteRollback      = "write-rollback-script"
+	StepRunRollback        = "run-rollback-script"
 	artifactTempName       = ".artifact"
 	restartScriptName      = "leadstack-start.sh"
 	composeFileName        = "docker-compose.yml"
@@ -59,6 +63,7 @@ const (
 	timeoutSync            = 600
 	timeoutInit            = 900
 	timeoutRollbackRestore = 600
+	timeoutScript          = 1800
 )
 
 // releaseMetadata 是写到 <root>/.leadstack/releases/<releaseID>.json 的快照（§24）。

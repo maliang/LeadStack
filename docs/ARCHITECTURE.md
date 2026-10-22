@@ -1961,3 +1961,71 @@ ls -1d /www/wwwroot/*（宝塔站点目录）
 | tuoluojiang（拓罗匠） | php 站点 + compose 数据卷 | 数据目录（mysql/redis data）在两次发布后完好、旧文件被 rsync --delete 清掉、compose 重启命令执行 |
 
 另含：接管向导 discover 返回 candidates/raw；二次发布不重复执行 init。
+
+---
+
+## 59. 部署模式 script：脚本驱动（含 git pull 更新）
+
+### 59.1 定位
+
+第三种部署模式（`deploy_mode=script`）：**不需要制品**，一次发布＝在目标机执行用户给的更新脚本。
+适合「服务器上已有项目、更新方式是 `git pull` + 重启脚本」这类流程（例如宝塔直装的 LaravelS 项目：
+
+```bash
+#!/bin/bash
+set -eu
+cd /www/wwwroot/tuoluojiang
+git pull --ff-only
+composer install --no-dev --no-interaction
+bash start.sh restart
+```
+
+平台负责的是：逐台执行、实时日志、失败标记、健康检查、可选的自动回滚脚本。
+
+### 59.2 字段与语义
+
+```sql
+ALTER TABLE apps ADD COLUMN rollback_script TEXT; -- 可选回滚脚本（迁移 0011）
+```
+
+| 字段 | 说明 |
+|---|---|
+| `deploy_mode` | `script`；模板必须是 **binary**，模板内容即更新脚本（发布时冻结快照，改模板不影响已发布记录） |
+| `target_dir` | 脚本工作目录（绝对路径；为空回落到 `root`）；脚本会被 `cd` 到这里执行 |
+| `rollback_script` | 发布脚本失败或健康检查不通过时执行（≤64KB） |
+| `healthcheck_path` + `healthcheck_port` | 脚本跑完后控制端发 HTTP 探测，失败 → 执行回滚脚本并标 `health-check` |
+| 制品 | **可省略**；填了也不会被使用（脚本自己负责取代码） |
+| `keep_paths` / `restart_cmd` | 不适用（脚本里自己做），UI 会隐藏 |
+
+发布步骤（`internal/deploy/script.go`）：
+
+```
+prepare（mkdir <work>/.leadstack/scripts）
+→ write-deploy-script（写 <work>/.leadstack/scripts/<release>.sh，0755）
+→ run-deploy-script（cd <work> && bash <script>）
+→ write-metadata
+```
+
+回滚步骤：`write-rollback-script` → `run-rollback-script`（失败只记日志，不掩盖原始错误）。
+
+### 59.3 回滚顺序约定（重要）
+
+`Plan.RollbackSteps` 由执行器按**逆序**执行（见 §25.1）。因此构造器里要按「期望执行顺序的倒序」书写：
+
+| 模式 | 期望执行顺序 | RollbackSteps 书写顺序 |
+|---|---|---|
+| script | 写回滚脚本 → 跑回滚脚本 | `[run-rollback, write-rollback]` |
+| inplace | 解回备份 → 重启 | `[restart, restore]` |
+| release(binary/systemd/compose) | 切回上一版本 → 重启旧版 | `[restart, switch-current]` |
+
+健康检查失败时由编排器执行同一份 `RollbackSteps`，同样按逆序展开，两条路径语义一致。
+
+### 59.4 验收（`scripts/verify_deploy_script.sh`，24 项）
+
+用真实 git 仓库模拟 tuoluojiang 的更新方式（devssh 真实执行）：
+
+1. 源仓库 v1 → 克隆到站点目录 → 脚本发布成功，仓库停在 v1；
+2. 源仓库 v2 → 再发布 → `git pull` 生效，站点文件更新；
+3. 坏脚本（pull 后 exit 1）→ 发布 failed，`failed_step=run-deploy-script`，回滚脚本执行，仓库回到发布前 commit；
+4. 健康检查端口改坏 → 发布 failed，`failed_step=health-check`，回滚脚本执行；
+5. 脚本模式创建发布**不需要 artifact**；引用不存在的模板 → 404。

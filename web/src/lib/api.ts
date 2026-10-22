@@ -615,9 +615,10 @@ export type TemplateKind = 'compose' | 'systemd' | 'binary'
 export type ArtifactKind = 'url' | 'upload' | 'image'
 
 export type AppProvider = 'builtin' | 'baota' | string
+export type DeployMode = 'release' | 'inplace' | 'script'
 
 export interface DiscoverSuggested {
-  deploy_mode?: 'release' | 'inplace' | string
+  deploy_mode?: DeployMode | string
   target_dir?: string
   restart_cmd?: string
   healthcheck_port?: number
@@ -656,7 +657,7 @@ export interface AppItem {
   /** 发布后健康检查路径 */
   healthcheck_path: string | null
   /** 部署模式：release=多版本目录原子切换；inplace=接管既有目录 */
-  deploy_mode: 'release' | 'inplace' | string
+  deploy_mode: DeployMode | string
   /** inplace 接管目录（绝对路径） */
   target_dir: string | null
   /** 部署后重启命令 */
@@ -667,6 +668,8 @@ export interface AppItem {
   env_json: string | null
   /** inplace 同步时保留的相对路径（逗号分隔） */
   keep_paths: string | null
+  /** 回滚脚本（script 模式：发布失败或健康检查不通过时执行） */
+  rollback_script: string | null
   /** 健康检查端口（0 表示清除） */
   healthcheck_port: number | null
   /** 后端可能聚合出的统计；缺失时前端用 releases 列表本地折算 */
@@ -754,13 +757,14 @@ export interface CreateAppPayload {
   site_port?: number
   site_type?: BaotaSiteType | null
   healthcheck_path?: string | null
-  deploy_mode?: 'release' | 'inplace'
+  deploy_mode?: DeployMode
   target_dir?: string | null
   restart_cmd?: string | null
   init_script?: string | null
   env_json?: string | null
   keep_paths?: string | null
   healthcheck_port?: number | null
+  rollback_script?: string | null
 }
 
 export interface CreateTemplatePayload {
@@ -1718,6 +1722,7 @@ export function normalizeApp(input: unknown): AppItem {
     env_json: typeof raw.env_json === 'string' ? raw.env_json : null,
     keep_paths: toText(raw.keep_paths),
     healthcheck_port: toNumber(raw.healthcheck_port),
+    rollback_script: toText(raw.rollback_script),
     release_count: toNumber(raw.release_count ?? raw.releases_count) ?? 0,
     server_count: toNumber(raw.server_count ?? raw.target_count) ?? 0,
     last_release: lastRelease,

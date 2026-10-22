@@ -28,7 +28,7 @@ export function slugify(value: string): string {
 export interface AppPreset {
   name?: string
   root?: string
-  deploy_mode?: 'release' | 'inplace'
+  deploy_mode?: 'release' | 'inplace' | 'script'
   target_dir?: string
   restart_cmd?: string
   healthcheck_port?: number
@@ -93,12 +93,13 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
   const [sitePort, setSitePort] = useState('')
   const [siteType, setSiteType] = useState<BaotaSiteType>('static')
   const [healthcheckPath, setHealthcheckPath] = useState('')
-  const [deployMode, setDeployMode] = useState<'release' | 'inplace'>('release')
+  const [deployMode, setDeployMode] = useState<'release' | 'inplace' | 'script'>('release')
   const [targetDir, setTargetDir] = useState('')
   const [keepPaths, setKeepPaths] = useState('')
   const [restartCmd, setRestartCmd] = useState('')
   const [healthcheckPort, setHealthcheckPort] = useState('')
   const [initScript, setInitScript] = useState('')
+  const [rollbackScript, setRollbackScript] = useState('')
   const [envText, setEnvText] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -118,7 +119,11 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
     setSiteType(app?.site_type === 'php' ? 'php' : 'static')
     setHealthcheckPath(app?.healthcheck_path ?? '')
     setDeployMode(
-      app?.deploy_mode === 'inplace' || fromPreset?.deploy_mode === 'inplace' ? 'inplace' : 'release',
+      app?.deploy_mode === 'inplace' || app?.deploy_mode === 'script'
+        ? app.deploy_mode
+        : fromPreset?.deploy_mode === 'inplace'
+          ? 'inplace'
+          : 'release',
     )
     setTargetDir(app?.target_dir ?? fromPreset?.target_dir ?? '')
     setKeepPaths(app?.keep_paths ?? '')
@@ -131,6 +136,7 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
           : '',
     )
     setInitScript(app?.init_script ?? '')
+    setRollbackScript(app?.rollback_script ?? '')
     setEnvText(envJsonToText(app?.env_json ?? null))
     setSaving(false)
     setError(null)
@@ -205,6 +211,7 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
         deploy_mode: deployMode,
         target_dir: deployMode === 'inplace' ? targetDir.trim() : null,
         keep_paths: deployMode === 'inplace' ? keepPaths.trim() || null : null,
+        rollback_script: deployMode === 'script' ? rollbackScript : null,
         restart_cmd: restartCmd.trim() || null,
         healthcheck_port: parsedPort,
         init_script: initScript.trim() || null,
@@ -403,6 +410,7 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
               [
                 { value: 'release', title: t('apps.modeRelease'), hint: t('apps.modeReleaseHint') },
                 { value: 'inplace', title: t('apps.modeInplace'), hint: t('apps.modeInplaceHint') },
+                { value: 'script', title: t('apps.modeScript'), hint: t('apps.modeScriptHint') },
               ] as const
             ).map((option) => (
               <button
@@ -426,24 +434,24 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
             ))}
           </div>
 
-          {deployMode === 'inplace' ? (
+          {deployMode === 'inplace' || deployMode === 'script' ? (
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <div className="sm:col-span-2">
                 <label htmlFor="app-target-dir" className={labelClass}>
-                  {t('apps.targetDir')}
+                  {deployMode === 'script' ? t('apps.workDir') : t('apps.targetDir')}
                 </label>
                 <input
                   id="app-target-dir"
                   value={targetDir}
                   onChange={(event) => setTargetDir(event.target.value)}
-                  placeholder="/opt/nengtan-hub"
+                  placeholder={deployMode === 'script' ? '/www/wwwroot/tuoluojiang' : '/opt/nengtan-hub'}
                   className={inputClass + ' mt-1.5 font-mono text-xs'}
                 />
                 <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                  {t('apps.targetDirHint')}
+                  {deployMode === 'script' ? t('apps.workDirHint') : t('apps.targetDirHint')}
                 </p>
               </div>
-              <div className="sm:col-span-2">
+              <div className={deployMode === 'script' ? 'hidden' : 'sm:col-span-2'}>
                 <label htmlFor="app-keep-paths" className={labelClass}>
                   {t('apps.keepPaths')}
                 </label>
@@ -462,7 +470,7 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
           ) : null}
 
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <div>
+            <div className={deployMode === 'script' ? 'hidden' : undefined}>
               <label htmlFor="app-restart-cmd" className={labelClass}>
                 {t('apps.restartCmd')}
               </label>
@@ -500,6 +508,11 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
               {t('apps.inplaceHint')}
             </p>
           ) : null}
+          {deployMode === 'script' ? (
+            <p className="mt-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+              {t('apps.scriptHint')}
+            </p>
+          ) : null}
 
           <details className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/60">
             <summary className="cursor-pointer text-xs font-medium text-slate-600 dark:text-slate-300">
@@ -523,6 +536,25 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
                   {t('apps.initScriptHint')}
                 </p>
               </div>
+              {deployMode === 'script' ? (
+                <div>
+                  <label htmlFor="app-rollback-script" className={labelClass}>
+                    {t('apps.rollbackScript')}
+                  </label>
+                  <textarea
+                    id="app-rollback-script"
+                    value={rollbackScript}
+                    onChange={(event) => setRollbackScript(event.target.value)}
+                    rows={4}
+                    spellCheck={false}
+                    placeholder={'#!/bin/bash\nset -e\ngit reset --hard HEAD@{1}\nbash start.sh restart'}
+                    className={inputClass + ' mt-1.5 resize-y font-mono text-xs'}
+                  />
+                  <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                    {t('apps.rollbackScriptHint')}
+                  </p>
+                </div>
+              ) : null}
               <div>
                 <label htmlFor="app-env" className={labelClass}>
                   {t('apps.envVars')}
