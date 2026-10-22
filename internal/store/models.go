@@ -338,6 +338,10 @@ type Release struct {
 	StartedAt        *int64  `json:"started_at"`
 	FinishedAt       *int64  `json:"finished_at"`
 	Concurrency      int     `json:"concurrency"`
+	// 发布策略：all（默认，全量）| canary（灰度：先 canary_count 台，观察 hold_seconds 秒）
+	Strategy    string `json:"strategy"`
+	CanaryCount int    `json:"canary_count"`
+	HoldSeconds int    `json:"hold_seconds"`
 }
 
 // ReleaseRun 是一次发布在某台服务器上的执行单元。

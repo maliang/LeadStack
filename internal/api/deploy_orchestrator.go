@@ -296,12 +296,76 @@ func (o *deployOrchestrator) executeReleaseRuns(ctx context.Context, release *st
 	if limit <= 0 || limit > o.maxConc {
 		limit = o.maxConc
 	}
-	sem := make(chan struct{}, limit)
 
+	if release.Strategy == store.ReleaseStrategyCanary && release.CanaryCount > 0 && len(runs) > release.CanaryCount {
+		o.executeCanary(ctx, release, app, kind, content, artifact, runs, limit)
+		o.refreshReleaseStatus(ctx, release.ID)
+		return
+	}
+
+	o.runBatch(ctx, release, app, kind, content, artifact, runs, limit)
+	o.refreshReleaseStatus(ctx, release.ID)
+}
+
+// executeCanary 执行灰度发布：先发第一批 → 观察 hold_seconds → 再发剩余批次。
+//
+// 停止条件（任一命中就不再发后续批次，剩余 run 标记为 canceled）：
+//   - 第一批有失败/取消；
+//   - 观察期内被取消（用户点了取消）；
+//   - 观察结束后重查第一批，仍有非成功状态。
+func (o *deployOrchestrator) executeCanary(ctx context.Context, release *store.Release, app *store.App,
+	kind, content string, artifact *store.Artifact, runs []store.ReleaseRun, limit int) {
+
+	count := release.CanaryCount
+	if count > len(runs)-1 {
+		count = len(runs) - 1
+	}
+	if count < 1 {
+		count = 1
+	}
+	first := runs[:count]
+	rest := runs[count:]
+
+	o.logAppend(ctx, release, first, "system",
+		fmt.Sprintf("=== 灰度发布：先执行 %d 台，观察 %d 秒后再发剩余 %d 台 ===\n", len(first), release.HoldSeconds, len(rest)))
+	o.runBatch(ctx, release, app, kind, content, artifact, first, limit)
+
+	if failed := o.failedRuns(ctx, first); len(failed) > 0 {
+		o.cancelRuns(ctx, rest, "灰度批次失败，已停止后续批次")
+		return
+	}
+
+	if release.HoldSeconds > 0 {
+		o.logAppend(ctx, release, first, "system",
+			fmt.Sprintf("=== 第一批成功，观察 %d 秒（可在观察期内取消）===\n", release.HoldSeconds))
+		select {
+		case <-time.After(time.Duration(release.HoldSeconds) * time.Second):
+		case <-ctx.Done():
+			o.cancelRuns(ctx, rest, "灰度观察期内被取消")
+			return
+		}
+	}
+
+	// 观察期结束再确认一次（期间可能被手动回滚/取消）。
+	if failed := o.failedRuns(ctx, first); len(failed) > 0 {
+		o.cancelRuns(ctx, rest, "灰度批次在观察期内转为失败，已停止后续批次")
+		return
+	}
+	o.logAppend(ctx, release, first, "system", "=== 观察期结束，继续发布剩余批次 ===\n")
+	o.runBatch(ctx, release, app, kind, content, artifact, rest, limit)
+}
+
+// runBatch 用给定并发上限执行一批 run（派发前检查 ctx 取消）。
+func (o *deployOrchestrator) runBatch(ctx context.Context, release *store.Release, app *store.App,
+	kind, content string, artifact *store.Artifact, runs []store.ReleaseRun, limit int) {
+
+	if limit <= 0 {
+		limit = deploy.DefaultConcurrency
+	}
+	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
 dispatch:
 	for _, run := range runs {
-		// 取消后不再为剩余 run 起协程（原来 select 里的 break 只跳出 select，语义是错的）。
 		if ctx.Err() != nil {
 			break dispatch
 		}
@@ -319,7 +383,53 @@ dispatch:
 		}()
 	}
 	wg.Wait()
-	o.refreshReleaseStatus(ctx, release.ID)
+}
+
+// failedRuns 返回给定 run 中已进入终态且非成功的那些。
+func (o *deployOrchestrator) failedRuns(ctx context.Context, runs []store.ReleaseRun) []store.ReleaseRun {
+	out := make([]store.ReleaseRun, 0, len(runs))
+	for _, run := range runs {
+		cur, err := o.st.GetReleaseRun(context.WithoutCancel(ctx), run.ReleaseID, run.ServerID)
+		if err != nil {
+			continue
+		}
+		if cur.Status == store.ReleaseStatusFailed || cur.Status == store.ReleaseStatusCanceled {
+			out = append(out, *cur)
+		}
+	}
+	return out
+}
+
+// cancelRuns 把一批仍 pending/running 的 run 标记为 canceled（灰度停止时用）。
+func (o *deployOrchestrator) cancelRuns(ctx context.Context, runs []store.ReleaseRun, reason string) {
+	cctx := context.WithoutCancel(ctx)
+	for _, run := range runs {
+		cur, err := o.st.GetReleaseRun(cctx, run.ReleaseID, run.ServerID)
+		if err != nil {
+			continue
+		}
+		if cur.Status != store.ReleaseStatusPending && cur.Status != store.ReleaseStatusRunning {
+			continue
+		}
+		finishedAt := store.NowMS()
+		msg := reason
+		cur.Status = store.ReleaseStatusCanceled
+		cur.Message = &msg
+		cur.FinishedAt = &finishedAt
+		if err := o.st.UpdateReleaseRun(cctx, *cur); err != nil {
+			o.logger.Warn("标记灰度剩余批次取消失败", "release_run_id", cur.ID, "err", err)
+		}
+	}
+}
+
+// logAppend 往一批 run 的日志里追加一条系统日志（灰度阶段提示用）。
+func (o *deployOrchestrator) logAppend(ctx context.Context, release *store.Release, runs []store.ReleaseRun, stream, chunk string) {
+	cctx := context.WithoutCancel(ctx)
+	for _, run := range runs {
+		if _, err := o.st.AppendReleaseLog(cctx, run.ID, stream, chunk, store.NowMS()); err != nil {
+			o.logger.Debug("写灰度日志失败", "release_run_id", run.ID, "err", err)
+		}
+	}
 }
 
 // runOne 在单台服务器上执行一次发布。
@@ -767,4 +877,215 @@ func (h *DeployOrchestratorHandle) Preview(ctx context.Context, app *store.App, 
 		return nil, fmt.Errorf("发布编排器未启用")
 	}
 	return h.inner.Preview(ctx, app, tmpl, artifact, version, servers)
+}
+
+// RollbackTo 回滚到**指定历史版本**（release 模式切 current，inplace 模式解回该版本的备份）。
+//
+// 与 Rollback（回上一版）的区别：目标版本由调用方指定，且必须在该服务器上有过成功发布。
+// 脚本模式没有可回放的历史态（git 状态由脚本管理），直接拒绝并说明原因。
+func (o *deployOrchestrator) RollbackTo(releaseID, targetReleaseID string, serverIDs []string) (int, error) {
+	if o == nil {
+		return 0, errors.New("发布编排器未启用")
+	}
+	ctx := context.Background()
+	release, err := o.st.GetRelease(ctx, releaseID)
+	if err != nil {
+		return 0, err
+	}
+	app, err := o.st.GetApp(ctx, release.AppID)
+	if err != nil {
+		return 0, err
+	}
+	target, err := o.st.GetRelease(ctx, targetReleaseID)
+	if err != nil {
+		return 0, fmt.Errorf("目标版本不存在: %w", err)
+	}
+	if target.AppID != release.AppID {
+		return 0, errors.New("目标版本不属于同一个应用")
+	}
+	if target.Status != store.ReleaseStatusSuccess {
+		return 0, errors.New("只能回滚到发布成功的版本")
+	}
+	if app.DeployMode == store.DeployModeScript {
+		return 0, errors.New("脚本模式不支持回滚到指定版本（git 状态由回滚脚本管理），" +
+			"请用回滚脚本或 release/inplace 模式")
+	}
+
+	runs, err := o.st.ListReleaseRuns(ctx, releaseID)
+	if err != nil {
+		return 0, err
+	}
+	targetRuns, err := o.st.ListReleaseRuns(ctx, targetReleaseID)
+	if err != nil {
+		return 0, err
+	}
+	targetOK := map[string]bool{}
+	for _, r := range targetRuns {
+		if r.Status == store.ReleaseStatusSuccess {
+			targetOK[r.ServerID] = true
+		}
+	}
+	selected := map[string]bool{}
+	for _, id := range serverIDs {
+		selected[id] = true
+	}
+
+	// inplace 模式：备份名是 backup-<releaseID>，存的是「该次发布之前」的状态。
+	// 要回滚到版本 X，应恢复「X 之后、替换了 X 的那次发布」的备份。
+	successor := map[string]string{}
+	if app.DeployMode == store.DeployModeInplace {
+		all, lerr := o.st.ListReleases(ctx, store.ReleaseFilter{AppID: app.ID, Status: store.ReleaseStatusSuccess, Limit: 100})
+		if lerr == nil {
+			// ListReleases 按时间倒序；找到 target 之后（更早）最近的一个成功发布。
+			for i, rel := range all {
+				if rel.ID != targetReleaseID {
+					continue
+				}
+				if i > 0 {
+					newer := all[i-1]
+					nr, _ := o.st.ListReleaseRuns(ctx, newer.ID)
+					for _, r := range nr {
+						if r.Status == store.ReleaseStatusSuccess {
+							successor[r.ServerID] = newer.ID
+						}
+					}
+				}
+				break
+			}
+		}
+	}
+
+	rolled := 0
+	for _, run := range runs {
+		if len(selected) > 0 && !selected[run.ServerID] {
+			continue
+		}
+		if !targetOK[run.ServerID] {
+			o.logger.Warn("目标版本在该服务器上没有成功记录，跳过",
+				"server_id", run.ServerID, "target_release", targetReleaseID)
+			continue
+		}
+		backupReleaseID := ""
+		if app.DeployMode == store.DeployModeInplace {
+			backupReleaseID = successor[run.ServerID]
+			if backupReleaseID == "" {
+				// 目标就是该服务器上的最新成功版本：无需回滚。
+				o.logger.Info("目标版本已是该服务器的当前版本，跳过", "server_id", run.ServerID)
+				continue
+			}
+		}
+		if err := o.rollbackToOne(ctx, release, app, target, run, backupReleaseID); err != nil {
+			o.logger.Warn("回滚到指定版本失败", "release_run_id", run.ID, "target", targetReleaseID, "err", err)
+			continue
+		}
+		rolled++
+	}
+	if rolled > 0 {
+		o.refreshReleaseStatus(ctx, releaseID)
+	}
+	return rolled, nil
+}
+
+// rollbackToOne 在单台服务器上回滚到指定版本。
+func (o *deployOrchestrator) rollbackToOne(ctx context.Context, release *store.Release, app *store.App,
+	target *store.Release, run store.ReleaseRun, backupReleaseID string) error {
+
+	logf := func(stream, chunk string) {
+		if _, err := o.st.AppendReleaseLog(context.WithoutCancel(ctx), run.ID, stream, chunk, store.NowMS()); err != nil {
+			o.logger.Warn("写入回滚日志失败", "release_run_id", run.ID, "err", err)
+		}
+	}
+	logf("system", fmt.Sprintf("=== 回滚到指定版本 %s（release %s）===\n", target.Version, target.ID))
+
+	var plan deploy.Plan
+	var err error
+	switch app.DeployMode {
+	case store.DeployModeInplace:
+		workDir := strings.TrimSpace(derefStr(app.TargetDir))
+		if workDir == "" {
+			workDir = strings.TrimSpace(derefStr(app.Root))
+		}
+		restoreID := backupReleaseID
+		if restoreID == "" {
+			restoreID = target.ID
+		}
+		plan, err = deploy.BuildRestoreInplace(workDir, restoreID, derefStr(app.RestartCmd))
+	default:
+		// release 模式：用「目标版本 + 上一版本 = 目标」的方式生成回滚步骤，
+		// 得到「切 current 到目标目录 + 跑目标版本的启动脚本」。
+		kind := store.TemplateKindBinary
+		if tmpl, terr := o.st.GetDeployTemplate(ctx, target.TemplateID); terr == nil {
+			kind = tmpl.Kind
+		}
+		var artifact *store.Artifact
+		if target.ArtifactID != nil {
+			if art, aerr := o.st.GetArtifact(ctx, *target.ArtifactID); aerr == nil {
+				artifact = art
+			}
+		}
+		base, berr := o.buildPlanFn(
+			deploy.Template{ID: target.TemplateID, Kind: deploy.Kind(kind), Content: target.TemplateSnapshot},
+			o.toDeployArtifact(ctx, artifact),
+			// Build 不允许 PrevReleaseID == ReleaseID，所以用「当前发布 ID」做名义发布、
+			// 把 PrevReleaseID 指向目标版本；随后 buildRollbackFn 生成「切到目标目录 + 跑目标脚本」。
+			deploy.BuildParams{
+				AppSlug: app.Slug, ReleaseID: release.ID, Version: target.Version,
+				Root: o.resolveRoot(app), PrevReleaseID: target.ID, Now: store.NowMS(),
+			})
+		if berr != nil {
+			return fmt.Errorf("构建目标版本计划失败: %w", berr)
+		}
+		plan, err = o.buildRollbackFn(base)
+	}
+	if err != nil {
+		return fmt.Errorf("构建回滚计划失败: %w", err)
+	}
+
+	// 与执行器一致：RollbackSteps 逆序执行；这里拿到的已是「正向」计划，直接按序执行。
+	hooks := deploy.Hooks{
+		OnStep: func(index int, name string) {
+			logf("system", fmt.Sprintf("--- [回滚 %d/%d] %s ---\n", index+1, len(plan.Steps), name))
+		},
+		OnLog: logf,
+	}
+	outcome, execErr := o.exec.RunPlan(withDeployRun(ctx, run.ID), run.ServerID, plan, hooks)
+	if execErr != nil && outcome.Status == "" {
+		logf("system", "=== 回滚失败："+execErr.Error()+" ===\n")
+		return execErr
+	}
+	finishedAt := store.NowMS()
+	status := store.ReleaseStatusSuccess
+	if outcome.Status != "" {
+		status = outcome.Status
+	}
+	message := fmt.Sprintf("已回滚到版本 %s", target.Version)
+	if status != store.ReleaseStatusSuccess {
+		message = fmt.Sprintf("回滚到 %s 失败：%s", target.Version, outcome.Message)
+	}
+	exitCode := outcome.ExitCode
+	run.Status = status
+	run.ExitCode = &exitCode
+	run.Message = &message
+	run.FinishedAt = &finishedAt
+	if err := o.st.UpdateReleaseRun(context.WithoutCancel(ctx), run); err != nil {
+		return err
+	}
+	logf("system", "=== "+message+" ===\n")
+	return nil
+}
+
+// RollbackTo 见 DeployOrchestratorHandle。
+func (h *DeployOrchestratorHandle) RollbackTo(releaseID, targetReleaseID string, serverIDs []string) (int, error) {
+	if h == nil || h.inner == nil {
+		return 0, errors.New("发布编排器未启用")
+	}
+	return h.inner.RollbackTo(releaseID, targetReleaseID, serverIDs)
+}
+
+// RunDiagnose 见 handler（只读体检）。
+func (h *DeployOrchestratorHandle) RunDiagnose(ctx context.Context, serverID, script string) (string, error) {
+	if h == nil || h.inner == nil {
+		return "", fmt.Errorf("发布编排器未启用")
+	}
+	return h.inner.RunDiagnose(ctx, serverID, script)
 }

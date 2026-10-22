@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, type Release } from '../lib/api'
+import { api, type Release, type RollbackTarget } from '../lib/api'
 import { usePolling } from '../lib/hooks'
 import { errorMessage } from '../lib/errors'
 import { cn } from '../lib/cn'
 import { formatDateTime, formatRelativeTime } from '../lib/format'
 import { Button } from '../components/Button'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { Modal } from '../components/Modal'
 import { ReleaseStatusBadge } from '../components/DeployBadges'
 import {
   AlertTriangleIcon,
@@ -41,6 +42,11 @@ export default function ReleaseDetailPage() {
   const [actionKind, setActionKind] = useState<'retry' | 'rollback' | 'cancel' | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [targetOpen, setTargetOpen] = useState(false)
+  const [targets, setTargets] = useState<RollbackTarget[]>([])
+  const [targetsLoading, setTargetsLoading] = useState(false)
+  const [targetsError, setTargetsError] = useState<string | null>(null)
+  const [selectedTarget, setSelectedTarget] = useState('')
 
   const releaseQuery = usePolling(() => api.release(id ?? ''), 3_000, Boolean(id), id ?? '')
   const serversQuery = usePolling(api.servers, 30_000)
@@ -55,6 +61,43 @@ export default function ReleaseDetailPage() {
     return app?.name ?? t('s.0461')
   }, [release, appsQuery.data])
   const stats = release ? summarize(release) : null
+  const appMode = useMemo(() => {
+    if (!release) return 'release'
+    const app = (appsQuery.data ?? []).find((item) => item.id === release.app_id)
+    return app?.deploy_mode ?? 'release'
+  }, [release, appsQuery.data])
+
+  const openRollbackTargets = async () => {
+    if (!release) return
+    setTargetOpen(true)
+    setTargetsLoading(true)
+    setTargetsError(null)
+    setSelectedTarget('')
+    try {
+      setTargets(await api.rollbackTargets(release.app_id))
+    } catch (caught) {
+      setTargets([])
+      setTargetsError(errorMessage(caught, t('release.rollbackTargetsFailed')))
+    } finally {
+      setTargetsLoading(false)
+    }
+  }
+
+  const handleTargetRollback = async () => {
+    if (!release || !selectedTarget) return
+    setActionLoading(true)
+    setActionError(null)
+    try {
+      await api.rollbackRelease(release.id, { target_release_id: selectedTarget })
+      toast(t('release.rollbackToTargetDone'), 'success')
+      setTargetOpen(false)
+      await releaseQuery.refresh()
+    } catch (caught) {
+      setTargetsError(errorMessage(caught, t('s.0769')))
+    } finally {
+      setActionLoading(false)
+    }
+  }
 
   const serverNameOf = useMemo(() => {
     const names = new Map((serversQuery.data ?? []).map((server) => [server.id, server.name]))
@@ -166,6 +209,7 @@ export default function ReleaseDetailPage() {
               </Button>
             ) : null}
             {stats && stats.success > 0 ? (
+              <>
               <Button
                 variant="secondary"
                 disabled={!canWrite}
@@ -176,6 +220,16 @@ export default function ReleaseDetailPage() {
               >
                 {t('s.0786')}
               </Button>
+              <Button
+                variant="secondary"
+                disabled={!canWrite || appMode === 'script'}
+                title={appMode === 'script' ? t('release.rollbackScriptUnsupported') : undefined}
+                onClick={() => void openRollbackTargets()}
+                icon={<ClockIcon className="h-4 w-4" />}
+              >
+                {t('release.rollbackToTarget')}
+              </Button>
+              </>
             ) : null}
             {stats && stats.active > 0 ? (
               <Button
@@ -192,6 +246,11 @@ export default function ReleaseDetailPage() {
             ) : null}
           </div>
         </div>
+        {appMode === 'script' ? (
+          <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+            {t('release.rollbackScriptUnsupported')}
+          </p>
+        ) : null}
       </div>
 
       {releaseQuery.error ? (
@@ -421,6 +480,72 @@ export default function ReleaseDetailPage() {
           <p>{t('s.1071')} {stats?.active ?? 0} {t('s.1072')}</p>
         )}
       </ConfirmDialog>
+      <Modal
+        open={targetOpen}
+        onClose={() => setTargetOpen(false)}
+        title={t('release.rollbackTargetTitle')}
+        description={t('release.rollbackTargetDescription')}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setTargetOpen(false)}>
+              {t('common.close')}
+            </Button>
+            <Button
+              disabled={!selectedTarget || actionLoading}
+              loading={actionLoading}
+              onClick={() => void handleTargetRollback()}
+            >
+              {t('release.rollbackTargetConfirm')}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-2">
+          {targetsError ? (
+            <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
+              {targetsError}
+            </p>
+          ) : null}
+          {targetsLoading ? (
+            <InlineLoading label={t('release.rollbackTargetsLoading')} />
+          ) : targets.length === 0 && !targetsError ? (
+            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-6 text-center text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+              {t('release.rollbackTargetsEmpty')}
+            </p>
+          ) : (
+            targets.map((target) => (
+              <label
+                key={target.release_id}
+                className={cn(
+                  'flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2',
+                  selectedTarget === target.release_id
+                    ? 'border-indigo-500 bg-indigo-50/60 dark:border-indigo-400 dark:bg-indigo-500/10'
+                    : 'border-slate-200 hover:border-slate-300 dark:border-slate-800 dark:hover:border-slate-700',
+                )}
+              >
+                <input
+                  type="radio"
+                  name="rollback-target"
+                  checked={selectedTarget === target.release_id}
+                  onChange={() => setSelectedTarget(target.release_id)}
+                  className="mt-1 h-3.5 w-3.5 text-indigo-600"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block font-mono text-sm text-slate-800 dark:text-slate-100">
+                    {target.version}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">
+                    {t('release.rollbackTargetMeta', {
+                      time: formatDateTime(target.finished_at ?? target.created_at),
+                      count: target.server_ids.length,
+                    })}
+                  </span>
+                </span>
+              </label>
+            ))
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }

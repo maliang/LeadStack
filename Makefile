@@ -201,7 +201,7 @@ devssh: ## 构建 DEV-ONLY 测试 SSH 服务到 bin/leadstack-devssh（不参与
 	CGO_ENABLED=0 $(GO) build $(GOFLAGS_BUILD) -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/leadstack-devssh $(CMD_DEVSSH)
 
 # 验收脚本清单（按序执行；由 lead 维护，缺失时自动跳过，落地后无需改 Makefile）
-E2E_SCRIPTS := verify_bootstrap verify_servers verify_checks verify_alerts verify_deploy verify_deploy_v2 verify_deploy_script verify_baota verify_backup verify_ops verify_authz
+E2E_SCRIPTS := verify_bootstrap verify_servers verify_checks verify_alerts verify_deploy verify_deploy_v2 verify_deploy_script verify_deploy_rollout verify_baota verify_backup verify_ops verify_authz
 
 # 依次跑 基础/纳管/检测 验收脚本；输出（含脚本内部打印的控制端/agent 日志尾部）tee 到 $(E2E_LOG_DIR)/，
 # CI 失败时把该目录作为 artifact 上传。某个脚本缺失时打印提示并跳过（不算失败）；
@@ -232,6 +232,9 @@ verify-deploy-v2: ## 单独跑部署 v2 验收（接管目录/健康检查/首�
 
 verify-deploy-script: ## 单独跑脚本模式验收（git pull + 回滚脚本，前置：make build && make devssh）
 	@bash scripts/verify_deploy_script.sh
+
+verify-deploy-rollout: ## 单独跑灰度/回滚到指定版本/接管体检验收（前置：make build && make devssh）
+	@bash scripts/verify_deploy_rollout.sh
 
 e2e: test-e2e ## test-e2e 的别名
 

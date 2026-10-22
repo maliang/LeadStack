@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type DiscoverCandidate, type DiscoverResult } from '../lib/api'
+import { api, type DiagnoseResult, type DiscoverCandidate, type DiscoverResult } from '../lib/api'
+import { cn } from '../lib/cn'
 import { useI18n } from '../i18n'
 import { errorMessage } from '../lib/errors'
 import { Button } from './Button'
@@ -12,7 +13,7 @@ interface DiscoverDialogProps {
   serverId: string
   serverName: string
   onClose: () => void
-  onPick: (candidate: DiscoverCandidate) => void
+  onPick: (candidate: DiscoverCandidate, diagnosis?: DiagnoseResult) => void
 }
 
 const KIND_ORDER = ['systemd', 'docker', 'site']
@@ -28,6 +29,10 @@ export function DiscoverDialog({ open, serverId, serverName, onClose, onPick }: 
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<DiscoverResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [diagCandidate, setDiagCandidate] = useState<DiscoverCandidate | null>(null)
+  const [diagResult, setDiagResult] = useState<DiagnoseResult | null>(null)
+  const [diagLoading, setDiagLoading] = useState(false)
+  const [diagError, setDiagError] = useState<string | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -50,6 +55,26 @@ export function DiscoverDialog({ open, serverId, serverName, onClose, onPick }: 
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, serverId])
+
+  const runDiagnose = async (candidate: DiscoverCandidate) => {
+    setDiagCandidate(candidate)
+    setDiagResult(null)
+    setDiagError(null)
+    setDiagLoading(true)
+    try {
+      setDiagResult(
+        await api.diagnoseServer(serverId, {
+          kind: candidate.kind,
+          name: candidate.name,
+          target_dir: candidate.suggested.target_dir ?? '',
+        }),
+      )
+    } catch (caught) {
+      setDiagError(errorMessage(caught, t('discover.diagnoseFailed')))
+    } finally {
+      setDiagLoading(false)
+    }
+  }
 
   const grouped = useMemo(() => {
     const map = new Map<string, DiscoverCandidate[]>()
@@ -164,15 +189,24 @@ export function DiscoverDialog({ open, serverId, serverName, onClose, onPick }: 
                             ) : null}
                           </div>
                         </div>
-                        <Button
-                          size="sm"
-                          onClick={() => {
-                            onPick(candidate)
-                            onClose()
-                          }}
-                        >
-                          {t('discover.adopt')}
-                        </Button>
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => void runDiagnose(candidate)}
+                          >
+                            {t('discover.diagnose')}
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              onPick(candidate)
+                              onClose()
+                            }}
+                          >
+                            {t('discover.adopt')}
+                          </Button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -192,6 +226,133 @@ export function DiscoverDialog({ open, serverId, serverName, onClose, onPick }: 
           </details>
         ) : null}
       </div>
+
+      <Modal
+        open={diagCandidate !== null}
+        onClose={() => setDiagCandidate(null)}
+        title={t('discover.diagnoseTitle')}
+        description={diagCandidate ? `${diagCandidate.name} · ${diagCandidate.kind}` : undefined}
+        size="lg"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setDiagCandidate(null)}>
+              {t('common.close')}
+            </Button>
+            <Button
+              disabled={!diagResult}
+              onClick={() => {
+                if (diagCandidate && diagResult) {
+                  onPick(diagCandidate, diagResult)
+                  setDiagCandidate(null)
+                  onClose()
+                }
+              }}
+            >
+              {t('discover.applyRecommendation')}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          {diagLoading ? <InlineLoading label={t('discover.diagnosing')} /> : null}
+          {diagError ? (
+            <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
+              {diagError}
+            </p>
+          ) : null}
+          {diagResult ? (
+            <>
+              <div className="space-y-1.5">
+                {diagResult.checks.map((check) => (
+                  <div
+                    key={check.id}
+                    className={cn(
+                      'rounded-md border px-3 py-2 text-xs',
+                      check.status === 'pass'
+                        ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-500/30 dark:bg-emerald-500/10'
+                        : check.status === 'warn'
+                          ? 'border-amber-200 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-500/10'
+                          : 'border-rose-200 bg-rose-50 dark:border-rose-500/30 dark:bg-rose-500/10',
+                    )}
+                  >
+                    <p className="flex flex-wrap items-center gap-1.5 font-medium">
+                      <span
+                        className={
+                          check.status === 'pass'
+                            ? 'text-emerald-700 dark:text-emerald-300'
+                            : check.status === 'warn'
+                              ? 'text-amber-700 dark:text-amber-300'
+                              : 'text-rose-700 dark:text-rose-300'
+                        }
+                      >
+                        {check.status === 'pass' ? '✓' : check.status === 'warn' ? '!' : '✗'}
+                      </span>
+                      <span className="text-slate-800 dark:text-slate-100">{check.title}</span>
+                      <span className="text-slate-400 dark:text-slate-500">{check.status}</span>
+                    </p>
+                    {check.detail ? (
+                      <p className="mt-0.5 whitespace-pre-wrap break-words text-slate-600 dark:text-slate-300">
+                        {check.detail}
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2 text-xs dark:border-indigo-500/30 dark:bg-indigo-500/10">
+                <p className="font-medium text-indigo-900 dark:text-indigo-200">
+                  {t('discover.recommendation')}
+                </p>
+                <dl className="mt-1 space-y-0.5 text-slate-600 dark:text-slate-300">
+                  <div className="flex gap-2">
+                    <dt className="w-24 shrink-0 text-slate-400 dark:text-slate-500">
+                      {t('apps.deployMode')}
+                    </dt>
+                    <dd>{diagResult.recommendation.deploy_mode}</dd>
+                  </div>
+                  <div className="flex gap-2">
+                    <dt className="w-24 shrink-0 text-slate-400 dark:text-slate-500">
+                      {t('apps.workdir')}
+                    </dt>
+                    <dd className="break-all font-mono">{diagResult.recommendation.target_dir}</dd>
+                  </div>
+                  {diagResult.recommendation.restart_cmd ? (
+                    <div className="flex gap-2">
+                      <dt className="w-24 shrink-0 text-slate-400 dark:text-slate-500">
+                        {t('apps.restartCmd')}
+                      </dt>
+                      <dd className="break-all font-mono">{diagResult.recommendation.restart_cmd}</dd>
+                    </div>
+                  ) : null}
+                  {diagResult.recommendation.keep_paths ? (
+                    <div className="flex gap-2">
+                      <dt className="w-24 shrink-0 text-slate-400 dark:text-slate-500">
+                        {t('apps.keepPaths')}
+                      </dt>
+                      <dd className="break-all font-mono">{diagResult.recommendation.keep_paths}</dd>
+                    </div>
+                  ) : null}
+                  {diagResult.recommendation.healthcheck_port ? (
+                    <div className="flex gap-2">
+                      <dt className="w-24 shrink-0 text-slate-400 dark:text-slate-500">
+                        {t('apps.healthcheckPort')}
+                      </dt>
+                      <dd className="tabular-nums">{diagResult.recommendation.healthcheck_port}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+                {diagResult.recommendation.script ? (
+                  <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-2 font-mono text-[11px] text-slate-100">
+                    {diagResult.recommendation.script}
+                  </pre>
+                ) : null}
+                <p className="mt-1 text-[11px] text-indigo-800/80 dark:text-indigo-300/80">
+                  {t('discover.recommendationHint')}
+                </p>
+              </div>
+            </>
+          ) : null}
+        </div>
+      </Modal>
     </Modal>
   )
 }

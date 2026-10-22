@@ -38,6 +38,8 @@ export interface AppPreset {
   site_type?: string
   site_port?: number
   gitDetected?: boolean
+  /** 接管体检建议的脚本内容（script 模式），仅展示提示，不落库 */
+  scriptTemplate?: string
 }
 
 interface AppDialogProps {
@@ -422,6 +424,19 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
             <p className="mt-1.5 rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs leading-relaxed text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200">
               {t('apps.gitDetectedHint')}
             </p>
+          ) : null}
+          {preset?.scriptTemplate ? (
+            <div className="mt-2 rounded-md border border-indigo-200 bg-indigo-50/60 px-2.5 py-1.5 dark:border-indigo-500/30 dark:bg-indigo-500/10">
+              <p className="text-xs font-medium text-indigo-900 dark:text-indigo-200">
+                {t('apps.suggestedScript')}
+              </p>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-2 font-mono text-[11px] text-slate-100">
+                {preset.scriptTemplate}
+              </pre>
+              <p className="mt-1 text-[11px] text-indigo-800/80 dark:text-indigo-300/80">
+                {t('apps.suggestedScriptHint')}
+              </p>
+            </div>
           ) : null}
           <div className="mt-2 grid gap-2 sm:grid-cols-3">
             {(

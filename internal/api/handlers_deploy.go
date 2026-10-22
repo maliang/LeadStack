@@ -794,6 +794,10 @@ func (a *API) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 		ArtifactID  string   `json:"artifact_id"`
 		ServerIDs   []string `json:"server_ids"`
 		Concurrency *int     `json:"concurrency"`
+		// 灰度发布：先发 canary_count 台，观察 hold_seconds 秒后再发剩余。
+		Strategy    string `json:"strategy"`
+		CanaryCount int    `json:"canary_count"`
+		HoldSeconds int    `json:"hold_seconds"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
@@ -820,6 +824,34 @@ func (a *API) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 	if !a.requireServersInScope(w, r, serverIDs) {
 		return
 	}
+	strategy := strings.TrimSpace(req.Strategy)
+	if strategy == "" {
+		strategy = store.ReleaseStrategyAll
+	}
+	if strategy != store.ReleaseStrategyAll && strategy != store.ReleaseStrategyCanary {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "strategy 只能是 all 或 canary")
+		return
+	}
+	canaryCount := req.CanaryCount
+	holdSeconds := req.HoldSeconds
+	if strategy == store.ReleaseStrategyCanary {
+		if len(serverIDs) < 2 {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, "灰度发布至少需要 2 台服务器")
+			return
+		}
+		if canaryCount < 1 || canaryCount >= len(serverIDs) {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument,
+				fmt.Sprintf("canary_count 必须在 1-%d 之间（至少要留一台给后续批次）", len(serverIDs)-1))
+			return
+		}
+		if holdSeconds < 0 || holdSeconds > 3600 {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, "hold_seconds 必须在 0-3600 之间")
+			return
+		}
+	} else {
+		canaryCount, holdSeconds = 0, 0
+	}
+
 	concurrency := a.cfg.DeployConcurrency
 	if req.Concurrency != nil {
 		concurrency = *req.Concurrency
@@ -890,6 +922,9 @@ func (a *API) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 		Status:           store.ReleaseStatusPending,
 		CreatedAt:        a.nowMS(),
 		Concurrency:      concurrency,
+		Strategy:         strategy,
+		CanaryCount:      canaryCount,
+		HoldSeconds:      holdSeconds,
 	}
 	if artifact != nil {
 		release.ArtifactID = &artifact.ID
@@ -1018,7 +1053,8 @@ func (a *API) handleRetryRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ServerIDs []string `json:"server_ids"`
+		ServerIDs       []string `json:"server_ids"`
+		TargetReleaseID string   `json:"target_release_id"`
 	}
 	if r.ContentLength > 0 {
 		if err := decodeJSON(w, r, &req); err != nil {
@@ -1064,7 +1100,8 @@ func (a *API) handleRollbackRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ServerIDs []string `json:"server_ids"`
+		ServerIDs       []string `json:"server_ids"`
+		TargetReleaseID string   `json:"target_release_id"`
 	}
 	if r.ContentLength > 0 {
 		if err := decodeJSON(w, r, &req); err != nil {
@@ -1090,6 +1127,25 @@ func (a *API) handleRollbackRelease(w http.ResponseWriter, r *http.Request) {
 			}
 			rollbackIDs = ids
 		}
+	}
+	if target := strings.TrimSpace(req.TargetReleaseID); target != "" {
+		roller, ok := a.deploy.(interface {
+			RollbackTo(releaseID, targetReleaseID string, serverIDs []string) (int, error)
+		})
+		if !ok {
+			writeError(w, http.StatusNotImplemented, codeInternal, "发布编排器不支持回滚到指定版本")
+			return
+		}
+		n, rerr := roller.RollbackTo(release.ID, target, rollbackIDs)
+		if rerr != nil {
+			// 回滚到指定版本的失败都是「请求/状态不满足」（目标版本不存在/未成功/模式不支持）
+			// 或执行失败；前者 400，执行失败 502，避免一律 500 掩盖原因。
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, rerr.Error())
+			return
+		}
+		a.logger.Info("回滚到指定版本", "release_id", release.ID, "target_release_id", target, "rolled_back", n)
+		a.writeReleaseActionResult(w, r, release.ID, map[string]any{"rolled_back": n, "target_release_id": target})
+		return
 	}
 	n, err := a.deploy.Rollback(release.ID, rollbackIDs)
 	if err != nil {

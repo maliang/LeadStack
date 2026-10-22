@@ -725,6 +725,11 @@ export interface Release {
   started_at: number | null
   finished_at: number | null
   concurrency: number
+  /** 发布策略：all=全量；canary=灰度 */
+  strategy: 'all' | 'canary' | string
+  canary_count: number | null
+  /** 灰度观察期（秒） */
+  hold_seconds: number | null
   runs: ReleaseRun[]
 }
 
@@ -780,6 +785,42 @@ export interface CreateReleasePayload {
   artifact_id: string
   server_ids: string[]
   concurrency?: number
+  strategy?: 'all' | 'canary'
+  canary_count?: number
+  hold_seconds?: number
+}
+
+export interface RollbackTarget {
+  release_id: string
+  version: string
+  created_at: number | null
+  finished_at: number | null
+  server_ids: string[]
+}
+
+export interface DiagnoseCheck {
+  id: string
+  title: string
+  status: 'pass' | 'warn' | 'fail' | string
+  detail: string
+}
+
+export interface DiagnoseRecommendation {
+  deploy_mode: string
+  target_dir: string
+  restart_cmd?: string
+  keep_paths?: string
+  healthcheck_port?: number
+  script?: string
+}
+
+export interface DiagnoseResult {
+  server_id: string
+  name: string
+  kind: string
+  target_dir: string
+  checks: DiagnoseCheck[]
+  recommendation: DiagnoseRecommendation
 }
 
 export interface CreateReleaseResponse {
@@ -1745,6 +1786,9 @@ export function normalizeRelease(input: unknown): Release {
     started_at: toNumber(raw.started_at),
     finished_at: toNumber(raw.finished_at),
     concurrency: toNumber(raw.concurrency) ?? 4,
+    strategy: toText(raw.strategy) ?? 'all',
+    canary_count: toNumber(raw.canary_count),
+    hold_seconds: toNumber(raw.hold_seconds),
     runs,
   }
 }
@@ -2988,11 +3032,69 @@ export const api = {
     )
   },
 
-  /** POST /releases/{id}/rollback —— 回滚（缺省全部成功的 run） */
-  rollbackRelease(id: string, serverIds?: string[]): Promise<unknown> {
+  /** GET /apps/{appID}/rollback-targets —— 可回滚的成功版本 */
+  rollbackTargets(appId: string, serverId?: string): Promise<RollbackTarget[]> {
+    const suffix = serverId ? `?server_id=${encodeURIComponent(serverId)}` : ''
+    return request<unknown>(`/apps/${encodeURIComponent(appId)}/rollback-targets${suffix}`).then(
+      (raw) =>
+        extractList(raw, ['targets', 'items']).map((item) => {
+          const target = toRecord(item) ?? {}
+          return {
+            release_id: toText(target.release_id) ?? '',
+            version: toText(target.version) ?? '',
+            created_at: toNumber(target.created_at),
+            finished_at: toNumber(target.finished_at),
+            server_ids: toStringArray(target.server_ids),
+          }
+        }),
+    )
+  },
+
+  /** POST /releases/{id}/rollback —— 回滚；带 target_release_id 回滚到指定版本 */
+  rollbackRelease(
+    id: string,
+    payload?: { server_ids?: string[]; target_release_id?: string },
+  ): Promise<unknown> {
     return request<unknown>(`/releases/${encodeURIComponent(id)}/rollback`, {
       method: 'POST',
-      body: serverIds && serverIds.length > 0 ? { server_ids: serverIds } : {},
+      body: payload ?? {},
+    })
+  },
+
+  /** POST /servers/{id}/diagnose —— 接管前体检 */
+  diagnoseServer(
+    serverId: string,
+    payload: { kind: string; name: string; target_dir: string },
+  ): Promise<DiagnoseResult> {
+    return request<unknown>(`/servers/${encodeURIComponent(serverId)}/diagnose`, {
+      method: 'POST',
+      body: payload,
+    }).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      const recommendation = toRecord(record.recommendation) ?? {}
+      return {
+        server_id: toText(record.server_id) ?? serverId,
+        name: toText(record.name) ?? payload.name,
+        kind: toText(record.kind) ?? payload.kind,
+        target_dir: toText(record.target_dir) ?? payload.target_dir,
+        checks: extractList(record.checks, ['checks']).map((item) => {
+          const check = toRecord(item) ?? {}
+          return {
+            id: toText(check.id) ?? '',
+            title: toText(check.title) ?? '',
+            status: toText(check.status) ?? 'warn',
+            detail: toText(check.detail) ?? '',
+          }
+        }),
+        recommendation: {
+          deploy_mode: toText(recommendation.deploy_mode) ?? 'inplace',
+          target_dir: toText(recommendation.target_dir) ?? payload.target_dir,
+          restart_cmd: toText(recommendation.restart_cmd) ?? undefined,
+          keep_paths: toText(recommendation.keep_paths) ?? undefined,
+          healthcheck_port: toNumber(recommendation.healthcheck_port) ?? undefined,
+          script: toText(recommendation.script) ?? undefined,
+        },
+      }
     })
   },
 

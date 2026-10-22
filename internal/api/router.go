@@ -90,6 +90,7 @@ func (a *API) Router() http.Handler {
 			permDeployRead := a.RequirePerm(auth.PermDeployRead)
 			r.With(permDeployRead).Get("/apps", a.handleListApps)
 			r.With(permDeployRead).Get("/apps/{appID}", a.handleGetApp)
+			r.With(permDeployRead).Get("/apps/{appID}/rollback-targets", a.handleRollbackTargets)
 			r.With(permDeployRead).Get("/templates", a.handleListTemplates)
 			r.With(permDeployRead).Get("/templates/{templateID}", a.handleGetTemplate)
 			r.With(permDeployRead).Get("/releases", a.handleListReleases)
@@ -97,6 +98,7 @@ func (a *API) Router() http.Handler {
 			r.With(permDeployRead).Post("/releases/preview", a.handlePreviewRelease)
 			r.With(permDeployRead).Get("/deploy/presets", a.handleListDeployPresets)
 			r.With(permServerRead).Post("/servers/{serverID}/discover", a.handleDiscoverServer)
+			r.With(permServerRead).Post("/servers/{serverID}/diagnose", a.handleDiagnoseServer)
 			r.With(permDeployRead).Get("/releases/{releaseID}/runs", a.handleListReleaseRuns)
 			r.With(permDeployRead).Get("/releases/{releaseID}/runs/{serverID}/logs", a.handleReleaseLogs)
 

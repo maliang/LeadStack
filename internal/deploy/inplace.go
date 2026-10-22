@@ -227,3 +227,29 @@ func ValidateInplaceParams(targetDir string) error {
 	}
 	return nil
 }
+
+// BuildRestoreInplace 生成「把某次发布的备份恢复回去」的计划（正向步骤：恢复 → 重启）。
+//
+// 用于回滚到指定历史版本（inplace 模式）：每次发布的备份文件名里带 releaseID，
+// 因此可以精确恢复任意一版；恢复后执行 restart_cmd。
+func BuildRestoreInplace(targetDir, releaseID, restartCmd string) (Plan, error) {
+	if err := validateAbsPath(targetDir); err != nil {
+		return Plan{}, fmt.Errorf("deploy: 接管目录非法: %w", err)
+	}
+	if err := validateReleaseID(releaseID); err != nil {
+		return Plan{}, fmt.Errorf("deploy: ReleaseID 非法: %w", err)
+	}
+	backup := path.Join(targetDir, inplaceBackupDir, "backup-"+releaseID+inplaceBackupSuffix)
+	plan := Plan{ReleaseID: releaseID, Root: targetDir}
+	plan.Steps = []Step{
+		{
+			Name:     StepRollbackRestore,
+			Command:  "test -f " + shQuote(backup) + " && tar -xzf " + shQuote(backup) + " -C " + shQuote(targetDir),
+			TimeoutS: timeoutRollbackRestore,
+		},
+	}
+	if cmd := strings.TrimSpace(restartCmd); cmd != "" {
+		plan.Steps = append(plan.Steps, Step{Name: StepRestart, Command: cmd, TimeoutS: timeoutRestart})
+	}
+	return plan, nil
+}

@@ -2072,3 +2072,44 @@ prepare（mkdir <work>/.leadstack/scripts）
 发现的站点目录如果是 git 仓库（`<dir>/.git`），`suggested.deploy_mode` 直接返回 `script`，
 并在 `detail` 里带上分支与远端（`路径 · git(master ssh://…)`）——这类项目的更新方式就是 `git pull`，
 前端据此推荐「脚本模式 + git-pull 预设」。
+
+---
+
+## 61. 灰度发布、回滚到指定版本、接管体检
+
+### 61.1 灰度发布（canary）
+
+创建发布时可带：
+
+```json
+{"strategy":"canary","canary_count":1,"hold_seconds":120}
+```
+
+- `strategy=all`（默认）全量并发；`canary` 先发 `canary_count` 台（按 server_id 排序取前 N）；
+- 第一批完成后等待 `hold_seconds`（0 表示不等待）；**观察期内可取消**；
+- 观察结束再确认第一批仍成功，才发剩余批次；
+- 任一停止条件命中 → 剩余 run 标记 `canceled`（message 说明原因），发布整体按已执行结果汇总；
+- 约束：服务器 ≥2、`1 ≤ canary_count ≤ 服务器数-1`、`hold_seconds ∈ [0,3600]`；
+- 数据库：`releases.strategy/canary_count/hold_seconds`（迁移 0012）。
+
+### 61.2 回滚到指定历史版本
+
+- `GET /apps/{appID}/rollback-targets?server_id=`：列出该应用发布成功过的版本（可选按服务器过滤）；
+- `POST /releases/{id}/rollback {target_release_id}`：
+  - **release 模式**：生成「切 current 到 `releases/<target>` + 跑该版本启动脚本」的计划；
+  - **inplace 模式**：备份名是 `backup-<releaseID>`，存的是「该次发布之前」的状态，
+    所以回滚到版本 X 要恢复**「X 之后替换它的那次发布」**的备份（自动找后继成功版本）；目标已是当前版本时跳过；
+  - **script 模式**：返回 400（git/外部状态不由平台管理），提示用回滚脚本；
+- 被回滚的 run 的 message 写「已回滚到版本 X」。
+
+### 61.3 接管体检
+
+`POST /servers/{serverID}/diagnose {kind,name,target_dir}`（只读）：
+
+```
+目录（存在/可写/磁盘）→ git（分支/未提交数/remote）→ systemd（ExecStart/WorkingDirectory/User/单元文件/状态）→ 监听端口
+```
+
+返回 `checks[]`（pass/warn/fail + detail）与 `recommendation`：
+git 仓库 → 建议 `script` 模式并给出 `git pull --ff-only && bash start.sh restart` 脚本；
+否则建议 `inplace`；systemd 候选给出 `systemctl restart <unit>`、ExecStart 是否落在目标目录内作为 warn 提示。

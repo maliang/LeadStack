@@ -721,21 +721,25 @@ export default function ServerDetailPage() {
         serverId={server.id}
         serverName={server.name}
         onClose={() => setDiscoverOpen(false)}
-        onPick={(candidate) => {
+        onPick={(candidate, diagnosis) => {
+          const rec = diagnosis?.recommendation
+          const suggestedMode = rec?.deploy_mode ?? candidate.suggested.deploy_mode
           const gitDetected =
-            candidate.suggested.deploy_mode === 'script' || /git\(/.test(candidate.detail)
+            suggestedMode === 'script' || /git\(/.test(candidate.detail)
           setAppPreset({
             name: candidate.name,
             root: candidate.suggested.root,
             deploy_mode:
-              candidate.suggested.deploy_mode === 'script'
+              suggestedMode === 'script'
                 ? 'script'
-                : candidate.suggested.deploy_mode === 'release'
+                : suggestedMode === 'release'
                   ? 'release'
                   : 'inplace',
-            target_dir: candidate.suggested.target_dir,
-            restart_cmd: candidate.suggested.restart_cmd,
-            healthcheck_port: candidate.suggested.healthcheck_port,
+            target_dir: rec?.target_dir ?? candidate.suggested.target_dir,
+            restart_cmd: rec?.restart_cmd ?? candidate.suggested.restart_cmd,
+            keep_paths: rec?.keep_paths,
+            healthcheck_port: rec?.healthcheck_port ?? candidate.suggested.healthcheck_port,
+            scriptTemplate: rec?.script,
             gitDetected,
           })
         }}

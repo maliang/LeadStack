@@ -64,6 +64,9 @@ export function ReleaseWizard({
   const [pickerGroup, setPickerGroup] = useState('')
   const [pickerTag, setPickerTag] = useState('')
   const [concurrency, setConcurrency] = useState('4')
+  const [strategy, setStrategy] = useState<'all' | 'canary'>('all')
+  const [canaryCount, setCanaryCount] = useState('1')
+  const [holdMinutes, setHoldMinutes] = useState('0')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -186,6 +189,32 @@ export function ReleaseWizard({
         setError(t('s.0453'))
         return
       }
+      if (strategy === 'canary') {
+        if (selected.size < 2) {
+          setError(t('release.canaryNeedTwo'))
+          return
+        }
+        const count = Number(canaryCount)
+        if (
+          !/^\d+$/.test(canaryCount.trim()) ||
+          !Number.isInteger(count) ||
+          count < 1 ||
+          count > selected.size - 1
+        ) {
+          setError(t('release.canaryCountInvalid', { max: Math.max(1, selected.size - 1) }))
+          return
+        }
+        const minutes = Number(holdMinutes)
+        if (
+          !/^\d+$/.test(holdMinutes.trim()) ||
+          !Number.isInteger(minutes) ||
+          minutes < 0 ||
+          minutes > 60
+        ) {
+          setError(t('release.canaryHoldInvalid'))
+          return
+        }
+      }
       setStep(3)
     }
   }
@@ -205,6 +234,9 @@ export function ReleaseWizard({
         artifact_id: artifact?.id ?? '',
         server_ids: [...selected],
         concurrency: Number(concurrency) || 4,
+        strategy,
+        canary_count: strategy === 'canary' ? Number(canaryCount) : undefined,
+        hold_seconds: strategy === 'canary' ? Number(holdMinutes) * 60 : undefined,
       })
       toast(t('s.0455', { '0': app.name, '1': version.trim() }), 'success')
       onCreated(response.release)
@@ -578,6 +610,80 @@ export function ReleaseWizard({
               {t('s.0482')}
             </span>
           </div>
+
+          <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+            <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+              {t('release.strategy')}
+            </p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {(
+                [
+                  { value: 'all' as const, title: t('release.strategyAll'), hint: t('release.strategyAllHint') },
+                  { value: 'canary' as const, title: t('release.strategyCanary'), hint: t('release.strategyCanaryHint') },
+                ]
+              ).map((option) => {
+                const disabled = option.value === 'canary' && selected.size < 2
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => setStrategy(option.value)}
+                    className={cn(
+                      'rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                      strategy === option.value
+                        ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-400 dark:bg-indigo-500/10'
+                        : 'border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-600',
+                    )}
+                  >
+                    <span className="block text-sm font-medium text-slate-800 dark:text-slate-100">
+                      {option.title}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">
+                      {disabled ? t('release.canaryDisabled') : option.hint}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            {strategy === 'canary' ? (
+              <div className="mt-3 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label htmlFor="release-canary-count" className="text-sm text-slate-600 dark:text-slate-300">
+                    {t('release.canaryCount')}
+                  </label>
+                  <input
+                    id="release-canary-count"
+                    value={canaryCount}
+                    onChange={(event) => setCanaryCount(event.target.value)}
+                    inputMode="numeric"
+                    className={cn(inputClass, 'w-20')}
+                  />
+                  <span className="text-xs text-slate-400 dark:text-slate-500">
+                    {t('release.canaryMax', { max: Math.max(1, selected.size - 1) })}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label htmlFor="release-hold-minutes" className="text-sm text-slate-600 dark:text-slate-300">
+                    {t('release.holdMinutes')}
+                  </label>
+                  <input
+                    id="release-hold-minutes"
+                    value={holdMinutes}
+                    onChange={(event) => setHoldMinutes(event.target.value)}
+                    inputMode="numeric"
+                    className={cn(inputClass, 'w-20')}
+                  />
+                  <span className="text-xs text-slate-400 dark:text-slate-500">
+                    {t('release.holdHint')}
+                  </span>
+                </div>
+                <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+                  {t('release.canaryNotice')}
+                </p>
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -619,6 +725,18 @@ export function ReleaseWizard({
           <div className="flex justify-between gap-3">
             <dt className="text-slate-500 dark:text-slate-400">{t('s.0485')}</dt>
             <dd className="text-slate-800 dark:text-slate-100">{concurrency}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-slate-500 dark:text-slate-400">{t('release.strategy')}</dt>
+            <dd className="text-slate-800 dark:text-slate-100">
+              {strategy === 'canary'
+                ? t('release.strategySummary', {
+                    count: canaryCount,
+                    minutes: holdMinutes,
+                    total: selected.size,
+                  })
+                : t('release.strategyAll')}
+            </dd>
           </div>
           <p className="pt-1 text-xs text-slate-400 dark:text-slate-500">
             {t('s.0486')}

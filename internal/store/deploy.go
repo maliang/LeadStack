@@ -502,10 +502,12 @@ func (s *Store) CreateRelease(ctx context.Context, rel *Release, runs []ReleaseR
 	return s.inTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO releases (id, app_id, template_id, version, artifact_id, template_snapshot,
-			                       status, created_by, created_at, started_at, finished_at, concurrency)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+			                       status, created_by, created_at, started_at, finished_at, concurrency,
+			                       strategy, canary_count, hold_seconds)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
 			rel.ID, rel.AppID, rel.TemplateID, rel.Version, nullableStr(rel.ArtifactID),
-			rel.TemplateSnapshot, rel.Status, nullableStr(rel.CreatedBy), rel.CreatedAt, rel.Concurrency); err != nil {
+			rel.TemplateSnapshot, rel.Status, nullableStr(rel.CreatedBy), rel.CreatedAt, rel.Concurrency,
+			defaultReleaseStrategy(rel.Strategy), rel.CanaryCount, rel.HoldSeconds); err != nil {
 			return fmt.Errorf("创建发布 %s: %w", rel.ID, err)
 		}
 		for _, run := range runs {
@@ -527,7 +529,21 @@ func (s *Store) GetRelease(ctx context.Context, id string) (*Release, error) {
 
 // releaseColumns 是 releases 表的固定列顺序。
 const releaseColumns = `id, app_id, template_id, version, artifact_id, template_snapshot,
-	status, created_by, created_at, started_at, finished_at, concurrency`
+	status, created_by, created_at, started_at, finished_at, concurrency, strategy, canary_count, hold_seconds`
+
+// 发布策略常量。
+const (
+	ReleaseStrategyAll    = "all"
+	ReleaseStrategyCanary = "canary"
+)
+
+// defaultReleaseStrategy 把空值归一为 all。
+func defaultReleaseStrategy(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return ReleaseStrategyAll
+	}
+	return strings.TrimSpace(v)
+}
 
 // ReleaseFilter 是发布列表的过滤条件。
 type ReleaseFilter struct {
@@ -637,9 +653,13 @@ func scanRelease(row interface{ Scan(...any) error }) (*Release, error) {
 		artifactID, createdBy sql.NullString
 		startedAt, finishedAt sql.NullInt64
 		concurrency           int
+		strategy              sql.NullString
+		canaryCount           sql.NullInt64
+		holdSeconds           sql.NullInt64
 	)
 	err := row.Scan(&rel.ID, &rel.AppID, &rel.TemplateID, &rel.Version, &artifactID,
-		&rel.TemplateSnapshot, &rel.Status, &createdBy, &rel.CreatedAt, &startedAt, &finishedAt, &concurrency)
+		&rel.TemplateSnapshot, &rel.Status, &createdBy, &rel.CreatedAt, &startedAt, &finishedAt, &concurrency,
+		&strategy, &canaryCount, &holdSeconds)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询发布: %w", ErrNotFound)
@@ -651,6 +671,16 @@ func scanRelease(row interface{ Scan(...any) error }) (*Release, error) {
 	rel.StartedAt = intPtr(startedAt)
 	rel.FinishedAt = intPtr(finishedAt)
 	rel.Concurrency = concurrency
+	rel.Strategy = strings.TrimSpace(strategy.String)
+	if rel.Strategy == "" {
+		rel.Strategy = ReleaseStrategyAll
+	}
+	if canaryCount.Valid {
+		rel.CanaryCount = int(canaryCount.Int64)
+	}
+	if holdSeconds.Valid {
+		rel.HoldSeconds = int(holdSeconds.Int64)
+	}
 	return &rel, nil
 }
 
