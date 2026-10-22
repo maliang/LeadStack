@@ -12,6 +12,7 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量节点 agent，跨平台、开箱
 
 ## 目录
 
+- [界面一览](#界面一览)
 - [快速开始（5 分钟）](#快速开始5-分钟)
 - [详细开始流程](#详细开始流程)
 - [生产部署：systemd](#生产部署systemd)
@@ -20,6 +21,44 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量节点 agent，跨平台、开箱
 - [配置参考](#配置参考)
 - [目录结构](#目录结构)
 - [开发与验收](#开发与验收)
+
+---
+
+## 界面一览
+
+> 截图取自本地演示数据，可用 `node scripts/capture-screenshots.mjs` 重新采集（详见[开发与验收](#开发与验收)）。
+
+**总览** —— 服务器实时状态、检测与告警概览、最近发布，一屏看清全局。
+
+![总览](docs/images/dashboard.png)
+
+**服务器详情** —— 指标曲线、主机信息、检测/终端/文件/日志入口。
+
+![服务器详情](docs/images/server-detail.png)
+
+**检测** —— 端口 / HTTP / Ping / 进程 / 脚本五类探测，带状态口径、24h 可用率与最近结果。
+
+![检测](docs/images/checks.png)
+
+**告警** —— 触发、去重、确认、恢复的完整轨迹，支持规则与通知渠道。
+
+![告警](docs/images/alerts.png)
+
+**角色与权限** —— 24 个权限点自定义角色，并把角色限定到「全部 / 分组 / 单台服务器」。
+
+![角色与权限](docs/images/roles.png)
+
+**服务器分组** —— 分组是授权单元：角色按分组圈定可见范围，标签只用于筛选。
+
+![服务器分组](docs/images/groups.png)
+
+**用户** —— 角色指派、账号启用/停用、登录失败锁定与一键解锁。
+
+![用户](docs/images/users.png)
+
+**深色主题** —— 明暗主题、5 种强调色、14/16/18px 字号与舒适/紧凑密度可切换。
+
+![深色主题](docs/images/dashboard-dark.png)
 
 ---
 
@@ -583,6 +622,7 @@ make test-e2e       # 端到端验收（8 个脚本，逐段断言）
 make dev            # 开发模式（另开 make web-dev 走前端热更新）
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check   # Docker 构建 + 容器内健康检查 + 备份校验
+node scripts/capture-screenshots.mjs  # 重新采集 README 截图（需先起一个带演示数据的控制端）
 ```
 
 单独跑某一套验收（需要 `make build && make devssh`）：
