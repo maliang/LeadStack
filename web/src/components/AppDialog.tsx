@@ -32,6 +32,12 @@ export interface AppPreset {
   target_dir?: string
   restart_cmd?: string
   healthcheck_port?: number
+  keep_paths?: string
+  healthcheck_path?: string
+  provider?: string
+  site_type?: string
+  site_port?: number
+  gitDetected?: boolean
 }
 
 interface AppDialogProps {
@@ -113,20 +119,25 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
     setRoot(app?.root ?? fromPreset?.root ?? '')
     setRootTouched(false)
     setDescription(app?.description ?? '')
-    setProvider(app?.provider === 'baota' ? 'baota' : 'builtin')
+    setProvider(
+      app?.provider === 'baota' || fromPreset?.provider === 'baota' ? 'baota' : 'builtin',
+    )
     setSiteName(app?.site_name ?? '')
-    setSitePort(app?.site_port ? String(app.site_port) : '')
-    setSiteType(app?.site_type === 'php' ? 'php' : 'static')
-    setHealthcheckPath(app?.healthcheck_path ?? '')
+    setSitePort(
+      app?.site_port
+        ? String(app.site_port)
+        : fromPreset?.site_port
+          ? String(fromPreset.site_port)
+          : '',
+    )
+    setSiteType(app?.site_type === 'php' || fromPreset?.site_type === 'php' ? 'php' : 'static')
+    setHealthcheckPath(app?.healthcheck_path ?? fromPreset?.healthcheck_path ?? '')
+    const presetMode = app?.deploy_mode ?? fromPreset?.deploy_mode
     setDeployMode(
-      app?.deploy_mode === 'inplace' || app?.deploy_mode === 'script'
-        ? app.deploy_mode
-        : fromPreset?.deploy_mode === 'inplace'
-          ? 'inplace'
-          : 'release',
+      presetMode === 'inplace' ? 'inplace' : presetMode === 'script' ? 'script' : 'release',
     )
     setTargetDir(app?.target_dir ?? fromPreset?.target_dir ?? '')
-    setKeepPaths(app?.keep_paths ?? '')
+    setKeepPaths(app?.keep_paths ?? fromPreset?.keep_paths ?? '')
     setRestartCmd(app?.restart_cmd ?? fromPreset?.restart_cmd ?? '')
     setHealthcheckPort(
       app?.healthcheck_port != null
@@ -170,8 +181,8 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
         return
       }
     }
-    if (deployMode === 'inplace' && !targetDir.trim().startsWith('/')) {
-      setError(t('apps.errorTargetDir'))
+    if ((deployMode === 'inplace' || deployMode === 'script') && !targetDir.trim().startsWith('/')) {
+      setError(deployMode === 'script' ? t('apps.errorWorkdir') : t('apps.errorTargetDir'))
       return
     }
     let parsedPort: number | null = null
@@ -207,7 +218,9 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
         site_port: provider === 'baota' ? Number(sitePort) : undefined,
         site_type: provider === 'baota' ? siteType : null,
         healthcheck_path:
-          provider === 'baota' && healthcheckPath.trim() ? healthcheckPath.trim() : null,
+          (provider === 'baota' || deployMode === 'script') && healthcheckPath.trim()
+            ? healthcheckPath.trim()
+            : null,
         deploy_mode: deployMode,
         target_dir: deployMode === 'inplace' ? targetDir.trim() : null,
         keep_paths: deployMode === 'inplace' ? keepPaths.trim() || null : null,
@@ -299,7 +312,7 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
             className={inputClass + ' mt-1.5 font-mono text-xs'}
           />
           <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-            {deployMode === 'inplace'
+            {deployMode !== 'release'
               ? t('apps.rootHintInplace')
               : `${t('s.0248')} ${effectiveSlug || '<slug>'}${t('s.0249')}`}
           </p>
@@ -405,7 +418,12 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
           <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
             {t('apps.deploySettings')}
           </p>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          {preset?.gitDetected ? (
+            <p className="mt-1.5 rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs leading-relaxed text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200">
+              {t('apps.gitDetectedHint')}
+            </p>
+          ) : null}
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
             {(
               [
                 { value: 'release', title: t('apps.modeRelease'), hint: t('apps.modeReleaseHint') },
@@ -485,6 +503,23 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
                 {t('apps.restartCmdHint')}
               </p>
             </div>
+            {deployMode === 'script' ? (
+              <div>
+                <label htmlFor="app-script-healthcheck" className={labelClass}>
+                  {t('apps.healthcheckPath')}
+                </label>
+                <input
+                  id="app-script-healthcheck"
+                  value={healthcheckPath}
+                  onChange={(event) => setHealthcheckPath(event.target.value)}
+                  placeholder="/healthz"
+                  className={inputClass + ' mt-1.5 font-mono text-xs'}
+                />
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  {t('apps.scriptHealthcheckHint')}
+                </p>
+              </div>
+            ) : null}
             <div>
               <label htmlFor="app-healthcheck-port" className={labelClass}>
                 {t('apps.healthcheckPort')}

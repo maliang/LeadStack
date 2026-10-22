@@ -2029,3 +2029,46 @@ prepare（mkdir <work>/.leadstack/scripts）
 3. 坏脚本（pull 后 exit 1）→ 发布 failed，`failed_step=run-deploy-script`，回滚脚本执行，仓库回到发布前 commit；
 4. 健康检查端口改坏 → 发布 failed，`failed_step=health-check`，回滚脚本执行；
 5. 脚本模式创建发布**不需要 artifact**；引用不存在的模板 → 404。
+
+---
+
+## 60. 部署打磨：发布预览、内置预设、接管向导识别 git
+
+### 60.1 发布预览（dry-run）
+
+`POST /api/v1/releases/preview`（`deploy.read`）——请求体与创建发布一致，**只读**：不落库、不执行。
+
+```json
+{"data":{"app_id":"…","app_slug":"…","version":"1.0.9","provider":"builtin","deploy_mode":"inplace",
+  "servers":[{"server_id":"…","server_name":"…","plan_root":"/www/wwwroot/shop",
+    "steps":[{"name":"prepare","command":"mkdir -p …","timeout_s":60},
+             {"name":"write-env","command":"","timeout_s":30,"secret":true}],
+    "rollback_steps":[…],"notes":["inplace 模式未配置 keep_paths：…"]}]}}
+```
+
+- 复用真实的计划构造器（`buildPlanFor`），保证预览与执行**同源**；
+- `Step.Secret`（写环境变量）不回显命令，只给 `secret:true`；
+- `provider=baota` 时返回动作序列（`panel.ping / panel.ensure-site / artifact.read / panel.backup / panel.upload / panel.unzip / healthcheck`）而不是 shell；
+- `notes` 是风险提示：keep_paths 为空、未配健康检查、缺制品、没有回滚步骤等；构建失败也写进 notes（不返回 500）；
+- 版本用 `"preview"` 作为临时 releaseID 参与渲染，不污染数据库。
+
+### 60.2 内置部署预设
+
+`GET /api/v1/deploy/presets`（`deploy.read`）返回 6 个预设，前端「从预设创建」＝建模板 + 打开新建应用并回填 defaults：
+
+| key | 形态 | 关键提示 |
+|---|---|---|
+| `git-pull` | 脚本模式 + `git pull` + 重启 | 工作目录=仓库根；回滚脚本 `git reset --hard HEAD@{1}` |
+| `static-takeover` | inplace 接管静态站 | keep_paths 必填，否则同步会删文件 |
+| `baota-site` | 面板 API（zip） | 需先建面板凭据并测试连接 |
+| `systemd-binary` | release + systemd unit | `EnvironmentFile=-{{ROOT}}/current/.leadstack.env` |
+| `compose-stack` | compose（image 制品） | 数据目录用宿主机绝对路径 |
+| `laravel-swoole` | 脚本模式 LaravelS | keep_paths：storage/、public/uploads/、.env、vendor/ |
+
+预设只是**数据**（模板内容 + defaults + hints），不引入新的执行路径。
+
+### 60.3 接管向导识别 git 仓库
+
+发现的站点目录如果是 git 仓库（`<dir>/.git`），`suggested.deploy_mode` 直接返回 `script`，
+并在 `detail` 里带上分支与远端（`路径 · git(master ssh://…)`）——这类项目的更新方式就是 `git pull`，
+前端据此推荐「脚本模式 + git-pull 预设」。

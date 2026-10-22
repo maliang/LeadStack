@@ -58,6 +58,12 @@ echo "###DOCKER"
 docker ps --format '{{.Names}}|{{.Image}}|{{.Ports}}|{{.Status}}' 2>/dev/null | head -100
 echo "###WWWROOT"
 ls -1d /www/wwwroot/* 2>/dev/null | head -100
+echo "###GITDIRS"
+for d in /www/wwwroot/*; do
+  if [ -d "$d/.git" ]; then
+    echo "$d|$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null)|$(git -C "$d" remote get-url origin 2>/dev/null)"
+  fi
+done
 echo "###END"
 `
 
@@ -165,6 +171,15 @@ func parseDiscoveryOutput(serverID, raw string) *DiscoveryReport {
 		})
 	}
 
+	// git 仓库目录 → path|branch|remote
+	gitDirs := map[string]string{}
+	for _, line := range strings.Split(sections["GITDIRS"], "\n") {
+		parts := strings.Split(strings.TrimSpace(line), "|")
+		if len(parts) >= 2 && parts[0] != "" {
+			gitDirs[parts[0]] = parts[1] + " " + strings.Join(parts[2:], " ")
+		}
+	}
+
 	// 站点目录：/www/wwwroot/<site>
 	for _, line := range strings.Split(sections["WWWROOT"], "\n") {
 		dir := strings.TrimSpace(line)
@@ -172,15 +187,22 @@ func parseDiscoveryOutput(serverID, raw string) *DiscoveryReport {
 			continue
 		}
 		name := dir[strings.LastIndex(dir, "/")+1:]
+		suggest := DiscoverySuggestion{
+			DeployMode: store.DeployModeInplace,
+			TargetDir:  dir,
+			Root:       dir,
+		}
+		detail := dir
+		// 是 git 仓库 → 推荐「脚本模式 + git pull」，因为这类项目通常靠 pull 更新。
+		if info, ok := gitDirs[dir]; ok {
+			suggest.DeployMode = store.DeployModeScript
+			detail = dir + " · git(" + strings.TrimSpace(info) + ")"
+		}
 		report.Candidates = append(report.Candidates, DiscoveryCandidate{
-			Kind:   "site",
-			Name:   name,
-			Detail: dir,
-			Suggested: DiscoverySuggestion{
-				DeployMode: store.DeployModeInplace,
-				TargetDir:  dir,
-				Root:       dir,
-			},
+			Kind:      "site",
+			Name:      name,
+			Detail:    detail,
+			Suggested: suggest,
 		})
 	}
 

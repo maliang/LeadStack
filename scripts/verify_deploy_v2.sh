@@ -283,6 +283,30 @@ grep -q 'v2' "$TARGET_B/code/public/index.php" && pass "第二次发布内容生
 grep -q 'mysql-data-bytes' "$TARGET_B/help/docker-compose/mysql/data/ibdata1" && pass "第二次发布后数据目录仍然完好" || fail "第二次发布损坏了数据"
 [ ! -f "$TARGET_B/code/app/controller.php" ] && pass "旧版本残留文件被清理（rsync --delete 生效）" || fail "旧文件残留"
 
+# ---------------------------------------------------------------- 发布预览与预设
+step "5. 发布预览与内置预设"
+PREVIEW="$(api POST /api/v1/releases/preview "$(jq -n --arg a "$APP_A" --arg t "$TPL_ID" --arg art "$ART2" --arg srv "$SRV_ID" \
+  '{app_id:$a,template_id:$t,version:"1.0.9",artifact_id:$art,server_ids:[$srv]}')" "$TOKEN")"
+PREVIEW_ROOT="$(sget "$PREVIEW" '.data.servers[0].plan_root')"
+[ "$PREVIEW_ROOT" = "$TARGET_A" ] && pass "预览返回计划根目录（接管目录）" || fail "预览根目录不符：$PREVIEW_ROOT"
+SECRET_CMD="$(sget "$PREVIEW" '.data.servers[0].steps[] | select(.name=="write-env") | .command')"
+SECRET_FLAG="$(sget "$PREVIEW" '.data.servers[0].steps[] | select(.name=="write-env") | .secret')"
+[ "$SECRET_FLAG" = "true" ] && [ -z "$SECRET_CMD" ] && pass "预览对 secret 步骤脱敏（命令为空）" || fail "secret 步骤未脱敏"
+printf '%s' "$PREVIEW" | jq -e '.data.servers[0].rollback_steps | length > 0' >/dev/null 2>&1   && pass "预览包含回滚步骤" || fail "预览缺少回滚步骤"
+printf '%s' "$PREVIEW" | jq -e '.data.servers[0].notes | type == "array"' >/dev/null 2>&1   && pass "预览带 notes 字段（风险提示通道可用）" || fail "预览缺少 notes 字段"
+BEFORE_COUNT="$(api GET "/api/v1/releases?limit=100" "" "$TOKEN" | jq -r '.data | length')"
+NONE="$(api POST /api/v1/releases/preview "$(jq -n --arg a "$APP_A" --arg t "$TPL_ID" --arg srv "$SRV_ID" '{app_id:$a,template_id:$t,version:"1.0.9",server_ids:[$srv]}')" "$TOKEN")"
+AFTER_COUNT="$(api GET "/api/v1/releases?limit=100" "" "$TOKEN" | jq -r '.data | length')"
+[ "$BEFORE_COUNT" = "$AFTER_COUNT" ] && pass "预览不会创建发布记录（只读）" || fail "预览产生了发布记录（$BEFORE_COUNT → $AFTER_COUNT）"
+
+PRESETS="$(api GET /api/v1/deploy/presets "" "$TOKEN")"
+PRESET_COUNT="$(printf '%s' "$PRESETS" | jq -r '.data | length' 2>/dev/null)"
+[ "${PRESET_COUNT:-0}" -ge 5 ] && pass "内置预设返回 ${PRESET_COUNT} 个" || fail "预设数量异常：${PRESET_COUNT}"
+printf '%s' "$PRESETS" | jq -e '.data[] | select(.key=="laravel-swoole") | .template.content | test("start.sh restart")' >/dev/null 2>&1 \
+  && pass "LaravelS 预设包含 start.sh restart" || fail "LaravelS 预设内容不符"
+printf '%s' "$NONE" | jq -e '.data.servers[0].notes | join(" ") | test("制品")' >/dev/null 2>&1 \
+  && pass "inplace 缺制品时预览给出明确提示（不静默）" || fail "缺制品提示不明确"
+
 # ---------------------------------------------------------------- C. 接管向导
 step "4. 接管向导（只读探测）"
 DISC="$(api POST "/api/v1/servers/$SRV_ID/discover" "" "$TOKEN")"

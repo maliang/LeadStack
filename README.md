@@ -319,6 +319,9 @@ db-01.internal
 - 首版可用 `init_script` 做一次性初始化（每台服务器只执行一次），`env_json` 会写成 `.leadstack.env`（0600）；
 - 配了 `healthcheck_path` + `healthcheck_port` 时，部署后控制端会真实发 HTTP 检查，失败自动回滚到上一版。
 
+**发布前可预览**：向导里点「预览」，会按服务器列出将执行的步骤、回滚步骤与风险提示（含机密内容的步骤只显示「已隐藏」），确认后再发布。
+同时内置 6 个部署预设（git pull / 静态接管 / 宝塔站点 / systemd / compose / LaravelS），一键建模板并预填参数。
+
 **脚本模式**（适合「服务器上已有项目、更新就是 git pull + 重启」）：
 - 应用「部署方式 = 自定义脚本」，工作目录填项目根；发布时执行 **binary 模板的内容**（需要制品的机会都没有）；
 - 模板里写完整更新流程，例如 `cd /www/wwwroot/tuoluojiang && git pull --ff-only && bash start.sh restart`；

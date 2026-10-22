@@ -129,7 +129,19 @@ export function DiscoverDialog({ open, serverId, serverName, onClose, onPick }: 
                           <p className="mt-0.5 break-words text-xs text-slate-500 dark:text-slate-400">
                             {candidate.detail || '—'}
                           </p>
-                          <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-slate-400 dark:text-slate-500">
+                          {candidate.suggested.deploy_mode === 'script' ||
+                    /git\(/.test(candidate.detail) ? (
+                      <span className="mt-1 inline-flex rounded bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">
+                        {t('discover.gitBadge')}
+                      </span>
+                    ) : null}
+                    {candidate.suggested.deploy_mode === 'script' ||
+                    /git\(/.test(candidate.detail) ? (
+                      <p className="mt-0.5 text-[11px] text-sky-700/90 dark:text-sky-300/90">
+                        {t('discover.gitHint')}
+                      </p>
+                    ) : null}
+                    <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-slate-400 dark:text-slate-500">
                             {candidate.suggested.deploy_mode ? (
                               <span className="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">
                                 {candidate.suggested.deploy_mode}

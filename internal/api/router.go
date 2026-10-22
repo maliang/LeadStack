@@ -94,6 +94,8 @@ func (a *API) Router() http.Handler {
 			r.With(permDeployRead).Get("/templates/{templateID}", a.handleGetTemplate)
 			r.With(permDeployRead).Get("/releases", a.handleListReleases)
 			r.With(permDeployRead).Get("/releases/{releaseID}", a.handleGetRelease)
+			r.With(permDeployRead).Post("/releases/preview", a.handlePreviewRelease)
+			r.With(permDeployRead).Get("/deploy/presets", a.handleListDeployPresets)
 			r.With(permServerRead).Post("/servers/{serverID}/discover", a.handleDiscoverServer)
 			r.With(permDeployRead).Get("/releases/{releaseID}/runs", a.handleListReleaseRuns)
 			r.With(permDeployRead).Get("/releases/{releaseID}/runs/{serverID}/logs", a.handleReleaseLogs)

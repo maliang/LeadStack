@@ -45,14 +45,14 @@ func (s *Store) GetApp(ctx context.Context, id string) (*App, error) {
 func (s *Store) GetAppBySlug(ctx context.Context, slug string) (*App, error) {
 	return scanApp(s.db.QueryRowContext(ctx,
 		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
-		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port FROM apps WHERE slug = ?`, slug))
+		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script FROM apps WHERE slug = ?`, slug))
 }
 
 // ListApps 返回全部应用（按创建时间倒序）。
 func (s *Store) ListApps(ctx context.Context) ([]App, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
-		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port FROM apps ORDER BY created_at DESC, id DESC`)
+		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script FROM apps ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询应用列表: %w", err)
 	}

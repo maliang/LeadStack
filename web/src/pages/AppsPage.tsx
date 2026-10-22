@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, type AppItem, type DeployTemplate, type Release } from '../lib/api'
+import { api, type AppItem, type DeployPreset, type DeployTemplate, type Release, type TemplateKind } from '../lib/api'
 import { usePolling } from '../lib/hooks'
 import { useReleaseRuns } from '../lib/useReleaseRuns'
 import { errorMessage } from '../lib/errors'
 import { cn } from '../lib/cn'
 import { formatDateTime, formatRelativeTime } from '../lib/format'
-import { AppDialog } from '../components/AppDialog'
+import { AppDialog, type AppPreset } from '../components/AppDialog'
+import { PresetDialog } from '../components/PresetDialog'
 import { Button, IconButton } from '../components/Button'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import {
@@ -62,6 +63,8 @@ export default function AppsPage() {
   const [deleteTemplateLoading, setDeleteTemplateLoading] = useState(false)
   const [deleteTemplateError, setDeleteTemplateError] = useState<string | null>(null)
 
+  const [presetOpen, setPresetOpen] = useState(false)
+  const [appPreset, setAppPreset] = useState<AppPreset | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
   const [wizardAppId, setWizardAppId] = useState<string | undefined>(undefined)
   const [refreshing, setRefreshing] = useState(false)
@@ -142,6 +145,45 @@ export default function AppsPage() {
     }
   }
 
+  const handleApplyPreset = async (preset: DeployPreset) => {
+    const baseName = preset.template.name || preset.name
+    let template
+    try {
+      template = await api.createTemplate({
+        name: baseName,
+        kind: preset.template.kind as TemplateKind,
+        content: preset.template.content,
+      })
+    } catch {
+      // 模板名已存在时换一个带后缀的名字重试，避免预设入口被 409 卡死
+      const suffix = Date.now().toString(36).slice(-4)
+      template = await api.createTemplate({
+        name: `${baseName}-${suffix}`,
+        kind: preset.template.kind as TemplateKind,
+        content: preset.template.content,
+      })
+    }
+    void templatesQuery.refresh()
+    setPresetOpen(false)
+    setEditingApp(null)
+    setAppPreset({
+      name: '',
+      provider: preset.defaults.provider,
+      deploy_mode:
+        preset.defaults.deploy_mode === 'script'
+          ? 'script'
+          : preset.defaults.deploy_mode === 'inplace'
+            ? 'inplace'
+            : 'release',
+      keep_paths: preset.defaults.keep_paths,
+      healthcheck_path: preset.defaults.healthcheck_path,
+      site_type: preset.defaults.site_type,
+      site_port: preset.defaults.site_port,
+    })
+    setAppDialogOpen(true)
+    toast(t('preset.templateCreated', { name: template.name }), 'success')
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -161,6 +203,14 @@ export default function AppsPage() {
             icon={<RefreshIcon className="h-4 w-4" />}
           >
             {t('s.0689')}
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={!canWrite}
+            icon={<ListChecksIcon className="h-4 w-4" />}
+            onClick={() => setPresetOpen(true)}
+          >
+            {t('preset.entry')}
           </Button>
           {tab === 'apps' ? (
             <>
@@ -488,11 +538,20 @@ export default function AppsPage() {
       <AppDialog
         open={appDialogOpen}
         app={editingApp}
+        preset={appPreset}
         onClose={() => {
           setAppDialogOpen(false)
           setEditingApp(null)
+          setAppPreset(null)
         }}
         onSaved={() => void refreshAll()}
+      />
+
+      <PresetDialog
+        open={presetOpen}
+        canWrite={canWrite}
+        onClose={() => setPresetOpen(false)}
+        onApply={handleApplyPreset}
       />
 
       <TemplateDialog

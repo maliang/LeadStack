@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   api,
   type AppItem,
+  type ReleasePreview,
   type Artifact,
   type DeployTemplate,
   type GroupSummary,
@@ -65,6 +66,9 @@ export function ReleaseWizard({
   const [concurrency, setConcurrency] = useState('4')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [preview, setPreview] = useState<ReleasePreview | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -153,10 +157,21 @@ export function ReleaseWizard({
         setError(t('s.0451'))
         return
       }
+      const selectedTemplate = templates.find((item) => item.id === templateId)
+      if (scriptMode) {
+        if (!selectedTemplate || selectedTemplate.kind !== 'binary' || selectedTemplate.content.trim() === '') {
+          setError(t('release.scriptTemplateRequired'))
+          return
+        }
+      }
       setStep(1)
       return
     }
     if (step === 1) {
+      if (scriptMode) {
+        setStep(2)
+        return
+      }
       if (artifactMode === 'url' && !/^[0-9a-fA-F]{64}$/.test(artifactSha.trim())) {
         setError(t('s.0452'))
         return
@@ -176,7 +191,7 @@ export function ReleaseWizard({
   }
 
   const handleSubmit = async () => {
-    if (!app || !template || !artifact) {
+    if (!app || !template || (!scriptMode && !artifact)) {
       setError(t('s.0454'))
       return
     }
@@ -187,7 +202,7 @@ export function ReleaseWizard({
         app_id: app.id,
         template_id: template.id,
         version: version.trim(),
-        artifact_id: artifact.id,
+        artifact_id: artifact?.id ?? '',
         server_ids: [...selected],
         concurrency: Number(concurrency) || 4,
       })
@@ -198,6 +213,29 @@ export function ReleaseWizard({
       setError(errorMessage(caught, t('s.0456')))
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const scriptMode = app?.deploy_mode === 'script'
+
+  const handlePreview = async () => {
+    if (!app || !template) return
+    setPreviewLoading(true)
+    setError(null)
+    try {
+      const result = await api.previewRelease({
+        app_id: app.id,
+        template_id: template.id,
+        version: version.trim(),
+        artifact_id: artifact?.id,
+        server_ids: [...selected],
+      })
+      setPreview(result)
+      setPreviewOpen(true)
+    } catch (caught) {
+      setError(errorMessage(caught, t('s.0456')))
+    } finally {
+      setPreviewLoading(false)
     }
   }
 
@@ -219,6 +257,7 @@ export function ReleaseWizard({
   )
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -312,6 +351,13 @@ export function ReleaseWizard({
 
       {step === 1 ? (
         <div className="space-y-4">
+          {scriptMode ? (
+            <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5 text-xs leading-relaxed text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200">
+              {t('release.scriptNoArtifact')}
+            </div>
+          ) : null}
+          {!scriptMode ? (
+          <>
           <div className="flex gap-2">
             {(
               [
@@ -404,6 +450,8 @@ export function ReleaseWizard({
               {artifact.sha256 ? <span className="font-mono">sha256 {artifact.sha256.slice(0, 16)}…</span> : null}
               <span>{formatBytes(artifact.size_bytes)}</span>
             </div>
+          ) : null}
+          </>
           ) : null}
         </div>
       ) : null}
@@ -534,6 +582,13 @@ export function ReleaseWizard({
       ) : null}
 
       {step === 3 ? (
+        <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50/70 px-3 py-2 dark:border-indigo-500/30 dark:bg-indigo-500/10">
+          <p className="text-xs text-indigo-900 dark:text-indigo-200">{t('release.previewHint')}</p>
+          <Button size="sm" variant="secondary" onClick={() => void handlePreview()} loading={previewLoading}>
+            {t('release.preview')}
+          </Button>
+        </div>
         <dl className="space-y-2 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800">
           <div className="flex justify-between gap-3">
             <dt className="text-slate-500 dark:text-slate-400">{t('s.0461')}</dt>
@@ -569,6 +624,7 @@ export function ReleaseWizard({
             {t('s.0486')}
           </p>
         </dl>
+        </div>
       ) : null}
 
       {error ? (
@@ -577,5 +633,108 @@ export function ReleaseWizard({
         </p>
       ) : null}
     </Modal>
+
+    <Modal
+      open={previewOpen}
+      onClose={() => setPreviewOpen(false)}
+      title={t('release.previewTitle')}
+      description={t('release.previewDescription')}
+      size="lg"
+      footer={
+        <Button variant="secondary" onClick={() => setPreviewOpen(false)}>
+          {t('common.close')}
+        </Button>
+      }
+    >
+      {preview ? (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {preview.app_slug} · v{preview.version} · {preview.deploy_mode} · {preview.provider}
+          </p>
+          {preview.servers.map((plan) => (
+            <section
+              key={plan.server_id}
+              className="rounded-lg border border-slate-200 p-3 dark:border-slate-800"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-medium text-slate-800 dark:text-slate-100">
+                  {plan.server_name || plan.server_id}
+                </p>
+                {plan.plan_root ? (
+                  <code className="max-w-[260px] truncate rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    {plan.plan_root}
+                  </code>
+                ) : null}
+              </div>
+              <ol className="mt-2 space-y-1">
+                {plan.steps.map((step, index) => (
+                  <li
+                    key={`${plan.server_id}-step-${index}`}
+                    className="rounded border border-slate-100 px-2 py-1.5 text-xs dark:border-slate-800/70"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-slate-700 dark:text-slate-200">
+                        {index + 1}. {step.name}
+                      </span>
+                      {step.timeout_s ? (
+                        <span className="text-[11px] text-slate-400">{step.timeout_s}s</span>
+                      ) : null}
+                      {step.ignore_failure ? (
+                        <span className="text-[11px] text-amber-600 dark:text-amber-400">
+                          {t('release.previewIgnoreFailure')}
+                        </span>
+                      ) : null}
+                    </div>
+                    {step.secret ? (
+                      <span className="mt-0.5 block text-[11px] text-slate-400 dark:text-slate-500">
+                        {t('release.previewSecret')}
+                      </span>
+                    ) : step.command ? (
+                      <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                        {step.command}
+                      </pre>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+              {plan.rollback_steps.length > 0 ? (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                    {t('release.previewRollback', { count: plan.rollback_steps.length })}
+                  </summary>
+                  <ol className="mt-1 space-y-1">
+                    {plan.rollback_steps.map((step, index) => (
+                      <li
+                        key={`${plan.server_id}-rollback-${index}`}
+                        className="rounded bg-rose-50/60 px-2 py-1 text-[11px] dark:bg-rose-500/10"
+                      >
+                        <span className="font-medium text-rose-800 dark:text-rose-200">
+                          {step.name}
+                        </span>
+                        {step.secret ? (
+                          <span className="ml-1 text-rose-500/70">（{t('release.previewSecret')}）</span>
+                        ) : step.command ? (
+                          <pre className="mt-0.5 whitespace-pre-wrap break-words font-mono text-[11px] text-rose-700/90 dark:text-rose-200/90">
+                            {step.command}
+                          </pre>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              ) : null}
+              {plan.notes.length > 0 ? (
+                <ul className="mt-2 space-y-0.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                  {plan.notes.map((note, index) => (
+                    <li key={`${plan.server_id}-note-${index}`}>· {note}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </section>
+          ))}
+        </div>
+      ) : null}
+    </Modal>
+    </>
   )
 }

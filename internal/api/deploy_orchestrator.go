@@ -759,3 +759,12 @@ func (o *deployOrchestrator) buildPlan(ctx context.Context, templateContent, kin
 	}
 	return o.buildPlanFn(deploy.Template{ID: release.TemplateID, Kind: deploy.Kind(kind), Content: templateContent}, art, params)
 }
+
+// Preview 见 previewer（预览只读，不落库、不执行）。
+func (h *DeployOrchestratorHandle) Preview(ctx context.Context, app *store.App, tmpl *store.DeployTemplate,
+	artifact *store.Artifact, version string, servers []*store.Server) (*PreviewResult, error) {
+	if h == nil || h.inner == nil {
+		return nil, fmt.Errorf("发布编排器未启用")
+	}
+	return h.inner.Preview(ctx, app, tmpl, artifact, version, servers)
+}

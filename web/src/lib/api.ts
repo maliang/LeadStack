@@ -664,12 +664,12 @@ export interface AppItem {
   restart_cmd: string | null
   /** 首版初始化脚本（每台服务器首次成功部署执行一次） */
   init_script: string | null
+  /** 失败/健康检查不通过时执行的回滚脚本（script 模式） */
+  rollback_script: string | null
   /** 环境变量 JSON 字符串 */
   env_json: string | null
   /** inplace 同步时保留的相对路径（逗号分隔） */
   keep_paths: string | null
-  /** 回滚脚本（script 模式：发布失败或健康检查不通过时执行） */
-  rollback_script: string | null
   /** 健康检查端口（0 表示清除） */
   healthcheck_port: number | null
   /** 后端可能聚合出的统计；缺失时前端用 releases 列表本地折算 */
@@ -761,10 +761,10 @@ export interface CreateAppPayload {
   target_dir?: string | null
   restart_cmd?: string | null
   init_script?: string | null
+  rollback_script?: string | null
   env_json?: string | null
   keep_paths?: string | null
   healthcheck_port?: number | null
-  rollback_script?: string | null
 }
 
 export interface CreateTemplatePayload {
@@ -785,6 +785,56 @@ export interface CreateReleasePayload {
 export interface CreateReleaseResponse {
   release: Release
   runs: ReleaseRun[]
+}
+
+export interface PreviewStep {
+  name: string
+  command: string
+  timeout_s: number | null
+  secret: boolean
+  ignore_failure: boolean
+}
+
+export interface PreviewServerPlan {
+  server_id: string
+  server_name: string
+  plan_root: string | null
+  steps: PreviewStep[]
+  rollback_steps: PreviewStep[]
+  notes: string[]
+}
+
+export interface ReleasePreview {
+  app_id: string
+  app_slug: string
+  version: string
+  provider: string
+  deploy_mode: string
+  servers: PreviewServerPlan[]
+}
+
+export interface DeployPresetTemplate {
+  name: string
+  kind: string
+  content: string
+}
+
+export interface DeployPresetDefaults {
+  deploy_mode?: string
+  keep_paths?: string
+  healthcheck_path?: string
+  provider?: string
+  site_type?: string
+  site_port?: number
+}
+
+export interface DeployPreset {
+  key: string
+  name: string
+  description: string
+  template: DeployPresetTemplate
+  hints: string[]
+  defaults: DeployPresetDefaults
 }
 
 export interface ReleaseFilters {
@@ -1719,10 +1769,10 @@ export function normalizeApp(input: unknown): AppItem {
     target_dir: toText(raw.target_dir),
     restart_cmd: toText(raw.restart_cmd),
     init_script: typeof raw.init_script === 'string' ? raw.init_script : null,
+    rollback_script: typeof raw.rollback_script === 'string' ? raw.rollback_script : null,
     env_json: typeof raw.env_json === 'string' ? raw.env_json : null,
     keep_paths: toText(raw.keep_paths),
     healthcheck_port: toNumber(raw.healthcheck_port),
-    rollback_script: toText(raw.rollback_script),
     release_count: toNumber(raw.release_count ?? raw.releases_count) ?? 0,
     server_count: toNumber(raw.server_count ?? raw.target_count) ?? 0,
     last_release: lastRelease,
@@ -2811,6 +2861,78 @@ export const api = {
     const suffix = params.toString() ? `?${params.toString()}` : ''
     return request<unknown>(`/releases${suffix}`).then((raw) =>
       extractList(raw, ['releases', 'items']).map(normalizeRelease),
+    )
+  },
+
+  /** POST /releases/preview —— 只读发布计划预览 */
+  previewRelease(payload: {
+    app_id: string
+    template_id: string
+    version: string
+    artifact_id?: string
+    server_ids: string[]
+  }): Promise<ReleasePreview> {
+    return request<unknown>('/releases/preview', { method: 'POST', body: payload }).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      return {
+        app_id: toText(record.app_id) ?? '',
+        app_slug: toText(record.app_slug) ?? '',
+        version: toText(record.version) ?? '',
+        provider: toText(record.provider) ?? 'builtin',
+        deploy_mode: toText(record.deploy_mode) ?? 'release',
+        servers: extractList(record.servers, ['servers']).map((item) => {
+          const plan = toRecord(item) ?? {}
+          const normalizeSteps = (value: unknown): PreviewStep[] =>
+            extractList(value, ['steps']).map((stepRaw) => {
+              const step = toRecord(stepRaw) ?? {}
+              return {
+                name: toText(step.name) ?? '',
+                command: typeof step.command === 'string' ? step.command : '',
+                timeout_s: toNumber(step.timeout_s),
+                secret: toBool(step.secret),
+                ignore_failure: toBool(step.ignore_failure),
+              }
+            })
+          return {
+            server_id: toText(plan.server_id) ?? '',
+            server_name: toText(plan.server_name) ?? '',
+            plan_root: toText(plan.plan_root),
+            steps: normalizeSteps(plan.steps),
+            rollback_steps: normalizeSteps(plan.rollback_steps),
+            notes: extractList(plan.notes, ['notes']).map((note) => String(note)),
+          }
+        }),
+      }
+    })
+  },
+
+  /** GET /deploy/presets —— 内置部署预设 */
+  listDeployPresets(): Promise<DeployPreset[]> {
+    return request<unknown>('/deploy/presets').then((raw) =>
+      extractList(raw, ['presets', 'items']).map((item) => {
+        const preset = toRecord(item) ?? {}
+        const template = toRecord(preset.template) ?? {}
+        const defaults = toRecord(preset.defaults) ?? {}
+        return {
+          key: toText(preset.key) ?? '',
+          name: toText(preset.name) ?? '',
+          description: toText(preset.description) ?? '',
+          template: {
+            name: toText(template.name) ?? '',
+            kind: toText(template.kind) ?? 'binary',
+            content: typeof template.content === 'string' ? template.content : '',
+          },
+          hints: extractList(preset.hints, ['hints']).map((hint) => String(hint)),
+          defaults: {
+            deploy_mode: toText(defaults.deploy_mode) ?? undefined,
+            keep_paths: toText(defaults.keep_paths) ?? undefined,
+            healthcheck_path: toText(defaults.healthcheck_path) ?? undefined,
+            provider: toText(defaults.provider) ?? undefined,
+            site_type: toText(defaults.site_type) ?? undefined,
+            site_port: toNumber(defaults.site_port) ?? undefined,
+          },
+        }
+      }),
     )
   },
 
