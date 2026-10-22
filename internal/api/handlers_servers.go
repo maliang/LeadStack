@@ -645,3 +645,33 @@ func (a *API) validatePanelCredential(ctx context.Context, raw *string) (*string
 	}
 	return &id, nil
 }
+
+// handleDiscoverServer 处理 POST /api/v1/servers/{serverID}/discover（接管向导的只读探测）。
+func (a *API) handleDiscoverServer(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "serverID")
+	if serverID == "" {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "缺少服务器 ID")
+		return
+	}
+	srv, err := a.st.GetServer(r.Context(), serverID)
+	if err != nil {
+		a.writeStoreError(w, r, err)
+		return
+	}
+	if !a.requireServersInScope(w, r, []string{srv.ID}) {
+		return
+	}
+	prober, ok := a.deploy.(interface {
+		Discover(context.Context, string) (*DiscoveryReport, error)
+	})
+	if !ok {
+		writeError(w, http.StatusNotImplemented, codeInternal, "发布编排器未启用，无法探测目标机")
+		return
+	}
+	report, err := prober.Discover(r.Context(), serverID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, codeInternal, "探测失败: "+err.Error())
+		return
+	}
+	writeData(w, http.StatusOK, report)
+}

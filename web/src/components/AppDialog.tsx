@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { api, type AppItem, type AppProvider, type BaotaSiteType } from '../lib/api'
+import {
+  api,
+  type AppItem,
+  type AppProvider,
+  type BaotaSiteType,
+} from '../lib/api'
 import { errorMessage } from '../lib/errors'
 import { Button } from './Button'
 import { Modal } from './Modal'
@@ -19,15 +24,61 @@ export function slugify(value: string): string {
     .slice(0, 40)
 }
 
+/** 接管向导回填时使用的预置值。 */
+export interface AppPreset {
+  name?: string
+  root?: string
+  deploy_mode?: 'release' | 'inplace'
+  target_dir?: string
+  restart_cmd?: string
+  healthcheck_port?: number
+}
+
 interface AppDialogProps {
   open: boolean
   app: AppItem | null
   onClose: () => void
   onSaved: () => void
+  preset?: AppPreset | null
 }
 
-/** 新建 / 编辑应用（slug 唯一，部署根目录默认 /opt/leadstack/apps/<slug>）。 */
-export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
+/** env_json（JSON 对象字符串）→ 每行 KEY=VALUE，便于手工编辑。 */
+function envJsonToText(envJson: string | null): string {
+  if (!envJson) return ''
+  try {
+    const parsed = JSON.parse(envJson) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return Object.entries(parsed as Record<string, unknown>)
+        .map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`)
+        .join('\n')
+    }
+  } catch {
+    /* 非法 JSON 时原样展示，交由提交校验兜底 */
+  }
+  return envJson
+}
+
+/** 每行 KEY=VALUE → JSON 对象字符串；错误返回行号，便于就近展示。 */
+function parseEnvText(text: string): { json: string | null; errorLine: number | null } {
+  const entries: Record<string, string> = {}
+  const lines = text.split('\n')
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim()
+    if (line === '' || line.startsWith('#')) continue
+    const separator = line.indexOf('=')
+    if (separator <= 0) return { json: null, errorLine: index + 1 }
+    const key = line.slice(0, separator).trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return { json: null, errorLine: index + 1 }
+    entries[key] = line.slice(separator + 1)
+  }
+  return {
+    json: Object.keys(entries).length > 0 ? JSON.stringify(entries) : null,
+    errorLine: null,
+  }
+}
+
+/** 新建 / 编辑应用：部署方式、宝塔站点参数、部署参数（多版本 / 接管既有目录）。 */
+export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProps) {
   const { toast } = useToast()
   const editing = app !== null
 
@@ -42,15 +93,23 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
   const [sitePort, setSitePort] = useState('')
   const [siteType, setSiteType] = useState<BaotaSiteType>('static')
   const [healthcheckPath, setHealthcheckPath] = useState('')
+  const [deployMode, setDeployMode] = useState<'release' | 'inplace'>('release')
+  const [targetDir, setTargetDir] = useState('')
+  const [keepPaths, setKeepPaths] = useState('')
+  const [restartCmd, setRestartCmd] = useState('')
+  const [healthcheckPort, setHealthcheckPort] = useState('')
+  const [initScript, setInitScript] = useState('')
+  const [envText, setEnvText] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open) return
-    setName(app?.name ?? '')
-    setSlug(app?.slug ?? '')
+    const fromPreset = !app && preset ? preset : null
+    setName(app?.name ?? fromPreset?.name ?? '')
+    setSlug(app?.slug ?? slugify(fromPreset?.name ?? ''))
     setSlugTouched(app !== null)
-    setRoot(app?.root ?? '')
+    setRoot(app?.root ?? fromPreset?.root ?? '')
     setRootTouched(false)
     setDescription(app?.description ?? '')
     setProvider(app?.provider === 'baota' ? 'baota' : 'builtin')
@@ -58,9 +117,24 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
     setSitePort(app?.site_port ? String(app.site_port) : '')
     setSiteType(app?.site_type === 'php' ? 'php' : 'static')
     setHealthcheckPath(app?.healthcheck_path ?? '')
+    setDeployMode(
+      app?.deploy_mode === 'inplace' || fromPreset?.deploy_mode === 'inplace' ? 'inplace' : 'release',
+    )
+    setTargetDir(app?.target_dir ?? fromPreset?.target_dir ?? '')
+    setKeepPaths(app?.keep_paths ?? '')
+    setRestartCmd(app?.restart_cmd ?? fromPreset?.restart_cmd ?? '')
+    setHealthcheckPort(
+      app?.healthcheck_port != null
+        ? String(app.healthcheck_port)
+        : fromPreset?.healthcheck_port != null
+          ? String(fromPreset.healthcheck_port)
+          : '',
+    )
+    setInitScript(app?.init_script ?? '')
+    setEnvText(envJsonToText(app?.env_json ?? null))
     setSaving(false)
     setError(null)
-  }, [open, app])
+  }, [open, app, preset])
 
   const effectiveSlug = useMemo(() => (slugTouched ? slug : slugify(name)), [slug, slugTouched, name])
   const effectiveRoot = useMemo(() => (rootTouched ? root : ''), [root, rootTouched])
@@ -90,6 +164,30 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
         return
       }
     }
+    if (deployMode === 'inplace' && !targetDir.trim().startsWith('/')) {
+      setError(t('apps.errorTargetDir'))
+      return
+    }
+    let parsedPort: number | null = null
+    if (healthcheckPort.trim() !== '') {
+      const port = Number(healthcheckPort)
+      if (
+        !/^\d+$/.test(healthcheckPort.trim()) ||
+        !Number.isInteger(port) ||
+        port < 0 ||
+        port > 65535
+      ) {
+        setError(t('apps.errorHealthcheckPort'))
+        return
+      }
+      parsedPort = port
+    }
+    const parsedEnv = parseEnvText(envText)
+    if (parsedEnv.errorLine !== null) {
+      setError(t('apps.errorEnvLine', { line: parsedEnv.errorLine }))
+      return
+    }
+
     setSaving(true)
     setError(null)
     try {
@@ -104,6 +202,13 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
         site_type: provider === 'baota' ? siteType : null,
         healthcheck_path:
           provider === 'baota' && healthcheckPath.trim() ? healthcheckPath.trim() : null,
+        deploy_mode: deployMode,
+        target_dir: deployMode === 'inplace' ? targetDir.trim() : null,
+        keep_paths: deployMode === 'inplace' ? keepPaths.trim() || null : null,
+        restart_cmd: restartCmd.trim() || null,
+        healthcheck_port: parsedPort,
+        init_script: initScript.trim() || null,
+        env_json: parsedEnv.json,
       }
       if (editing && app) {
         await api.updateApp(app.id, payload)
@@ -126,7 +231,8 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
       open={open}
       onClose={onClose}
       title={editing ? t('s.0239') : t('s.0240')}
-      description={provider === 'baota' ? t('apps.baotaDeployHint') : t('s.0241')}
+      description={t('s.0241')}
+      size="lg"
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>
@@ -171,7 +277,6 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
           </div>
         </div>
 
-        {provider === 'baota' ? null : (
         <div>
           <label htmlFor="app-root" className={labelClass}>
             {t('s.0246')}
@@ -187,15 +292,14 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
             className={inputClass + ' mt-1.5 font-mono text-xs'}
           />
           <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-            {t('s.0248')} {effectiveSlug || '<slug>'}{t('s.0249')}
+            {deployMode === 'inplace'
+              ? t('apps.rootHintInplace')
+              : `${t('s.0248')} ${effectiveSlug || '<slug>'}${t('s.0249')}`}
           </p>
           {!slugTouched && effectiveSlug === '' && name.trim() !== '' ? (
-            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-              {t('s.0250')}
-            </p>
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{t('s.0250')}</p>
           ) : null}
         </div>
-        )}
 
         <div>
           <span className={labelClass}>{t('apps.provider')}</span>
@@ -287,6 +391,157 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
               </p>
             </div>
           ) : null}
+        </div>
+
+        {/* 部署参数 */}
+        <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+          <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+            {t('apps.deploySettings')}
+          </p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {(
+              [
+                { value: 'release', title: t('apps.modeRelease'), hint: t('apps.modeReleaseHint') },
+                { value: 'inplace', title: t('apps.modeInplace'), hint: t('apps.modeInplaceHint') },
+              ] as const
+            ).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setDeployMode(option.value)}
+                className={
+                  'rounded-lg border px-3 py-2 text-left transition-colors ' +
+                  (deployMode === option.value
+                    ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-400 dark:bg-indigo-500/10'
+                    : 'border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-600')
+                }
+              >
+                <span className="block text-sm font-medium text-slate-800 dark:text-slate-100">
+                  {option.title}
+                </span>
+                <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">
+                  {option.hint}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {deployMode === 'inplace' ? (
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label htmlFor="app-target-dir" className={labelClass}>
+                  {t('apps.targetDir')}
+                </label>
+                <input
+                  id="app-target-dir"
+                  value={targetDir}
+                  onChange={(event) => setTargetDir(event.target.value)}
+                  placeholder="/opt/nengtan-hub"
+                  className={inputClass + ' mt-1.5 font-mono text-xs'}
+                />
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  {t('apps.targetDirHint')}
+                </p>
+              </div>
+              <div className="sm:col-span-2">
+                <label htmlFor="app-keep-paths" className={labelClass}>
+                  {t('apps.keepPaths')}
+                </label>
+                <input
+                  id="app-keep-paths"
+                  value={keepPaths}
+                  onChange={(event) => setKeepPaths(event.target.value)}
+                  placeholder="data/, uploads/, storage/logs/*"
+                  className={inputClass + ' mt-1.5 font-mono text-xs'}
+                />
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  {t('apps.keepPathsHint')}
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label htmlFor="app-restart-cmd" className={labelClass}>
+                {t('apps.restartCmd')}
+              </label>
+              <input
+                id="app-restart-cmd"
+                value={restartCmd}
+                onChange={(event) => setRestartCmd(event.target.value)}
+                placeholder="systemctl restart nengtan-hub"
+                className={inputClass + ' mt-1.5 font-mono text-xs'}
+              />
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                {t('apps.restartCmdHint')}
+              </p>
+            </div>
+            <div>
+              <label htmlFor="app-healthcheck-port" className={labelClass}>
+                {t('apps.healthcheckPort')}
+              </label>
+              <input
+                id="app-healthcheck-port"
+                value={healthcheckPort}
+                onChange={(event) => setHealthcheckPort(event.target.value)}
+                inputMode="numeric"
+                placeholder="8080"
+                className={inputClass + ' mt-1.5 font-mono text-xs'}
+              />
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                {t('apps.healthcheckPortHint')}
+              </p>
+            </div>
+          </div>
+
+          {deployMode === 'inplace' ? (
+            <p className="mt-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+              {t('apps.inplaceHint')}
+            </p>
+          ) : null}
+
+          <details className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/60">
+            <summary className="cursor-pointer text-xs font-medium text-slate-600 dark:text-slate-300">
+              {t('apps.advanced')}
+            </summary>
+            <div className="mt-2 space-y-3">
+              <div>
+                <label htmlFor="app-init-script" className={labelClass}>
+                  {t('apps.initScript')}
+                </label>
+                <textarea
+                  id="app-init-script"
+                  value={initScript}
+                  onChange={(event) => setInitScript(event.target.value)}
+                  rows={4}
+                  spellCheck={false}
+                  placeholder={'#!/bin/bash\nset -e\ncp .env.example .env'}
+                  className={inputClass + ' mt-1.5 resize-y font-mono text-xs'}
+                />
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  {t('apps.initScriptHint')}
+                </p>
+              </div>
+              <div>
+                <label htmlFor="app-env" className={labelClass}>
+                  {t('apps.envVars')}
+                </label>
+                <textarea
+                  id="app-env"
+                  value={envText}
+                  onChange={(event) => setEnvText(event.target.value)}
+                  rows={4}
+                  spellCheck={false}
+                  placeholder={'DB_HOST=127.0.0.1\nDB_PORT=3306'}
+                  className={inputClass + ' mt-1.5 resize-y font-mono text-xs'}
+                />
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  {t('apps.envHint')}
+                </p>
+              </div>
+            </div>
+          </details>
         </div>
 
         <div>

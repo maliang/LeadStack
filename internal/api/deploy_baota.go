@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/maliang/leadstack/internal/credential"
+	"github.com/maliang/leadstack/internal/deploy"
 	"github.com/maliang/leadstack/internal/panel/baota"
 	"github.com/maliang/leadstack/internal/store"
 )
@@ -347,6 +349,14 @@ func (a *API) normalizeAppSite(provider, siteName string, sitePort *int, siteTyp
 	cfg := appSiteConfig{Provider: p}
 	switch p {
 	case store.AppProviderBuiltin:
+		// builtin 通道不用面板站点字段，但 healthcheck_path 是两条通道共用的（部署后 HTTP 探测）。
+		hp := strings.TrimSpace(healthcheckPath)
+		if hp != "" {
+			if !strings.HasPrefix(hp, "/") || strings.ContainsAny(hp, " \t\r\n") {
+				return cfg, fmt.Errorf("healthcheck_path 必须以 / 开头且不能包含空白字符")
+			}
+			cfg.HealthcheckPath = &hp
+		}
 		return cfg, nil
 	case store.AppProviderBaota:
 	default:
@@ -427,3 +437,187 @@ func (a *API) normalizeAppSitePatch(provider *string, siteName *string, sitePort
 	}
 	return cfg, nil
 }
+
+// healthTarget 解析应用的健康检查目标：端口优先 healthcheck_port，其次 site_port。
+func healthTarget(app *store.App) (int, string) {
+	hpath := strings.TrimSpace(derefStr(app.HealthcheckPath))
+	if hpath == "" {
+		return 0, ""
+	}
+	port := 0
+	if app.HealthcheckPort != nil && *app.HealthcheckPort > 0 {
+		port = *app.HealthcheckPort
+	} else if app.SitePort != nil && *app.SitePort > 0 {
+		port = *app.SitePort
+	}
+	if port <= 0 {
+		return 0, ""
+	}
+	return port, normalizeHealthPath(hpath)
+}
+
+// buildPlanFor 按部署模式选择计划构造器：release（默认）或 inplace（接管既有目录）。
+func (o *deployOrchestrator) buildPlanFor(ctx context.Context, templateContent, kind string,
+	artifact *store.Artifact, release *store.Release, app *store.App, root, prevReleaseID string,
+	logf func(stream, chunk string)) (deploy.Plan, error) {
+
+	if app.DeployMode == store.DeployModeInplace {
+		target := strings.TrimSpace(derefStr(app.TargetDir))
+		if target == "" {
+			target = strings.TrimSpace(derefStr(app.Root))
+		}
+		if target == "" {
+			return deploy.Plan{}, errors.New("接管模式需要填写目标目录（target_dir）")
+		}
+		envJSON := strings.TrimSpace(derefStr(app.EnvJSON))
+		if envJSON != "" {
+			var probe map[string]string
+			if err := json.Unmarshal([]byte(envJSON), &probe); err != nil {
+				return deploy.Plan{}, fmt.Errorf("环境变量必须是 {\"KEY\":\"VALUE\"} 形式的 JSON: %w", err)
+			}
+		}
+		logf("system", "接管模式：目标目录 "+target+"（备份 → 同步 → 重启）\n")
+		return deploy.BuildInplace(deploy.InplaceParams{
+			AppSlug:       app.Slug,
+			ReleaseID:     release.ID,
+			Version:       release.Version,
+			TargetDir:     target,
+			PrevReleaseID: prevReleaseID,
+			Artifact:      o.toDeployArtifact(ctx, artifact),
+			RestartCmd:    derefStr(app.RestartCmd),
+			InitScript:    derefStr(app.InitScript),
+			FirstDeploy:   prevReleaseID == "",
+			EnvJSON:       envJSON,
+			KeepPaths:     splitKeepPaths(derefStr(app.KeepPaths)),
+			Now:           store.NowMS(),
+		})
+	}
+	return o.buildPlan(ctx, templateContent, kind, artifact, release, app, root, prevReleaseID)
+}
+
+// splitKeepPaths 把逗号/换行分隔的保留路径切成切片。
+func splitKeepPaths(raw string) []string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' || r == ';' })
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if v := strings.TrimSpace(f); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// rollbackAfterHealthFailure 在「部署成功但健康检查失败」时执行计划里的回滚步骤。
+func (o *deployOrchestrator) rollbackAfterHealthFailure(ctx context.Context, run store.ReleaseRun, plan deploy.Plan, logf func(stream, chunk string)) {
+	if len(plan.RollbackSteps) == 0 {
+		logf("system", "没有可用的回滚步骤（首次部署或模板未提供）\n")
+		return
+	}
+	rb := deploy.Plan{AppSlug: plan.AppSlug, ReleaseID: plan.ReleaseID, Version: plan.Version, Root: plan.Root, Steps: plan.RollbackSteps}
+	for i := range rb.Steps {
+		rb.Steps[i].Name = "rollback:" + rb.Steps[i].Name
+	}
+	hooks := deploy.Hooks{
+		OnStep: func(index int, name string) {
+			logf("system", fmt.Sprintf("--- 回滚 [%d/%d] %s ---\n", index+1, len(rb.Steps), name))
+		},
+		OnLog: logf,
+	}
+	if _, err := o.exec.RunPlan(withDeployRun(ctx, run.ID), run.ServerID, rb, hooks); err != nil {
+		logf("system", "回滚执行失败: "+err.Error()+"\n")
+	}
+}
+
+// appDeployConfig 是部署 v2 参数的规整结果。
+type appDeployConfig struct {
+	DeployMode      *string
+	TargetDir       *string
+	RestartCmd      *string
+	InitScript      *string
+	EnvJSON         *string
+	KeepPaths       *string
+	HealthcheckPort *int
+}
+
+// normalizeAppDeployV2 校验部署 v2 字段（nil 表示不改）。
+func normalizeAppDeployV2(deployMode, targetDir, restartCmd, initScript, envJSON, keepPaths *string, healthPort *int) (appDeployConfig, error) {
+	out := appDeployConfig{}
+	if deployMode != nil {
+		v := strings.ToLower(strings.TrimSpace(*deployMode))
+		if v != store.DeployModeRelease && v != store.DeployModeInplace {
+			return out, fmt.Errorf("deploy_mode 只能是 release 或 inplace")
+		}
+		out.DeployMode = &v
+	}
+	if targetDir != nil {
+		v := strings.TrimSpace(*targetDir)
+		if v != "" {
+			if !strings.HasPrefix(v, "/") {
+				return out, fmt.Errorf("target_dir 必须是绝对路径")
+			}
+			if strings.ContainsAny(v, " \t\r\n") {
+				return out, fmt.Errorf("target_dir 不能包含空白字符")
+			}
+		}
+		out.TargetDir = &v
+	}
+	if restartCmd != nil {
+		v := strings.TrimSpace(*restartCmd)
+		if len(v) > 2000 {
+			return out, fmt.Errorf("restart_cmd 过长（≤2000 字符）")
+		}
+		out.RestartCmd = &v
+	}
+	if initScript != nil {
+		v := *initScript
+		if len(v) > 64<<10 {
+			return out, fmt.Errorf("init_script 过长（≤64KB）")
+		}
+		out.InitScript = &v
+	}
+	if envJSON != nil {
+		v := strings.TrimSpace(*envJSON)
+		if v != "" {
+			var m map[string]string
+			if err := json.Unmarshal([]byte(v), &m); err != nil {
+				return out, fmt.Errorf(`env_json 必须是 {"KEY":"VALUE"} 形式的 JSON 对象`)
+			}
+			if len(m) > 100 {
+				return out, fmt.Errorf("env_json 最多 100 个变量")
+			}
+			if len(v) > 32<<10 {
+				return out, fmt.Errorf("env_json 过大（≤32KB）")
+			}
+			for k := range m {
+				if !envKeyPattern.MatchString(k) {
+					return out, fmt.Errorf("env_json 的键 %q 不合法（[A-Za-z_][A-Za-z0-9_]*）", k)
+				}
+			}
+		}
+		out.EnvJSON = &v
+	}
+	if keepPaths != nil {
+		v := strings.TrimSpace(*keepPaths)
+		for _, p := range splitKeepPaths(v) {
+			clean := strings.TrimPrefix(p, "/")
+			if strings.Contains(clean, "..") {
+				return out, fmt.Errorf("keep_paths 不允许包含 ..：%s", p)
+			}
+			if strings.ContainsAny(p, " \t\r\n") {
+				return out, fmt.Errorf("keep_paths 不能包含空白字符")
+			}
+		}
+		out.KeepPaths = &v
+	}
+	if healthPort != nil {
+		if *healthPort < 0 || *healthPort > 65535 {
+			return out, fmt.Errorf("healthcheck_port 必须在 0-65535 之间（0 表示清除）")
+		}
+		p := *healthPort
+		out.HealthcheckPort = &p
+	}
+	return out, nil
+}
+
+// envKeyPattern 约束环境变量名。
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

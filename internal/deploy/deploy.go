@@ -67,6 +67,10 @@ type Step struct {
 	TimeoutS int
 	// IgnoreFailure 为 true 时该步失败不中断（用于 best-effort 清理）。
 	IgnoreFailure bool
+	// Secret 为 true 时日志层对命令脱敏（只显示步骤名），用于写环境变量等含机密的内容。
+	Secret bool
+	// RollbackMarker 标记该步属于回滚计划（编排层据此区分统计口径）。
+	RollbackMarker bool
 }
 
 // Plan 是一次部署在某台服务器上的完整执行计划。

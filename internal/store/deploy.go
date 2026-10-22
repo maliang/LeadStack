@@ -16,11 +16,15 @@ func (s *Store) CreateApp(ctx context.Context, app *App) error {
 		return errors.New("创建应用: 参数为空")
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO apps (id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO apps (id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
+		                   deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		app.ID, app.Name, app.Slug, nullableStr(app.Root), nullableStr(app.Description), app.CreatedAt,
 		defaultProvider(app.Provider), nullableStr(app.SiteName), nullableIntFromPtr(app.SitePort),
-		nullableStr(app.SiteType), nullableStr(app.HealthcheckPath))
+		nullableStr(app.SiteType), nullableStr(app.HealthcheckPath),
+		defaultDeployMode(app.DeployMode), nullableStr(app.TargetDir), nullableStr(app.RestartCmd),
+		nullableStr(app.InitScript), nullableStr(app.EnvJSON), nullableStr(app.KeepPaths),
+		nullableIntFromPtr(app.HealthcheckPort))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return fmt.Errorf("创建应用 %s: %w", app.Slug, ErrConflict)
@@ -33,19 +37,22 @@ func (s *Store) CreateApp(ctx context.Context, app *App) error {
 // GetApp 按 ID 查询应用。
 func (s *Store) GetApp(ctx context.Context, id string) (*App, error) {
 	return scanApp(s.db.QueryRowContext(ctx,
-		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path FROM apps WHERE id = ?`, id))
+		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
+		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port FROM apps WHERE id = ?`, id))
 }
 
 // GetAppBySlug 按 slug 查询应用。
 func (s *Store) GetAppBySlug(ctx context.Context, slug string) (*App, error) {
 	return scanApp(s.db.QueryRowContext(ctx,
-		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path FROM apps WHERE slug = ?`, slug))
+		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
+		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port FROM apps WHERE slug = ?`, slug))
 }
 
 // ListApps 返回全部应用（按创建时间倒序）。
 func (s *Store) ListApps(ctx context.Context) ([]App, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path FROM apps ORDER BY created_at DESC, id DESC`)
+		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
+		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port FROM apps ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询应用列表: %w", err)
 	}
@@ -149,9 +156,17 @@ func scanApp(row interface{ Scan(...any) error }) (*App, error) {
 		sitePort   sql.NullInt64
 		siteType   sql.NullString
 		health     sql.NullString
+		deployMode sql.NullString
+		targetDir  sql.NullString
+		restartCmd sql.NullString
+		initScript sql.NullString
+		envJSON    sql.NullString
+		keepPaths  sql.NullString
+		healthPort sql.NullInt64
 	)
 	err := row.Scan(&app.ID, &app.Name, &app.Slug, &root, &desc, &app.CreatedAt,
-		&provider, &siteName, &sitePort, &siteType, &health)
+		&provider, &siteName, &sitePort, &siteType, &health,
+		&deployMode, &targetDir, &restartCmd, &initScript, &envJSON, &keepPaths, &healthPort)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询应用: %w", ErrNotFound)
@@ -171,6 +186,19 @@ func scanApp(row interface{ Scan(...any) error }) (*App, error) {
 	}
 	app.SiteType = strPtr(siteType)
 	app.HealthcheckPath = strPtr(health)
+	app.DeployMode = strings.TrimSpace(deployMode.String)
+	if app.DeployMode == "" {
+		app.DeployMode = DeployModeRelease
+	}
+	app.TargetDir = strPtr(targetDir)
+	app.RestartCmd = strPtr(restartCmd)
+	app.InitScript = strPtr(initScript)
+	app.EnvJSON = strPtr(envJSON)
+	app.KeepPaths = strPtr(keepPaths)
+	if healthPort.Valid {
+		v := int(healthPort.Int64)
+		app.HealthcheckPort = &v
+	}
 	return &app, nil
 }
 
@@ -179,6 +207,20 @@ const (
 	AppProviderBuiltin = "builtin"
 	AppProviderBaota   = "baota"
 )
+
+// 部署模式：release（默认，releases/<id> + current 原子切换）与 inplace（接管既有目录）。
+const (
+	DeployModeRelease = "release"
+	DeployModeInplace = "inplace"
+)
+
+// defaultDeployMode 把空值归一为 release。
+func defaultDeployMode(m string) string {
+	if v := strings.TrimSpace(m); v != "" {
+		return v
+	}
+	return DeployModeRelease
+}
 
 // defaultProvider 把空值归一为 builtin。
 func defaultProvider(p string) string {
@@ -229,6 +271,52 @@ func (s *Store) UpdateAppSite(ctx context.Context, id string, provider, siteName
 	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("更新应用 %s 部署配置: %w", id, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("更新应用 %s 后读取影响行数: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("更新应用 %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// UpdateAppDeploy 更新部署 v2 字段（PATCH 语义，nil 表示不改）。
+func (s *Store) UpdateAppDeploy(ctx context.Context, id string,
+	deployMode, targetDir, restartCmd, initScript, envJSON, keepPaths *string, healthPort *int) error {
+	sets := make([]string, 0, 7)
+	args := make([]any, 0, 8)
+	add := func(col string, v any) { sets = append(sets, col+" = ?"); args = append(args, v) }
+	if deployMode != nil {
+		add("deploy_mode", defaultDeployMode(*deployMode))
+	}
+	if targetDir != nil {
+		add("target_dir", nullableStr(emptyToNil(*targetDir)))
+	}
+	if restartCmd != nil {
+		add("restart_cmd", nullableStr(emptyToNil(*restartCmd)))
+	}
+	if initScript != nil {
+		add("init_script", nullableStr(emptyToNil(*initScript)))
+	}
+	if envJSON != nil {
+		add("env_json", nullableStr(emptyToNil(*envJSON)))
+	}
+	if keepPaths != nil {
+		add("keep_paths", nullableStr(emptyToNil(*keepPaths)))
+	}
+	if healthPort != nil {
+		add("healthcheck_port", *healthPort)
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	query := `UPDATE apps SET ` + strings.Join(sets, ", ") + ` WHERE id = ?`
+	args = append(args, id)
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("更新应用 %s 部署参数: %w", id, err)
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {

@@ -36,6 +36,9 @@ func (a *API) Router() http.Handler {
 		r.Post("/auth/login", a.handleLogin)
 		// 终端 WebSocket：浏览器无法自定义 Header，用一次性 ticket 鉴权（60s、单次）。
 		r.Get("/servers/{serverID}/terminal", a.handleTerminalWS)
+		// 制品下载：目标机没有 JWT，用短时效签名直连；浏览器带 JWT 也允许。
+		// 必须放在 requireAuth 组**之外**，否则签名请求会先被 401 掉。
+		r.With(a.artifactAccessMiddleware).Get("/artifacts/{artifactID}/download", a.handleDownloadArtifact)
 
 		r.Group(func(r chi.Router) {
 			r.Use(a.requireAuth)
@@ -91,9 +94,9 @@ func (a *API) Router() http.Handler {
 			r.With(permDeployRead).Get("/templates/{templateID}", a.handleGetTemplate)
 			r.With(permDeployRead).Get("/releases", a.handleListReleases)
 			r.With(permDeployRead).Get("/releases/{releaseID}", a.handleGetRelease)
+			r.With(permServerRead).Post("/servers/{serverID}/discover", a.handleDiscoverServer)
 			r.With(permDeployRead).Get("/releases/{releaseID}/runs", a.handleListReleaseRuns)
 			r.With(permDeployRead).Get("/releases/{releaseID}/runs/{serverID}/logs", a.handleReleaseLogs)
-			r.With(permDeployRead).Get("/artifacts/{artifactID}/download", a.handleDownloadArtifact)
 
 			// ---------------- 备份（读；全局资源） ----------------
 			permBackupRead := a.RequirePerm(auth.PermBackupRead)

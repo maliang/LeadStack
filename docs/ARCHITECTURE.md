@@ -1877,3 +1877,87 @@ ALTER TABLE servers ADD COLUMN panel_credential_id TEXT; -- kind=baota 的凭据
 - 只支持 `static`/`php` 站点；`node` 项目、SSL、反向代理不自动配置。
 - 回滚粒度是「上一版站点目录的 zip 备份」；多次发布会在站点旁累积 `.backup-<ts>.zip`，
   需要定期清理（面板文件管理里删）。
+
+---
+
+## 58. 部署 v2：接管既有目录、健康检查、首版初始化与变更探测
+
+### 58.1 两种部署模式
+
+| `deploy_mode` | 目录结构 | 适用 |
+|---|---|---|
+| `release`（默认） | `<app>/releases/<id>` + `current` 符号链接，原子切换 | 新项目、可接受多版本目录 |
+| `inplace` | 直接用 `target_dir`（已有目录），每次发布**备份→rsync 覆盖→重启** | 已有站点/服务，目录里有别人的配置与数据 |
+
+`inplace` 的步骤（`internal/deploy/inplace.go`）：
+
+```
+prepare → download → verify-sha256 → unpack(临时目录)
+→ backup-existing（tar 到 <target>/.leadstack-backups/backup-<release>.tar.gz）
+→ sync-inplace（rsync -a --delete，保留 keep_paths 与 .leadstack*）
+→ write-env（可选，<target>/.leadstack.env，0600）
+→ write-init-script + run-init-script（仅首版）
+→ restart（restart_cmd，可选）
+→ write-metadata
+```
+
+回滚 = 解回备份 tar + 再执行 `restart_cmd`；**首次发布失败也能回滚**（备份在同步之前做）。
+
+### 58.2 应用字段（迁移 0010）
+
+```sql
+ALTER TABLE apps ADD COLUMN deploy_mode      TEXT NOT NULL DEFAULT 'release'; -- release | inplace
+ALTER TABLE apps ADD COLUMN target_dir       TEXT;   -- inplace 目标目录（空则用 root）
+ALTER TABLE apps ADD COLUMN restart_cmd      TEXT;   -- 发布后重启命令（systemctl / docker compose …）
+ALTER TABLE apps ADD COLUMN init_script      TEXT;   -- 首版初始化脚本（每台服务器只执行一次）
+ALTER TABLE apps ADD COLUMN env_json         TEXT;   -- {"KEY":"VALUE"} → <target>/.leadstack.env
+ALTER TABLE apps ADD COLUMN keep_paths       TEXT;   -- 同步时保留（逗号分隔，支持 *）
+ALTER TABLE apps ADD COLUMN healthcheck_port INTEGER;-- 健康检查端口
+```
+
+- `init_script` 的「首版」判定：该服务器上此应用**没有成功发布记录**（`previousSuccessRelease` 为空）；
+- `env_json` 写成 `.env` 时在命令里是 base64，并标记 `Step.Secret`，日志层只显示步骤名；
+- `keep_paths` 同时用于备份排除与 rsync 保留（数据目录、上传目录、配置目录）。
+
+### 58.3 健康检查（两条通道共用）
+
+- 配置：`healthcheck_path` + `healthcheck_port`（baota 通道缺省用 `site_port`）；
+- 执行：控制端在部署计划**全部成功之后**发 `GET http://<server.host>:<port><path>`，
+  2xx/3xx 通过，最多轮询 30 秒；
+- 失败：执行计划里的 `RollbackSteps`（release 模式切回上一版本；inplace 模式解回备份），
+  再把 run 标记为 `failed`、`failed_step=health-check`，message 里带探测错误。
+
+### 58.4 接管向导（发现 + 一键接管）
+
+`POST /api/v1/servers/{serverID}/discover`（`server.read`）在目标机跑一段**只读**脚本：
+
+```
+systemctl list-units（运行中的服务）+ 每个服务的 ExecStart
+ss -lntp / netstat -lntp（监听端口）
+docker ps（容器名/镜像/端口）
+ls -1d /www/wwwroot/*（宝塔站点目录）
+```
+
+返回 `{server_id, candidates:[{kind, name, detail, suggested:{deploy_mode,target_dir,restart_cmd,healthcheck_port,root}}], raw:{...}}`。
+前端选中候选后预填「新建应用」表单（inplace 模式 + 目标目录 + 重启命令 + 健康检查端口）——
+**发现是只读的，接管动作仍然是显式创建应用 + 首次发布会执行备份**。
+
+### 58.5 上传制品的签名下载地址
+
+上传型制品由控制端通过 `/api/v1/artifacts/{id}/download` 提供给目标机，而目标机没有 JWT。因此：
+
+- 发布计划里的下载地址带 `?exp=<unix>&sig=<hmac-sha256(artifactID|exp)>`，默认 30 分钟有效；
+- 签名密钥首次启动随机生成并存 `settings.artifact.sign_key`，重启不变；
+- 下载路由注册在 `requireAuth` 组**之外**，中间件逻辑：有效签名 → 放行；否则回落 JWT + `deploy.read`；
+- 上传制品的下载地址没有扩展名，解包改为**按文件头判断**（zip `PK\x03\x04` / gzip / bzip2 / xz），都不是才当裸二进制安装。
+
+### 58.6 验收（`scripts/verify_deploy_v2.sh`，38 项）
+
+用两个真实项目的部署形态做样本（devssh 让命令在本机真实执行，断言检查真实文件）：
+
+| 样本 | 形态 | 覆盖 |
+|---|---|---|
+| nengtan（慧碳云枢） | jar + 两个前端 + systemd 服务 + 健康检查 + 首版初始化 | inplace 接管、keep_paths、init 只跑一次、.leadstack.env 0600、restart、健康检查失败回滚 |
+| tuoluojiang（拓罗匠） | php 站点 + compose 数据卷 | 数据目录（mysql/redis data）在两次发布后完好、旧文件被 rsync --delete 清掉、compose 重启命令执行 |
+
+另含：接管向导 discover 返回 candidates/raw；二次发布不重复执行 init。

@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   METRIC_KEYS,
   api,
@@ -26,6 +26,7 @@ import { Button } from '../components/Button'
 import {
   AlertTriangleIcon,
   ArrowLeftIcon,
+  PackageIcon,
   CheckIcon,
   ClockIcon,
   InfoIcon,
@@ -37,6 +38,8 @@ import { InlineLoading } from '../components/Loading'
 import { MetricChart } from '../components/MetricChart'
 import { ModeBadge, StatusBadge } from '../components/StatusBadge'
 import { ServerChecksTab } from '../components/ServerChecksTab'
+import { DiscoverDialog } from '../components/DiscoverDialog'
+import { AppDialog, type AppPreset } from '../components/AppDialog'
 import { MonitorTab } from '../components/server/MonitorTab'
 import { TerminalTab } from '../components/server/TerminalTab'
 import { FilesTab } from '../components/server/FilesTab'
@@ -117,6 +120,7 @@ export default function ServerDetailPage() {
 
   const { t } = useI18n()
   const { can } = useAuth()
+  const navigate = useNavigate()
   const credentialsQuery = usePolling(api.credentials, 60_000)
   const [searchParams, setSearchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
@@ -132,6 +136,8 @@ export default function ServerDetailPage() {
     setSearchParams(params, { replace: true })
   }
   const [step, setStep] = useState<MetricsStep>('raw')
+  const [discoverOpen, setDiscoverOpen] = useState(false)
+  const [appPreset, setAppPreset] = useState<AppPreset | null>(null)
   const [rangeKey, setRangeKey] = useState<RangeKey>('1h')
   const range = RANGES.find((item) => item.key === rangeKey) ?? RANGES[0]
 
@@ -283,6 +289,13 @@ export default function ServerDetailPage() {
                 {t('s.0282')}
               </Button>
             ) : null}
+            <Button
+              variant="secondary"
+              onClick={() => setDiscoverOpen(true)}
+              icon={<PackageIcon className="h-4 w-4" />}
+            >
+              {t('discover.open')}
+            </Button>
             <Button
               variant="secondary"
               onClick={() => void query.refresh()}
@@ -703,6 +716,33 @@ export default function ServerDetailPage() {
       </section>
         </>
       )}
+      <DiscoverDialog
+        open={discoverOpen}
+        serverId={server.id}
+        serverName={server.name}
+        onClose={() => setDiscoverOpen(false)}
+        onPick={(candidate) => {
+          setAppPreset({
+            name: candidate.name,
+            root: candidate.suggested.root,
+            deploy_mode: 'inplace',
+            target_dir: candidate.suggested.target_dir,
+            restart_cmd: candidate.suggested.restart_cmd,
+            healthcheck_port: candidate.suggested.healthcheck_port,
+          })
+        }}
+      />
+
+      <AppDialog
+        open={appPreset !== null}
+        app={null}
+        preset={appPreset}
+        onClose={() => setAppPreset(null)}
+        onSaved={() => {
+          setAppPreset(null)
+          navigate('/apps')
+        }}
+      />
     </div>
   )
 }

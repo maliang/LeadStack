@@ -26,6 +26,13 @@ const (
 	StepHealthCheck        = "health-check"
 	StepWriteMetadata      = "write-metadata"
 	StepCleanupOldReleases = "cleanup-old-releases"
+	// 接管模式（deploy_mode=inplace）专用步骤。
+	StepBackup             = "backup-existing"
+	StepSync               = "sync-inplace"
+	StepWriteEnv           = "write-env"
+	StepInit               = "write-init-script"
+	StepInitRun            = "run-init-script"
+	StepRollbackRestore    = "rollback-restore-backup"
 	artifactTempName       = ".artifact"
 	restartScriptName      = "leadstack-start.sh"
 	composeFileName        = "docker-compose.yml"
@@ -35,19 +42,23 @@ const (
 
 // 各步骤超时（秒）：下载/拉镜像留足时间，清理只做本地删除。
 const (
-	timeoutPrepare  = 60
-	timeoutDownload = 900
-	timeoutVerify   = 300
-	timeoutUnpack   = 300
-	timeoutWrite    = 30
-	timeoutInstall  = 60
-	timeoutReload   = 120
-	timeoutSwitch   = 60
-	timeoutRestart  = 180
-	timeoutHealth   = 180
-	timeoutPull     = 900
-	timeoutUp       = 600
-	timeoutCleanup  = 300
+	timeoutPrepare         = 60
+	timeoutDownload        = 900
+	timeoutVerify          = 300
+	timeoutUnpack          = 300
+	timeoutWrite           = 30
+	timeoutInstall         = 60
+	timeoutReload          = 120
+	timeoutSwitch          = 60
+	timeoutRestart         = 180
+	timeoutHealth          = 180
+	timeoutPull            = 900
+	timeoutUp              = 600
+	timeoutCleanup         = 300
+	timeoutBackup          = 600
+	timeoutSync            = 600
+	timeoutInit            = 900
+	timeoutRollbackRestore = 600
 )
 
 // releaseMetadata 是写到 <root>/.leadstack/releases/<releaseID>.json 的快照（§24）。

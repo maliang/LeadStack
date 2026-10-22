@@ -628,3 +628,22 @@ func TestShQuoteNeutralizesTildeAndGlob(t *testing.T) {
 		t.Fatalf("单引号未阻止展开，输出=%q", out)
 	}
 }
+
+// TestUnpackCommandIgnoresSignatureQuery 防止「上传制品带签名查询串」被当成裸文件安装。
+func TestUnpackCommandIgnoresSignatureQuery(t *testing.T) {
+	cases := []struct {
+		location string
+		want     string
+	}{
+		{"http://h/api/v1/artifacts/a1/download?exp=1&sig=ab", "504b0304"},
+		{"http://h/pkg.tar.gz?exp=1&sig=ab", "tar -xzf"},
+		{"http://h/pkg.zip?sig=ab", "unzip -oq"},
+		{"http://h/pkg.bin", "install -m 0755"},
+	}
+	for _, c := range cases {
+		got := unpackCommand("/rel", "/rel/.artifact", c.location)
+		if !strings.Contains(got, c.want) {
+			t.Fatalf("location=%s 期望包含 %q，实际 %q", c.location, c.want, got)
+		}
+	}
+}

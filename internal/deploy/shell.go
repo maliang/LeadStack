@@ -109,18 +109,32 @@ func cleanupCommand(root, releaseID, prevReleaseID string, keep int) string {
 // unpackCommand 生成「把下载好的制品落位到 release 目录」的命令。
 // 按扩展名识别 tar.gz/tgz/tar/zip，其余按单文件安装（可执行）。
 func unpackCommand(releaseDir, tmpFile, location string) string {
-	lower := strings.ToLower(location)
+	// 制品地址可能带签名查询串（upload 型走 /artifacts/{id}/download?exp=..&sig=..），
+	// 判断扩展名之前必须先去掉 query/fragment。
+	clean := location
+	if i := strings.IndexAny(clean, "?#"); i >= 0 {
+		clean = clean[:i]
+	}
+	lower := strings.ToLower(clean)
+	dir := shQuote(releaseDir)
+	f := shQuote(tmpFile)
 	switch {
 	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
-		return "tar -xzf " + shQuote(tmpFile) + " -C " + shQuote(releaseDir) + " && rm -f " + shQuote(tmpFile)
+		return "tar -xzf " + f + " -C " + dir + " && rm -f " + f
 	case strings.HasSuffix(lower, ".tar"):
-		return "tar -xf " + shQuote(tmpFile) + " -C " + shQuote(releaseDir) + " && rm -f " + shQuote(tmpFile)
+		return "tar -xf " + f + " -C " + dir + " && rm -f " + f
 	case strings.HasSuffix(lower, ".zip"):
-		return "unzip -oq " + shQuote(tmpFile) + " -d " + shQuote(releaseDir) + " && rm -f " + shQuote(tmpFile)
-	default:
-		return "install -m 0755 " + shQuote(tmpFile) + " " + shQuote(path.Join(releaseDir, artifactFileName(location))) +
-			" && rm -f " + shQuote(tmpFile)
+		return "unzip -oq " + f + " -d " + dir + " && rm -f " + f
 	}
+	// 上传型制品的下载地址没有扩展名：按文件头判断（zip / gzip / bzip2 / xz），
+	// 都不是才当成裸二进制安装。这样 .tar.gz 制品不会因为「地址没后缀」被误装成二进制。
+	dest := shQuote(path.Join(releaseDir, artifactFileName(location)))
+	return `case "$(head -c 4 ` + f + ` | od -An -tx1 | tr -d ' \n')" in ` +
+		`504b0304) unzip -oq ` + f + ` -d ` + dir + ` ;; ` +
+		`1f8b*) tar -xzf ` + f + ` -C ` + dir + ` ;; ` +
+		`425a68*) tar -xjf ` + f + ` -C ` + dir + ` ;; ` +
+		`fd377a58) tar -xJf ` + f + ` -C ` + dir + ` ;; ` +
+		`*) install -m 0755 ` + f + ` ` + dest + ` ;; esac && rm -f ` + f
 }
 
 // artifactFileName 取制品文件名（去掉 query/fragment），并做字符白名单收敛。

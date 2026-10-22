@@ -9,7 +9,12 @@ import { formatDateTime, formatRelativeTime } from '../lib/format'
 import { AppDialog } from '../components/AppDialog'
 import { Button, IconButton } from '../components/Button'
 import { ConfirmDialog } from '../components/ConfirmDialog'
-import { AppProviderBadge, ReleaseStatusBadge, TemplateKindBadge } from '../components/DeployBadges'
+import {
+  AppProviderBadge,
+  DeployModeBadge,
+  ReleaseStatusBadge,
+  TemplateKindBadge,
+} from '../components/DeployBadges'
 import { EmptyState } from '../components/EmptyState'
 import {
   ChevronRightIcon,
@@ -284,6 +289,7 @@ export default function AppsPage() {
                               {app.slug}
                             </span>
                             <AppProviderBadge provider={app.provider} />
+                            <DeployModeBadge mode={app.deploy_mode} />
                           </span>
                           {app.provider === 'baota' && app.site_name ? (
                             <span className="mt-0.5 block text-[11px] text-amber-700 dark:text-amber-300">
@@ -291,6 +297,14 @@ export default function AppsPage() {
                                 site: app.site_name,
                                 port: app.site_port ?? '—',
                               })}
+                            </span>
+                          ) : null}
+                          {app.deploy_mode === 'inplace' && app.target_dir ? (
+                            <span
+                              className="mt-0.5 block truncate font-mono text-[11px] text-slate-500 dark:text-slate-400"
+                              title={app.target_dir}
+                            >
+                              {app.target_dir}
                             </span>
                           ) : null}
                         </td>

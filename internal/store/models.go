@@ -293,6 +293,14 @@ type App struct {
 	SitePort        *int    `json:"site_port"`
 	SiteType        *string `json:"site_type"`
 	HealthcheckPath *string `json:"healthcheck_path"`
+	// 部署 v2：接管既有目录、重启命令、首版初始化、环境变量、健康检查端口。
+	DeployMode      string  `json:"deploy_mode"`
+	TargetDir       *string `json:"target_dir"`
+	RestartCmd      *string `json:"restart_cmd"`
+	InitScript      *string `json:"init_script"`
+	EnvJSON         *string `json:"env_json"`
+	KeepPaths       *string `json:"keep_paths"`
+	HealthcheckPort *int    `json:"healthcheck_port"`
 }
 
 // DeployTemplate 是部署模板（版本化文本，发布时冻结快照）。

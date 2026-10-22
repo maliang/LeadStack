@@ -615,6 +615,27 @@ export type TemplateKind = 'compose' | 'systemd' | 'binary'
 export type ArtifactKind = 'url' | 'upload' | 'image'
 
 export type AppProvider = 'builtin' | 'baota' | string
+
+export interface DiscoverSuggested {
+  deploy_mode?: 'release' | 'inplace' | string
+  target_dir?: string
+  restart_cmd?: string
+  healthcheck_port?: number
+  root?: string
+}
+
+export interface DiscoverCandidate {
+  kind: 'systemd' | 'docker' | 'site' | string
+  name: string
+  detail: string
+  suggested: DiscoverSuggested
+}
+
+export interface DiscoverResult {
+  server_id: string
+  candidates: DiscoverCandidate[]
+  raw: Record<string, string>
+}
 export type BaotaSiteType = 'static' | 'php' | string
 
 export interface AppItem {
@@ -634,6 +655,20 @@ export interface AppItem {
   site_type: BaotaSiteType | null
   /** 发布后健康检查路径 */
   healthcheck_path: string | null
+  /** 部署模式：release=多版本目录原子切换；inplace=接管既有目录 */
+  deploy_mode: 'release' | 'inplace' | string
+  /** inplace 接管目录（绝对路径） */
+  target_dir: string | null
+  /** 部署后重启命令 */
+  restart_cmd: string | null
+  /** 首版初始化脚本（每台服务器首次成功部署执行一次） */
+  init_script: string | null
+  /** 环境变量 JSON 字符串 */
+  env_json: string | null
+  /** inplace 同步时保留的相对路径（逗号分隔） */
+  keep_paths: string | null
+  /** 健康检查端口（0 表示清除） */
+  healthcheck_port: number | null
   /** 后端可能聚合出的统计；缺失时前端用 releases 列表本地折算 */
   release_count: number
   server_count: number
@@ -719,6 +754,13 @@ export interface CreateAppPayload {
   site_port?: number
   site_type?: BaotaSiteType | null
   healthcheck_path?: string | null
+  deploy_mode?: 'release' | 'inplace'
+  target_dir?: string | null
+  restart_cmd?: string | null
+  init_script?: string | null
+  env_json?: string | null
+  keep_paths?: string | null
+  healthcheck_port?: number | null
 }
 
 export interface CreateTemplatePayload {
@@ -1669,6 +1711,13 @@ export function normalizeApp(input: unknown): AppItem {
     site_port: toNumber(raw.site_port),
     site_type: toText(raw.site_type),
     healthcheck_path: toText(raw.healthcheck_path),
+    deploy_mode: toText(raw.deploy_mode) ?? 'release',
+    target_dir: toText(raw.target_dir),
+    restart_cmd: toText(raw.restart_cmd),
+    init_script: typeof raw.init_script === 'string' ? raw.init_script : null,
+    env_json: typeof raw.env_json === 'string' ? raw.env_json : null,
+    keep_paths: toText(raw.keep_paths),
+    healthcheck_port: toNumber(raw.healthcheck_port),
     release_count: toNumber(raw.release_count ?? raw.releases_count) ?? 0,
     server_count: toNumber(raw.server_count ?? raw.target_count) ?? 0,
     last_release: lastRelease,
@@ -2331,6 +2380,42 @@ export const api = {
     return request<unknown>(`/server-groups/${encodeURIComponent(id)}/servers`).then((raw) => {
       const list = Array.isArray(raw) ? raw : extractList(raw, ['servers', 'items'])
       return list.map(normalizeServer)
+    })
+  },
+
+  /** POST /servers/{id}/discover —— 接管已有应用（server.read） */
+  discoverServer(serverId: string): Promise<DiscoverResult> {
+    return request<unknown>(`/servers/${encodeURIComponent(serverId)}/discover`, {
+      method: 'POST',
+    }).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      const rawMap: Record<string, string> = {}
+      const rawRecord = toRecord(record.raw)
+      if (rawRecord) {
+        for (const [key, value] of Object.entries(rawRecord)) {
+          rawMap[key] = typeof value === 'string' ? value : JSON.stringify(value)
+        }
+      }
+      return {
+        server_id: toText(record.server_id) ?? serverId,
+        candidates: extractList(record.candidates, ['candidates']).map((item) => {
+          const candidate = toRecord(item) ?? {}
+          const suggested = toRecord(candidate.suggested) ?? {}
+          return {
+            kind: toText(candidate.kind) ?? 'site',
+            name: toText(candidate.name) ?? '',
+            detail: toText(candidate.detail) ?? '',
+            suggested: {
+              deploy_mode: toText(suggested.deploy_mode) ?? undefined,
+              target_dir: toText(suggested.target_dir) ?? undefined,
+              restart_cmd: toText(suggested.restart_cmd) ?? undefined,
+              healthcheck_port: toNumber(suggested.healthcheck_port) ?? undefined,
+              root: toText(suggested.root) ?? undefined,
+            },
+          }
+        }),
+        raw: rawMap,
+      }
     })
   },
 

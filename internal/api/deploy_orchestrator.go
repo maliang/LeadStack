@@ -358,7 +358,7 @@ func (o *deployOrchestrator) runOne(ctx context.Context, release *store.Release,
 	}
 
 	root := o.resolveRoot(app)
-	plan, err := o.buildPlan(ctx, templateContent, kind, artifact, release, app, root, prev)
+	plan, err := o.buildPlanFor(ctx, templateContent, kind, artifact, release, app, root, prev, logf)
 	if err != nil {
 		o.finishRun(ctx, run, store.ReleaseStatusFailed, -1, "构建执行计划失败: "+err.Error(), nil, logf)
 		return
@@ -398,6 +398,25 @@ func (o *deployOrchestrator) runOne(ctx context.Context, release *store.Release,
 	if status != store.ReleaseStatusSuccess && message == "" && execErr != nil {
 		message = execErr.Error()
 	}
+	// 部署后健康检查（builtin 通道；baota 通道在 runOneBaota 内部完成）。
+	if status == store.ReleaseStatusSuccess {
+		if port, hpath := healthTarget(app); hpath != "" && port > 0 {
+			logf("system", fmt.Sprintf("--- 健康检查 http://<host>:%d%s ---\n", port, hpath))
+			srv, serr := o.st.GetServer(ctx, run.ServerID)
+			if serr != nil {
+				o.finishRun(ctx, run, store.ReleaseStatusFailed, -1, "读取服务器失败: "+serr.Error(), strPtrOrNil(deploy.StepHealthCheck), logf)
+				return
+			}
+			if herr := waitHTTPHealthy(ctx, fmt.Sprintf("http://%s:%d%s", srv.Host, port, hpath)); herr != nil {
+				logf("system", "健康检查失败，执行回滚: "+herr.Error()+"\n")
+				o.rollbackAfterHealthFailure(ctx, run, plan, logf)
+				o.finishRun(ctx, run, store.ReleaseStatusFailed, -1, "部署后健康检查失败: "+herr.Error(), strPtrOrNil(deploy.StepHealthCheck), logf)
+				return
+			}
+			logf("system", "健康检查通过\n")
+		}
+	}
+
 	o.finishRun(ctx, run, status, exitCode, message, failedStep, logf)
 }
 
@@ -713,7 +732,12 @@ func (o *deployOrchestrator) toDeployArtifact(ctx context.Context, artifact *sto
 	}
 	switch artifact.Kind {
 	case store.ArtifactKindUpload:
-		art.Location = fmt.Sprintf("%s/api/v1/artifacts/%s/download", o.resolvePublic(ctx), artifact.ID)
+		// 目标机没有 JWT，下载地址必须带签名（短时效），否则 curl 会被 401。
+		if signed, err := SignedArtifactURL(ctx, o.st, artifact.ID); err == nil {
+			art.Location = signed
+		} else {
+			art.Location = fmt.Sprintf("%s/api/v1/artifacts/%s/download", o.resolvePublic(ctx), artifact.ID)
+		}
 	default:
 		art.Location = artifact.Location
 	}

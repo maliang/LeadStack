@@ -20,7 +20,7 @@ import (
 // 维护约定：internal/store/migrations 新增迁移时同步 +1（当前最高为 0007）。
 // 说明：internal/store 未导出 schema 版本常量（本轮写文件范围不含 store），
 // 若后续 store 导出该值，这里应改为调用它。
-const currentSchemaVersion = 9
+const currentSchemaVersion = 10
 
 // pidFileName 是服务运行期的 pid 文件名（供 CLI 判断数据目录是否被占用）。
 const pidFileName = "leadstack.pid"
