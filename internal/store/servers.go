@@ -11,7 +11,8 @@ import (
 // serverColumns 是 servers 表的固定列顺序，查询与扫描共用，避免两边字段错位。
 // "group" 是 SQLite 关键字，必须加双引号。
 const serverColumns = `id, name, host, port, mode, tags, status, last_seen_at,
-	agent_version, os, arch, kernel, created_at, credential_id, "group", host_key_policy, last_error`
+	agent_version, os, arch, kernel, created_at, credential_id, "group", host_key_policy, last_error,
+	panel_credential_id`
 
 // CreateServer 插入一台服务器。调用方负责填好 ID/CreatedAt。
 func (s *Store) CreateServer(ctx context.Context, srv *Server) error {
@@ -32,12 +33,12 @@ func (s *Store) CreateServer(ctx context.Context, srv *Server) error {
 	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO servers (`+serverColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		srv.ID, srv.Name, srv.Host, srv.Port, srv.Mode, srv.TagsJSON, srv.Status,
 		nullableInt(srv.LastSeenAt), nullableStr(srv.AgentVersion), nullableStr(srv.OS),
 		nullableStr(srv.Arch), nullableStr(srv.Kernel), srv.CreatedAt,
 		nullableStr(srv.CredentialID), nullableStr(srv.Group), srv.HostKeyPolicy,
-		nullableStr(srv.LastError),
+		nullableStr(srv.LastError), nullableStr(srv.PanelCredentialID),
 	)
 	if err != nil {
 		return fmt.Errorf("创建服务器 %s: %w", srv.Name, err)
@@ -87,6 +88,8 @@ type ServerUpdate struct {
 	Group         *string
 	HostKeyPolicy *string
 	CredentialID  *string
+	// PanelCredentialID 是宝塔面板凭据（kind=baota），与 SSH 凭据互不影响。
+	PanelCredentialID *string
 	// Host / Port 允许事后修改（契约 49.2）。
 	Host *string
 	Port *int
@@ -114,6 +117,9 @@ func (s *Store) UpdateServerFields(ctx context.Context, id string, upd ServerUpd
 		}
 		if upd.CredentialID != nil {
 			sets = append(sets, setClause{`credential_id = ?`, nullableStr(emptyToNil(*upd.CredentialID))})
+		}
+		if upd.PanelCredentialID != nil {
+			sets = append(sets, setClause{`panel_credential_id = ?`, nullableStr(emptyToNil(*upd.PanelCredentialID))})
 		}
 		if upd.Host != nil {
 			sets = append(sets, setClause{`host = ?`, *upd.Host})
@@ -372,10 +378,11 @@ func scanServer(row interface{ Scan(...any) error }) (*Server, error) {
 		group    sql.NullString
 		policy   sql.NullString
 		lastErr  sql.NullString
+		panelID  sql.NullString
 	)
 	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.Mode, &srv.TagsJSON,
 		&srv.Status, &lastSeen, &ver, &osName, &arch, &kernel, &srv.CreatedAt,
-		&credID, &group, &policy, &lastErr)
+		&credID, &group, &policy, &lastErr, &panelID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询服务器: %w", ErrNotFound)
@@ -390,6 +397,7 @@ func scanServer(row interface{ Scan(...any) error }) (*Server, error) {
 	srv.CredentialID = strPtr(credID)
 	srv.Group = strPtr(group)
 	srv.LastError = strPtr(lastErr)
+	srv.PanelCredentialID = strPtr(panelID)
 	srv.HostKeyPolicy = HostKeyPolicyAcceptNew
 	if policy.Valid && policy.String != "" {
 		srv.HostKeyPolicy = policy.String

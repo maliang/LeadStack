@@ -38,7 +38,7 @@ const (
 	// defaultBackupRetention 与 config 的默认值保持一致。
 	defaultBackupRetention = 7
 	// defaultMaxSchemaVersion 是未注入时的兜底最高迁移版本（当前 migrations 最高为 0008）。
-	defaultMaxSchemaVersion = 8
+	defaultMaxSchemaVersion = 9
 )
 
 // BackupInfo 是备份归档的元信息（与 internal/backup.Info 一一对应）。

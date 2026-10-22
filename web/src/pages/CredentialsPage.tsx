@@ -7,7 +7,7 @@ import { Button } from '../components/Button'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { CredentialDialog } from '../components/CredentialDialog'
 import { EmptyState } from '../components/EmptyState'
-import { KeyIcon, PlusIcon, RefreshIcon, TrashIcon } from '../components/Icons'
+import { KeyIcon, PlusIcon, RefreshIcon, ShieldCheckIcon, TrashIcon } from '../components/Icons'
 import { InlineLoading } from '../components/Loading'
 import { useToast } from '../components/Toast'
 import { useAuth } from '../lib/auth'
@@ -16,16 +16,19 @@ import { t } from '../i18n'
 
 function KindBadge({ kind }: { kind: string }) {
   const isKey = kind === 'key'
+  const isBaota = kind === 'baota'
   return (
     <span
       className={
         'inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ' +
-        (isKey
-          ? 'bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-500/10 dark:text-violet-300 dark:ring-violet-400/30'
-          : 'bg-slate-100 text-slate-600 ring-slate-500/20 dark:bg-slate-500/10 dark:text-slate-300 dark:ring-slate-400/30')
+        (isBaota
+          ? 'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/30'
+          : isKey
+            ? 'bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-500/10 dark:text-violet-300 dark:ring-violet-400/30'
+            : 'bg-slate-100 text-slate-600 ring-slate-500/20 dark:bg-slate-500/10 dark:text-slate-300 dark:ring-slate-400/30')
       }
     >
-      {isKey ? t('s.0072') : t('s.0073')}
+      {isBaota ? t('credentials.baota') : isKey ? t('s.0072') : t('s.0073')}
     </span>
   )
 }
@@ -39,8 +42,25 @@ export default function CredentialsPage() {
   const [deleting, setDeleting] = useState<Credential | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
+  const [testingId, setTestingId] = useState<string | null>(null)
+  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; message: string }>>({})
 
   const credentials = query.data ?? []
+
+  const handleTest = async (credential: Credential) => {
+    setTestingId(credential.id)
+    try {
+      const result = await api.testCredential(credential.id)
+      setTestResults((current) => ({ ...current, [credential.id]: result }))
+    } catch (caught) {
+      setTestResults((current) => ({
+        ...current,
+        [credential.id]: { ok: false, message: errorMessage(caught, t('credentials.testFailed')) },
+      }))
+    } finally {
+      setTestingId(null)
+    }
+  }
 
   const handleDelete = async () => {
     if (!deleting) return
@@ -142,14 +162,38 @@ export default function CredentialsPage() {
                     key={credential.id}
                     className="transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-900/60"
                   >
-                    <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">
+                    <td className="px-4 py-3 align-top font-medium text-slate-900 dark:text-slate-100">
                       {credential.name}
+                      {testResults[credential.id] ? (
+                        <span
+                          className={
+                            'mt-1 block max-w-[320px] rounded px-2 py-1 text-[11px] leading-relaxed break-words ' +
+                            (testResults[credential.id].ok
+                              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                              : 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300')
+                          }
+                        >
+                          {testResults[credential.id].ok ? '✓ ' : '✗ '}
+                          {testResults[credential.id].message || t('credentials.testNoMessage')}
+                        </span>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3">
                       <KindBadge kind={credential.kind} />
                     </td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
-                      {credential.username || '—'}
+                    <td className="max-w-[220px] px-4 py-3 text-slate-600 dark:text-slate-300">
+                      {credential.kind === 'baota' ? (
+                        <span className="block truncate font-mono text-xs">
+                          {credential.panel_url || '—'}
+                        </span>
+                      ) : (
+                        credential.username || '—'
+                      )}
+                      {credential.kind === 'baota' && credential.insecure_skip_verify ? (
+                        <span className="mt-0.5 block text-[11px] text-amber-600 dark:text-amber-400">
+                          {t('credentials.insecureBadge')}
+                        </span>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-500 dark:text-slate-400">
                       <span title={credential.fingerprint ?? undefined}>
@@ -165,7 +209,16 @@ export default function CredentialsPage() {
                       {formatDateTime(credential.created_at)}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex justify-end">
+                      <div className="flex justify-end gap-0.5">
+                        {credential.kind === 'baota' ? (
+                          <IconButton
+                            label={t('credentials.test')}
+                            disabled={!canWrite || testingId === credential.id}
+                            onClick={() => void handleTest(credential)}
+                          >
+                            <ShieldCheckIcon className="h-4 w-4" />
+                          </IconButton>
+                        ) : null}
                         <IconButton
                           label={t('s.0987')}
                           tone="danger"

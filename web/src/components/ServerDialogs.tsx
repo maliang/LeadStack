@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { api, type Server, type ServerGroup } from '../lib/api'
+import { api, type Credential, type Server, type ServerGroup } from '../lib/api'
 import { errorMessage } from '../lib/errors'
 import { validateServerHost, parsePort } from '../lib/network'
 import { formatLatency } from '../lib/format'
@@ -31,6 +31,8 @@ export function EditServerDialog({ server, onClose, onSaved }: EditServerDialogP
   const [port, setPort] = useState('')
   const [groupIds, setGroupIds] = useState<string[]>([])
   const [serverGroups, setServerGroups] = useState<ServerGroup[]>([])
+  const [panelCredentials, setPanelCredentials] = useState<Credential[]>([])
+  const [panelCredentialId, setPanelCredentialId] = useState('')
   const [saving, setSaving] = useState(false)
   const [errors, setErrors] = useState<FieldErrors>({})
 
@@ -40,6 +42,7 @@ export function EditServerDialog({ server, onClose, onSaved }: EditServerDialogP
     setHost(server.host)
     setPort(server.port === null ? '' : String(server.port))
     setGroupIds(server.group_ids)
+    setPanelCredentialId(server.panel_credential_id ?? '')
     setErrors({})
     setSaving(false)
   }, [server])
@@ -48,14 +51,13 @@ export function EditServerDialog({ server, onClose, onSaved }: EditServerDialogP
   useEffect(() => {
     if (!server) return
     let cancelled = false
-    api
-      .serverGroups()
-      .then((groups) => {
-        if (!cancelled) setServerGroups(groups)
-      })
-      .catch(() => {
-        /* 分组接口不可用时保持空列表 */
-      })
+    Promise.allSettled([api.serverGroups(), api.credentials()]).then(([groupResult, credentialResult]) => {
+      if (cancelled) return
+      if (groupResult.status === 'fulfilled') setServerGroups(groupResult.value)
+      if (credentialResult.status === 'fulfilled') {
+        setPanelCredentials(credentialResult.value.filter((credential) => credential.kind === 'baota'))
+      }
+    })
     return () => {
       cancelled = true
     }
@@ -85,6 +87,7 @@ export function EditServerDialog({ server, onClose, onSaved }: EditServerDialogP
         host: host.trim(),
         port: parsedPort ?? 22,
         group_ids: groupIds,
+        panel_credential_id: panelCredentialId,
       })
       toast(t('server.edit.saved'), 'success')
       onSaved()
@@ -237,6 +240,29 @@ export function EditServerDialog({ server, onClose, onSaved }: EditServerDialogP
               emptyText={t('groups.noGroups')}
             />
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="server-panel-credential" className="block text-sm font-medium text-slate-700 dark:text-slate-200">
+            {t('server.panelCredential')}
+          </label>
+          <select
+            id="server-panel-credential"
+            value={panelCredentialId}
+            onChange={(event) => setPanelCredentialId(event.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+          >
+            <option value="">{t('server.panelCredentialNone')}</option>
+            {panelCredentials.map((credential) => (
+              <option key={credential.id} value={credential.id}>
+                {credential.name}
+                {credential.panel_url ? `（${credential.panel_url}）` : ''}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+            {t('server.panelCredentialHint')}
+          </p>
         </div>
 
         {addressChanged ? (

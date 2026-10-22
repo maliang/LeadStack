@@ -32,6 +32,9 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
   const [passphrase, setPassphrase] = useState('')
   const [keyFileName, setKeyFileName] = useState('')
   const [showKey, setShowKey] = useState(false)
+  const [panelUrl, setPanelUrl] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [insecureSkipVerify, setInsecureSkipVerify] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -45,6 +48,9 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
     setPassphrase('')
     setKeyFileName('')
     setShowKey(false)
+    setPanelUrl('')
+    setApiKey('')
+    setInsecureSkipVerify(false)
     setSaving(false)
     setError(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
@@ -72,9 +78,19 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
       setError(t('s.0391'))
       return
     }
-    if (!username.trim()) {
+    if (kind !== 'baota' && !username.trim()) {
       setError(t('s.0392'))
       return
+    }
+    if (kind === 'baota') {
+      if (!/^https?:\/\/\S+$/i.test(panelUrl.trim())) {
+        setError(t('credentials.errorPanelUrl'))
+        return
+      }
+      if (!apiKey.trim()) {
+        setError(t('credentials.errorApiKey'))
+        return
+      }
     }
     if (kind === 'password' && !password) {
       setError(t('s.0393'))
@@ -89,15 +105,23 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
     setError(null)
     try {
       const created = await api.createCredential(
-        kind === 'password'
-          ? { name: name.trim(), kind: 'password', username: username.trim(), password }
-          : {
+        kind === 'baota'
+          ? {
               name: name.trim(),
-              kind: 'key',
-              username: username.trim(),
-              private_key: privateKey,
-              passphrase: passphrase || undefined,
-            },
+              kind: 'baota',
+              panel_url: panelUrl.trim(),
+              api_key: apiKey.trim(),
+              insecure_skip_verify: insecureSkipVerify,
+            }
+          : kind === 'password'
+            ? { name: name.trim(), kind: 'password', username: username.trim(), password }
+            : {
+                name: name.trim(),
+                kind: 'key',
+                username: username.trim(),
+                private_key: privateKey,
+                passphrase: passphrase || undefined,
+              },
       )
       // 提交成功即清空内存中的密钥，不保留、不回显
       reset()
@@ -141,11 +165,12 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
       <form id="credential-form" onSubmit={handleSubmit} className="space-y-4">
         <div>
           <span className={labelClass}>{t('s.0399')}</span>
-          <div className="mt-1.5 grid grid-cols-2 gap-2">
+          <div className="mt-1.5 grid gap-2 sm:grid-cols-3">
             {(
               [
                 { value: 'password', label: t('s.0073'), hint: t('s.0400') },
                 { value: 'key', label: t('s.0072'), hint: t('s.0401') },
+                { value: 'baota', label: t('credentials.baota'), hint: t('credentials.baotaHint') },
               ] as const
             ).map((option) => (
               <button
@@ -184,22 +209,69 @@ export function CredentialDialog({ open, onClose, onCreated }: CredentialDialogP
               className={inputClass + ' mt-1.5'}
             />
           </div>
-          <div>
-            <label htmlFor="credential-username" className={labelClass}>
-              {t('s.0112')}
-            </label>
-            <input
-              id="credential-username"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              autoComplete="off"
-              placeholder="root"
-              className={inputClass + ' mt-1.5'}
-            />
-          </div>
+          {kind !== 'baota' ? (
+            <div>
+              <label htmlFor="credential-username" className={labelClass}>
+                {t('s.0112')}
+              </label>
+              <input
+                id="credential-username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                autoComplete="off"
+                placeholder="root"
+                className={inputClass + ' mt-1.5'}
+              />
+            </div>
+          ) : null}
         </div>
 
-        {kind === 'password' ? (
+        {kind === 'baota' ? (
+          <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-500/30 dark:bg-amber-500/10">
+            <div>
+              <label htmlFor="credential-panel-url" className={labelClass}>
+                {t('credentials.panelUrl')}
+              </label>
+              <input
+                id="credential-panel-url"
+                value={panelUrl}
+                onChange={(event) => setPanelUrl(event.target.value)}
+                placeholder="https://1.2.3.4:8888"
+                className={inputClass + ' mt-1.5 font-mono text-xs'}
+              />
+            </div>
+            <div>
+              <label htmlFor="credential-api-key" className={labelClass}>
+                {t('credentials.apiKey')}
+              </label>
+              <input
+                id="credential-api-key"
+                type="password"
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                autoComplete="new-password"
+                className={inputClass + ' mt-1.5 font-mono text-xs'}
+              />
+              <p className="mt-1 text-xs text-amber-800/90 dark:text-amber-200/90">
+                {t('credentials.apiKeyHint')}
+              </p>
+            </div>
+            <label className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={insecureSkipVerify}
+                onChange={(event) => setInsecureSkipVerify(event.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 dark:border-slate-600 dark:bg-slate-800"
+              />
+              <span>
+                {t('credentials.insecureSkipVerify')}
+                <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">
+                  {t('credentials.insecureSkipVerifyHint')}
+                </span>
+              </span>
+            </label>
+          </div>
+        ) : kind === 'password' ? (
           <div>
             <label htmlFor="credential-password" className={labelClass}>
               {t('s.0073')}

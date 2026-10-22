@@ -12,6 +12,8 @@ import (
 
 	"github.com/maliang/leadstack/internal/deploy"
 	"github.com/maliang/leadstack/internal/store"
+
+	"github.com/maliang/leadstack/internal/credential"
 )
 
 // 发布编排参数。
@@ -32,6 +34,9 @@ type planRunner interface {
 var _ planRunner = (*deploy.Executor)(nil)
 
 type deployOrchestrator struct {
+	cipher         *credential.Cipher
+	artifactsDir   string
+	panelFactory   PanelClientFactory
 	st             *store.Store
 	exec           planRunner
 	logger         *slog.Logger
@@ -65,6 +70,12 @@ type DeployOrchestratorOptions struct {
 	// PublicURLResolver 实时解析控制台对外地址（settings > env > default）；
 	// 为 nil 时使用 Options.PublicURL（静态值）。改设置后无需重启即生效。
 	PublicURLResolver func(ctx context.Context) (string, error)
+	// Cipher 用于解密宝塔面板凭据；provider=baota 的应用部署必需。
+	Cipher *credential.Cipher
+	// ArtifactsDir 是上传制品的落盘目录（provider=baota 时需要读取制品内容）。
+	ArtifactsDir string
+	// PanelFactory 构造宝塔面板客户端（测试可注入替身）；为 nil 时使用真实客户端。
+	PanelFactory PanelClientFactory
 	// PlanBuilder / RollbackBuilder 可注入替身（测试用）；默认为 deploy.Build / deploy.Rollback。
 	PlanBuilder     func(tmpl deploy.Template, art deploy.Artifact, p deploy.BuildParams) (deploy.Plan, error)
 	RollbackBuilder func(p deploy.Plan) (deploy.Plan, error)
@@ -157,8 +168,11 @@ func newDeployOrchestrator(st *store.Store, runner DeployRunner, opts DeployOrch
 	return &deployOrchestrator{
 		st: st, exec: exec, logger: logger, maxConc: concurrency,
 		public: strings.TrimSuffix(opts.PublicURL, "/"), publicResolver: opts.PublicURLResolver,
-		root:        opts.DeployRoot,
-		buildPlanFn: buildFn, buildRollbackFn: rollbackFn,
+		root:         opts.DeployRoot,
+		cipher:       opts.Cipher,
+		artifactsDir: opts.ArtifactsDir,
+		panelFactory: opts.PanelFactory,
+		buildPlanFn:  buildFn, buildRollbackFn: rollbackFn,
 		running: map[string]context.CancelFunc{},
 		rerun:   map[string]bool{},
 	}
@@ -327,6 +341,12 @@ func (o *deployOrchestrator) runOne(ctx context.Context, release *store.Release,
 		}
 	}
 	logf("system", fmt.Sprintf("=== 开始在服务器 %s 上部署应用 %s v%s ===\n", run.ServerID, app.Slug, release.Version))
+
+	// 宝塔面板通道：与 SSH/agent 的 shell 计划并列，走面板 API 完成建站与解压。
+	if app.Provider == store.AppProviderBaota {
+		o.runOneBaota(ctx, release, app, artifact, run, logf)
+		return
+	}
 
 	// 上一成功版本：用于回滚与占位符。
 	prev, err := o.previousSuccessRelease(ctx, release, run.ServerID)

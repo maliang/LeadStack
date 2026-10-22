@@ -117,6 +117,7 @@ export default function ServerDetailPage() {
 
   const { t } = useI18n()
   const { can } = useAuth()
+  const credentialsQuery = usePolling(api.credentials, 60_000)
   const [searchParams, setSearchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
   const detailTabs = ['overview', 'checks', 'monitor', 'terminal', 'files', 'logs'] as const
@@ -393,6 +394,13 @@ export default function ServerDetailPage() {
             <InfoRow label={t('s.0066')}>{serverAddress(server)}</InfoRow>
             <InfoRow label={t('s.1094')}>
               {server.mode === 'agent' ? t('s.1095') : t('s.0036')}
+            </InfoRow>
+            <InfoRow label={t('server.panelCredential')}>
+              {server.panel_credential_id
+                ? (credentialsQuery.data ?? []).find(
+                    (credential) => credential.id === server.panel_credential_id,
+                  )?.name ?? server.panel_credential_id
+                : t('server.panelCredentialNone')}
             </InfoRow>
             <InfoRow label={t('s.0062')}>
               {server.group_names.length > 0 ? (

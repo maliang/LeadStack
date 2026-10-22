@@ -9,7 +9,7 @@ import { formatDateTime, formatRelativeTime } from '../lib/format'
 import { AppDialog } from '../components/AppDialog'
 import { Button, IconButton } from '../components/Button'
 import { ConfirmDialog } from '../components/ConfirmDialog'
-import { ReleaseStatusBadge, TemplateKindBadge } from '../components/DeployBadges'
+import { AppProviderBadge, ReleaseStatusBadge, TemplateKindBadge } from '../components/DeployBadges'
 import { EmptyState } from '../components/EmptyState'
 import {
   ChevronRightIcon,
@@ -279,9 +279,20 @@ export default function AppsPage() {
                           >
                             {app.name}
                           </Link>
-                          <span className="mt-0.5 block font-mono text-[11px] text-slate-400 dark:text-slate-500">
-                            {app.slug}
+                          <span className="mt-0.5 flex flex-wrap items-center gap-1">
+                            <span className="font-mono text-[11px] text-slate-400 dark:text-slate-500">
+                              {app.slug}
+                            </span>
+                            <AppProviderBadge provider={app.provider} />
                           </span>
+                          {app.provider === 'baota' && app.site_name ? (
+                            <span className="mt-0.5 block text-[11px] text-amber-700 dark:text-amber-300">
+                              {t('apps.siteLine', {
+                                site: app.site_name,
+                                port: app.site_port ?? '—',
+                              })}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="max-w-[220px] px-4 py-3 align-top">
                           <span

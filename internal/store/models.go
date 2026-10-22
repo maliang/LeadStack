@@ -28,10 +28,12 @@ type Server struct {
 	Kernel       *string `json:"kernel"`
 	CreatedAt    int64   `json:"created_at"`
 	// 纳管 扩展列（契约第 11 节）。
-	CredentialID  *string `json:"credential_id"`
-	Group         *string `json:"group"`
-	HostKeyPolicy string  `json:"host_key_policy"`
-	LastError     *string `json:"last_error"`
+	CredentialID *string `json:"credential_id"`
+	// PanelCredentialID 是宝塔面板凭据（kind=baota），与 SSH 凭据相互独立。
+	PanelCredentialID *string `json:"panel_credential_id"`
+	Group             *string `json:"group"`
+	HostKeyPolicy     string  `json:"host_key_policy"`
+	LastError         *string `json:"last_error"`
 }
 
 // 服务器接入模式。
@@ -285,6 +287,12 @@ type App struct {
 	Root        *string `json:"root"`
 	Description *string `json:"description"`
 	CreatedAt   int64   `json:"created_at"`
+	// 部署方式与宝塔面板站点配置（provider=baota 时生效）。
+	Provider        string  `json:"provider"`
+	SiteName        *string `json:"site_name"`
+	SitePort        *int    `json:"site_port"`
+	SiteType        *string `json:"site_type"`
+	HealthcheckPath *string `json:"healthcheck_path"`
 }
 
 // DeployTemplate 是部署模板（版本化文本，发布时冻结快照）。

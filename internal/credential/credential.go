@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -30,6 +31,8 @@ const (
 	KindPassword Kind = "password"
 	// KindKey 表示用户名 + 私钥（可选 passphrase）认证。
 	KindKey Kind = "key"
+	// KindBaota 表示宝塔面板 API 凭据（面板地址 + API 密钥），不用于 SSH 登录。
+	KindBaota Kind = "baota"
 )
 
 // Secret 是凭证明文结构，加密后作为 BLOB 落库。
@@ -39,6 +42,11 @@ type Secret struct {
 	Password   string `json:"password,omitempty"`
 	PrivateKey []byte `json:"private_key,omitempty"` // PEM 原文
 	Passphrase string `json:"passphrase,omitempty"`
+
+	// 宝塔面板凭据（Kind=baota 时使用）。
+	PanelURL           string `json:"panel_url,omitempty"`
+	APIKey             string `json:"api_key,omitempty"`
+	InsecureSkipVerify bool   `json:"insecure_skip_verify,omitempty"`
 }
 
 // LoadOrCreateMasterKey 读取 32 字节主密钥；文件不存在则安全随机构造并以 0600 落盘。
@@ -249,6 +257,16 @@ func Validate(s Secret) error {
 		if s.Passphrase != "" {
 			return errors.New("credential: password 类型不能提供 passphrase")
 		}
+	case KindBaota:
+		if strings.TrimSpace(s.PanelURL) == "" {
+			return errors.New("credential: baota 类型必须提供 panel_url")
+		}
+		if strings.TrimSpace(s.APIKey) == "" {
+			return errors.New("credential: baota 类型必须提供 api_key")
+		}
+		if len(s.PrivateKey) != 0 || s.Password != "" || s.Passphrase != "" {
+			return errors.New("credential: baota 类型不能同时提供 SSH 凭据字段")
+		}
 	case KindKey:
 		if len(s.PrivateKey) == 0 {
 			return errors.New("credential: key 类型必须提供 private_key")
@@ -260,7 +278,7 @@ func Validate(s Secret) error {
 			return err
 		}
 	default:
-		return fmt.Errorf("credential: 未知凭证类型 %q（应为 %q 或 %q）", s.Kind, KindPassword, KindKey)
+		return fmt.Errorf("credential: 未知凭证类型 %q（应为 %q / %q / %q）", s.Kind, KindPassword, KindKey, KindBaota)
 	}
 	return nil
 }

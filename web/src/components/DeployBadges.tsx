@@ -145,3 +145,26 @@ export function ArtifactKindBadge({
     </span>
   )
 }
+
+export function AppProviderBadge({
+  provider,
+  className,
+}: {
+  provider: string | null | undefined
+  className?: string
+}) {
+  const isBaota = provider === 'baota'
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset',
+        isBaota
+          ? 'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/30'
+          : 'bg-slate-100 text-slate-600 ring-slate-500/20 dark:bg-slate-500/10 dark:text-slate-300 dark:ring-slate-400/30',
+        className,
+      )}
+    >
+      {isBaota ? t('apps.providerBaota') : t('apps.providerBuiltin')}
+    </span>
+  )
+}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { api, type AppItem } from '../lib/api'
+import { api, type AppItem, type AppProvider, type BaotaSiteType } from '../lib/api'
 import { errorMessage } from '../lib/errors'
 import { Button } from './Button'
 import { Modal } from './Modal'
@@ -37,6 +37,11 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
   const [root, setRoot] = useState('')
   const [rootTouched, setRootTouched] = useState(false)
   const [description, setDescription] = useState('')
+  const [provider, setProvider] = useState<AppProvider>('builtin')
+  const [siteName, setSiteName] = useState('')
+  const [sitePort, setSitePort] = useState('')
+  const [siteType, setSiteType] = useState<BaotaSiteType>('static')
+  const [healthcheckPath, setHealthcheckPath] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -48,6 +53,11 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
     setRoot(app?.root ?? '')
     setRootTouched(false)
     setDescription(app?.description ?? '')
+    setProvider(app?.provider === 'baota' ? 'baota' : 'builtin')
+    setSiteName(app?.site_name ?? '')
+    setSitePort(app?.site_port ? String(app.site_port) : '')
+    setSiteType(app?.site_type === 'php' ? 'php' : 'static')
+    setHealthcheckPath(app?.healthcheck_path ?? '')
     setSaving(false)
     setError(null)
   }, [open, app])
@@ -65,6 +75,21 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
       setError(t('s.0235'))
       return
     }
+    if (provider === 'baota') {
+      if (!siteName.trim()) {
+        setError(t('apps.errorSiteName'))
+        return
+      }
+      const port = Number(sitePort)
+      if (!/^\d+$/.test(sitePort.trim()) || !Number.isInteger(port) || port < 1 || port > 65535) {
+        setError(t('apps.errorSitePort'))
+        return
+      }
+      if (healthcheckPath.trim() !== '' && !healthcheckPath.trim().startsWith('/')) {
+        setError(t('apps.errorHealthcheck'))
+        return
+      }
+    }
     setSaving(true)
     setError(null)
     try {
@@ -73,6 +98,12 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
         slug: effectiveSlug,
         root: effectiveRoot.trim() || undefined,
         description: description.trim() || undefined,
+        provider,
+        site_name: provider === 'baota' ? siteName.trim() : undefined,
+        site_port: provider === 'baota' ? Number(sitePort) : undefined,
+        site_type: provider === 'baota' ? siteType : null,
+        healthcheck_path:
+          provider === 'baota' && healthcheckPath.trim() ? healthcheckPath.trim() : null,
       }
       if (editing && app) {
         await api.updateApp(app.id, payload)
@@ -95,7 +126,7 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
       open={open}
       onClose={onClose}
       title={editing ? t('s.0239') : t('s.0240')}
-      description={t('s.0241')}
+      description={provider === 'baota' ? t('apps.baotaDeployHint') : t('s.0241')}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>
@@ -140,6 +171,7 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
           </div>
         </div>
 
+        {provider === 'baota' ? null : (
         <div>
           <label htmlFor="app-root" className={labelClass}>
             {t('s.0246')}
@@ -161,6 +193,99 @@ export function AppDialog({ open, app, onClose, onSaved }: AppDialogProps) {
             <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
               {t('s.0250')}
             </p>
+          ) : null}
+        </div>
+        )}
+
+        <div>
+          <span className={labelClass}>{t('apps.provider')}</span>
+          <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+            {(
+              [
+                { value: 'builtin', title: t('apps.providerBuiltin'), hint: t('apps.providerBuiltinHint') },
+                { value: 'baota', title: t('apps.providerBaota'), hint: t('apps.providerBaotaHint') },
+              ] as const
+            ).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setProvider(option.value)}
+                className={
+                  'rounded-lg border px-3 py-2 text-left transition-colors ' +
+                  (provider === option.value
+                    ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-400 dark:bg-indigo-500/10'
+                    : 'border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-600')
+                }
+              >
+                <span className="block text-sm font-medium text-slate-800 dark:text-slate-100">
+                  {option.title}
+                </span>
+                <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">
+                  {option.hint}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {provider === 'baota' ? (
+            <div className="mt-3 space-y-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-500/30 dark:bg-amber-500/10">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="app-site-name" className={labelClass}>
+                    {t('apps.siteName')}
+                  </label>
+                  <input
+                    id="app-site-name"
+                    value={siteName}
+                    onChange={(event) => setSiteName(event.target.value)}
+                    placeholder={effectiveSlug || 'order-service'}
+                    className={inputClass + ' mt-1.5'}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="app-site-port" className={labelClass}>
+                    {t('apps.sitePort')}
+                  </label>
+                  <input
+                    id="app-site-port"
+                    value={sitePort}
+                    onChange={(event) => setSitePort(event.target.value)}
+                    inputMode="numeric"
+                    placeholder="80"
+                    className={inputClass + ' mt-1.5'}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="app-site-type" className={labelClass}>
+                    {t('apps.siteType')}
+                  </label>
+                  <select
+                    id="app-site-type"
+                    value={siteType}
+                    onChange={(event) => setSiteType(event.target.value as BaotaSiteType)}
+                    className={inputClass + ' mt-1.5'}
+                  >
+                    <option value="static">{t('apps.siteTypeStatic')}</option>
+                    <option value="php">{t('apps.siteTypePhp')}</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="app-healthcheck" className={labelClass}>
+                    {t('apps.healthcheckPath')}
+                  </label>
+                  <input
+                    id="app-healthcheck"
+                    value={healthcheckPath}
+                    onChange={(event) => setHealthcheckPath(event.target.value)}
+                    placeholder="/healthz"
+                    className={inputClass + ' mt-1.5 font-mono text-xs'}
+                  />
+                </div>
+              </div>
+              <p className="text-xs leading-relaxed text-amber-900/90 dark:text-amber-200/90">
+                {t('apps.baotaDeployHint')}
+              </p>
+            </div>
           ) : null}
         </div>
 

@@ -1791,3 +1791,89 @@ ALTER TABLE users ADD COLUMN last_failed_at  INTEGER NOT NULL DEFAULT 0;
 8. IP 限流：窗口内超限 → 429 `rate_limited` + `Retry-After`；
 9. 内置角色不可改不可删（403/409 语义）；
 10. 被用户引用的自定义角色删除 → 409。
+
+---
+
+## 57. 宝塔面板部署通道（`provider=baota`）
+
+### 57.1 定位
+
+部署有两条**并列通道**，由应用的 `provider` 选择：
+
+| provider | 执行位置 | 适用场景 |
+|---|---|---|
+| `builtin`（默认） | 目标机（SSH 直连或 agent 任务） | 通用：systemd/compose/二进制，模板即脚本 |
+| `baota` | 宝塔面板 API（控制端发起） | 面板托管的机器：建站 → 上传 zip → 解压即生效 |
+
+`baota` 通道**不需要目标机 SSH**，也不需要 `LEADSTACK_PUBLIC_URL`（制品由控制端读取后直传面板）。
+代价是制品必须是 **zip**、单包 ≤ **16MB**（`SaveFileBody` 走 base64），且 v1 只覆盖 `static`/`php` 站点
+（node 进程管理、SSL、反代不在 v1 范围，仍可在面板里手工配）。
+
+### 57.2 数据模型（迁移 0009）
+
+```sql
+ALTER TABLE apps ADD COLUMN provider       TEXT NOT NULL DEFAULT 'builtin'; -- builtin | baota
+ALTER TABLE apps ADD COLUMN site_name      TEXT;   -- 面板站点名，默认取 slug
+ALTER TABLE apps ADD COLUMN site_port      INTEGER;-- 站点端口，默认 80
+ALTER TABLE apps ADD COLUMN site_type      TEXT;   -- static | php
+ALTER TABLE apps ADD COLUMN healthcheck_path TEXT; -- 部署后健康检查路径，空=跳过
+ALTER TABLE servers ADD COLUMN panel_credential_id TEXT; -- kind=baota 的凭据
+```
+
+约定：
+- 站点根目录固定 `/www/wwwroot/<site_name>`；
+- `panel_credential_id` 与 SSH 的 `credential_id` **相互独立**（同一台机器可以两者都绑）；
+- 面板凭据 `kind=baota`，密文里存 `panel_url` + `api_key` + `insecure_skip_verify`；
+  **任何接口都不回显 `api_key`**，`GET /credentials` 只回 `panel_url` 与 `insecure_skip_verify`。
+
+### 57.3 鉴权与签名
+
+面板侧开关：`设置 → API 接口 → 开启`，并把**控制端出口 IP** 加入白名单。
+每次请求带 `request_time`（秒）与 `request_token = md5(md5(api_key) + request_time)`，
+同时在该请求的 Cookie 里带同一个 `request_token`（兼容校验 Cookie 的面板版本）。
+响应 `{"status":false,"msg":"…"}` 统一转成错误，避免「HTTP 200 但没做成」的假成功。
+
+### 57.4 部署流程（每台服务器）
+
+```
+1 Ping(GetSystemTotal)          连接/密钥/白名单校验
+2 EnsureSite                   站点存在则复用（绝不改写目录/端口），不存在才 AddSite
+3 读取制品                      upload 走控制端存储 / url 走下载；校验 sha256；必须 PK zip
+4 ZipDir                       备份站点目录到 <站点>.backup-<ts>.zip（best-effort）
+5 SaveFileBody + Unzip         上传 /www/wwwroot/<site>-release-<id>.zip 并解压覆盖站点根
+6 健康检查                      可选，GET http://<host>:<port><healthcheck_path>，2xx/3xx 通过
+```
+
+失败处理：
+- 第 5/6 步失败 → 用第 4 步的备份 zip 覆盖回去（best-effort），`failed_step` 记为 `unzip` / `healthcheck`；
+- 第 4 步备份失败 → 只告警，不阻断（此时也失去自动回滚能力，日志里明确写出）；
+- 面板连接失败 → 直接失败，`message` 透传面板错误（如「签名校验失败」）。
+
+### 57.5 REST
+
+- `POST /api/v1/credentials`：`{"name":"bt","kind":"baota","panel_url":"https://1.2.3.4:8888","api_key":"…","insecure_skip_verify":true}` → 201
+- `POST /api/v1/credentials/{id}/test` → `{"ok":true,"message":"面板连接正常"}`；失败也是 200 + `ok:false`（把面板原因原样带出）
+- `POST/PATCH /api/v1/apps`：新增 `provider`、`site_name`、`site_port`、`site_type`、`healthcheck_path`
+- `POST/PATCH /api/v1/servers`：新增 `panel_credential_id`（空串=解绑；非 baota 凭据 → 400）
+- `binary` 模板允许 `content` 为空（表示本次发布不重启服务；baota 通道直接用空模板）
+
+### 57.6 验收（`scripts/verify_baota.sh`，28 项）
+
+用一个**校验签名的 mock 面板**跑完整链路：
+1. 创建 baota 凭据 → 连通性 `ok:true`；
+2. 错误密钥 → `ok:false`（不误报）；缺 `api_key` → 400；
+3. 服务器绑定面板凭据并回显；把 SSH 凭据绑成面板凭据 → 400；
+4. 应用 `provider=baota` 落库；非法 provider → 400；
+5. 上传 zip → 建发布 → **发布成功**，面板依次收到 `GetSystemTotal/AddSite/SaveFileBody/Unzip`，建站用应用配置的站点名；
+6. 非 zip 制品 → 发布失败且信息指明「要求 zip」；
+7. 面板密钥错误 → 发布失败且信息含面板原因。
+
+### 57.7 已知限制（诚实清单）
+
+- 未在**真实宝塔面板**上验证过（开发环境没有面板实例）。字段名按 7.x/8.x 社区 SDK 约定实现，
+  集中在 `internal/panel/baota/client.go` 的 `endpoints` 常量与各方法参数里，面板版本差异只需改这一处；
+  上线前请用控制台「测试连接」+ 一次小 zip 对真机验证。
+- 单制品 ≤16MB；更大请用 `builtin`（SSH/agent）通道。
+- 只支持 `static`/`php` 站点；`node` 项目、SSL、反向代理不自动配置。
+- 回滚粒度是「上一版站点目录的 zip 备份」；多次发布会在站点旁累积 `.backup-<ts>.zip`，
+  需要定期清理（面板文件管理里删）。

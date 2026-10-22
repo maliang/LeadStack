@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/maliang/leadstack/internal/store"
 	"github.com/maliang/leadstack/pkg/protocol"
+
+	"github.com/maliang/leadstack/internal/credential"
 )
 
 // 服务器字段的长度约束。
@@ -51,19 +54,22 @@ type serverPayload struct {
 	// 一等公民分组（授权单元，契约 §53.1）；与上面的自由文本 group 并存。
 	GroupIDs   []string `json:"group_ids"`
 	GroupNames []string `json:"group_names"`
+	// 宝塔面板凭据（kind=baota）：仅 provider=baota 的应用部署时使用。
+	PanelCredentialID *string `json:"panel_credential_id"`
 }
 
 // createServerRequest 是新增服务器请求体（纳管 扩展 credential_id/mode/group/tags/host_key_policy）。
 type createServerRequest struct {
-	Name          string    `json:"name"`
-	GroupIDs      *[]string `json:"group_ids"`
-	Host          string    `json:"host"`
-	Port          *int      `json:"port"`
-	Mode          string    `json:"mode"`
-	CredentialID  *string   `json:"credential_id"`
-	Group         *string   `json:"group"`
-	Tags          *[]string `json:"tags"`
-	HostKeyPolicy string    `json:"host_key_policy"`
+	Name              string    `json:"name"`
+	GroupIDs          *[]string `json:"group_ids"`
+	PanelCredentialID *string   `json:"panel_credential_id"`
+	Host              string    `json:"host"`
+	Port              *int      `json:"port"`
+	Mode              string    `json:"mode"`
+	CredentialID      *string   `json:"credential_id"`
+	Group             *string   `json:"group"`
+	Tags              *[]string `json:"tags"`
+	HostKeyPolicy     string    `json:"host_key_policy"`
 }
 
 // patchServerRequest 是改名/改标签/改分组请求体；nil 表示不改。
@@ -78,6 +84,8 @@ type patchServerRequest struct {
 	Port *int    `json:"port"`
 	// GroupIDs 整包替换服务器的一等公民分组归属（缺省表示不改）。
 	GroupIDs *[]string `json:"group_ids"`
+	// PanelCredentialID 绑定宝塔面板凭据（空串表示解绑）。
+	PanelCredentialID *string `json:"panel_credential_id"`
 }
 
 // handleListServers 处理 GET /api/v1/servers，支持 ?group=&tag=&status=&mode= 过滤。
@@ -234,6 +242,12 @@ func (a *API) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 		}
 		credentialID = &cid
 	}
+	// 可选：绑定宝塔面板凭据（provider=baota 的应用部署时使用）。
+	panelCredentialID, err := a.validatePanelCredential(ctx, req.PanelCredentialID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+		return
+	}
 
 	tagsJSON := "[]"
 	if req.Tags != nil {
@@ -262,17 +276,18 @@ func (a *API) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	srv := &store.Server{
-		ID:            uuid.NewString(),
-		Name:          name,
-		Host:          host,
-		Port:          port,
-		Mode:          mode,
-		TagsJSON:      tagsJSON,
-		Status:        protocol.StatusUnknown,
-		CreatedAt:     a.nowMS(),
-		CredentialID:  credentialID,
-		Group:         group,
-		HostKeyPolicy: policy,
+		ID:                uuid.NewString(),
+		Name:              name,
+		Host:              host,
+		Port:              port,
+		Mode:              mode,
+		TagsJSON:          tagsJSON,
+		Status:            protocol.StatusUnknown,
+		CreatedAt:         a.nowMS(),
+		CredentialID:      credentialID,
+		PanelCredentialID: panelCredentialID,
+		Group:             group,
+		HostKeyPolicy:     policy,
 	}
 	if err := a.st.CreateServer(ctx, srv); err != nil {
 		a.writeStoreError(w, r, err)
@@ -304,7 +319,7 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
 		return
 	}
-	if req.Name == nil && req.Tags == nil && req.Group == nil && req.GroupIDs == nil &&
+	if req.Name == nil && req.Tags == nil && req.Group == nil && req.GroupIDs == nil && req.PanelCredentialID == nil &&
 		req.HostKeyPolicy == nil && req.CredentialID == nil &&
 		req.Host == nil && req.Port == nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument,
@@ -370,6 +385,11 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 		}
 		credentialID = &cid // 空字符串表示解绑
 	}
+	panelCredentialID, err := a.validatePanelCredential(ctx, req.PanelCredentialID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+		return
+	}
 
 	// host/port：允许事后修改（契约 49.2）。
 	current, err := a.st.GetServer(ctx, id)
@@ -409,13 +429,14 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	srv, err := a.st.UpdateServerFields(ctx, id, store.ServerUpdate{
-		Name:          name,
-		TagsJSON:      tagsJSON,
-		Group:         group,
-		HostKeyPolicy: policy,
-		CredentialID:  credentialID,
-		Host:          hostPtr,
-		Port:          portPtr,
+		Name:              name,
+		TagsJSON:          tagsJSON,
+		Group:             group,
+		HostKeyPolicy:     policy,
+		CredentialID:      credentialID,
+		PanelCredentialID: panelCredentialID,
+		Host:              hostPtr,
+		Port:              portPtr,
 	})
 	if err != nil {
 		a.writeStoreError(w, r, err)
@@ -468,24 +489,25 @@ func (a *API) handleDeleteServer(w http.ResponseWriter, r *http.Request) {
 // toServerPayload 把存储模型转换为对外结构，并实时推导在线状态。
 func toServerPayload(srv store.Server, nowMS int64, metrics map[string]float64, hostInfo json.RawMessage) serverPayload {
 	out := serverPayload{
-		ID:            srv.ID,
-		Name:          srv.Name,
-		Host:          srv.Host,
-		Port:          srv.Port,
-		Mode:          srv.Mode,
-		Status:        deriveStatus(srv, nowMS),
-		LastSeenAt:    srv.LastSeenAt,
-		AgentVersion:  srv.AgentVersion,
-		OS:            srv.OS,
-		Arch:          srv.Arch,
-		Kernel:        srv.Kernel,
-		Tags:          parseTags(srv.TagsJSON),
-		CreatedAt:     srv.CreatedAt,
-		CredentialID:  srv.CredentialID,
-		Group:         srv.Group,
-		HostKeyPolicy: srv.HostKeyPolicy,
-		LastError:     srv.LastError,
-		HostInfo:      hostInfo,
+		ID:                srv.ID,
+		Name:              srv.Name,
+		Host:              srv.Host,
+		Port:              srv.Port,
+		Mode:              srv.Mode,
+		Status:            deriveStatus(srv, nowMS),
+		LastSeenAt:        srv.LastSeenAt,
+		AgentVersion:      srv.AgentVersion,
+		OS:                srv.OS,
+		Arch:              srv.Arch,
+		Kernel:            srv.Kernel,
+		Tags:              parseTags(srv.TagsJSON),
+		CreatedAt:         srv.CreatedAt,
+		CredentialID:      srv.CredentialID,
+		Group:             srv.Group,
+		HostKeyPolicy:     srv.HostKeyPolicy,
+		LastError:         srv.LastError,
+		PanelCredentialID: srv.PanelCredentialID,
+		HostInfo:          hostInfo,
 	}
 	if len(metrics) > 0 {
 		out.MetricsSummary = metrics
@@ -600,4 +622,26 @@ func validateMode(mode string) error {
 		}
 	}
 	return nil
+}
+
+// validatePanelCredential 校验服务器要绑定的宝塔面板凭据。
+//
+// 语义：nil 表示不改；空串表示解绑；非空则必须是已存在的 kind=baota 凭据。
+func (a *API) validatePanelCredential(ctx context.Context, raw *string) (*string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	id := strings.TrimSpace(*raw)
+	if id == "" {
+		empty := ""
+		return &empty, nil
+	}
+	cred, err := a.st.GetCredential(ctx, id)
+	if err != nil {
+		return nil, errors.New("面板凭据不存在")
+	}
+	if cred.Kind != string(credential.KindBaota) {
+		return nil, errors.New("只能绑定宝塔面板类型（baota）的凭据")
+	}
+	return &id, nil
 }

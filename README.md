@@ -320,6 +320,22 @@ db-01.internal
 
 > 若使用「上传型制品」，需配置**控制台对外地址**（设置 → 网络与端口），否则目标机无法回连下载。
 
+#### 已有宝塔面板？用面板 API 直接部署（不需要 SSH）
+
+应用可在「部署方式」里选 **宝塔面板**：控制端用面板 API 建站（或复用已有站点）→ 上传 zip → 解压到站点目录，
+可选部署后健康检查；失败会用部署前的站点备份自动回滚。
+
+1. **面板准备**：宝塔面板 →「设置 → API 接口」→ 开启 API，复制密钥，并把**控制端出口 IP** 加入白名单；
+2. **加凭据**：「凭证 → 新建凭证 → 宝塔面板」，填面板地址（如 `https://1.2.3.4:8888`）、API 密钥；
+   面板多为自签证书，内网可用「跳过证书校验」；建好后点**测试连接**确认；
+3. **绑到服务器**：服务器 →「编辑」或新建向导里选「宝塔面板凭据」（和 SSH 凭据互不影响，可以都绑）；
+4. **应用选通道**：「新建应用 → 部署方式 = 宝塔面板」，填站点名（默认 slug）、端口、站点类型（static/php）、
+   健康检查路径（可选）；
+5. **发布**：本次发布请选 **zip 制品**（≤16MB）。已有站点只会被复用，**不会改写**面板里的目录/端口配置。
+
+> 版本范围：v1 覆盖 static/php 站点；node 项目、SSL、反向代理仍需在面板里手工配置。
+> 面板端证书、上传大小限制等细节见 [架构文档 §57](docs/ARCHITECTURE.md)。
+
 ### 第 9 步：配置备份（强烈建议立刻做）
 
 「备份 → 立即备份」或让它按间隔自动备份。归档是**加密的**（`LSBAK1`），包含数据库、`master.key`、`known_hosts`，可选含制品。
@@ -658,7 +674,7 @@ bash scripts/verify_authz.sh       # 权限点、自定义角色、分组与资�
 
 - [架构与接口契约](docs/ARCHITECTURE.md) —— 改代码前必读
 - [产品与技术计划](docs/PLAN.md)
-- 交付报告：[基础骨架](docs/reports/bootstrap.md) · [服务器纳管](docs/reports/server-management.md) · [监控与检测](docs/reports/monitoring.md) · [告警](docs/reports/alerting.md) · [批量部署](docs/reports/deployment.md) · [备份恢复](docs/reports/backup.md) · [运维与协作](docs/reports/ops-and-collaboration.md) · [权限体系](docs/reports/roles-and-authz.md)
+- 交付报告：[基础骨架](docs/reports/bootstrap.md) · [服务器纳管](docs/reports/server-management.md) · [监控与检测](docs/reports/monitoring.md) · [告警](docs/reports/alerting.md) · [批量部署](docs/reports/deployment.md) · [备份恢复](docs/reports/backup.md) · [运维与协作](docs/reports/ops-and-collaboration.md) · [权限体系](docs/reports/roles-and-authz.md) · [宝塔面板部署](docs/reports/baota-deploy.md)
 - [版本升级与回滚 runbook](docs/UPGRADE.md)（systemd / Docker / agent 升级，含回滚与兼容性承诺）
 - [发布验证记录](docs/DEPLOY-VERIFY.md)（GoReleaser / Docker 实测）
 

@@ -189,6 +189,11 @@ export function ServerTable({
                         {name}
                       </span>
                     ))}
+                    {server.panel_credential_id ? (
+                      <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+                        {t('server.panelBound')}
+                      </span>
+                    ) : null}
                     {server.mode === 'agent' && server.agent_version ? (
                       <span className="text-[11px] text-slate-400 dark:text-slate-500">
                         agent {server.agent_version}

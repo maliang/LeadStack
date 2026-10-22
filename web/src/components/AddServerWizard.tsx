@@ -78,6 +78,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
   const [sshPort, setSshPort] = useState('22')
   const [defaultSshPort, setDefaultSshPort] = useState(22)
   const [sshCredentialId, setSshCredentialId] = useState('')
+  const [panelCredentialId, setPanelCredentialId] = useState('')
   const [sshPolicy, setSshPolicy] = useState('accept-new')
   const [sshGroup, setSshGroup] = useState('')
   const [sshGroupIds, setSshGroupIds] = useState<string[]>([])
@@ -104,6 +105,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
     setSshHost('')
     setSshPort(String(defaultSshPort))
     setSshCredentialId('')
+    setPanelCredentialId('')
     setSshPolicy('accept-new')
     setSshGroup('')
     setSshGroupIds([])
@@ -216,6 +218,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
         credential_id: sshCredentialId,
         group: sshGroup.trim() || undefined,
         group_ids: sshGroupIds,
+        panel_credential_id: panelCredentialId,
         tags: sshTags
           .split(',')
           .map((tag) => tag.trim())
@@ -560,6 +563,29 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
                 />
                 <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
                   {t('network.defaultPortHint', { port: defaultSshPort })}
+                </p>
+              </div>
+              <div>
+                <label htmlFor="ssh-panel-credential" className={labelClass}>
+                  {t('server.panelCredential')}
+                </label>
+                <select
+                  id="ssh-panel-credential"
+                  value={panelCredentialId}
+                  onChange={(event) => setPanelCredentialId(event.target.value)}
+                  className={inputClass + ' mt-1.5'}
+                >
+                  <option value="">{t('server.panelCredentialNone')}</option>
+                  {credentials
+                    .filter((credential) => credential.kind === 'baota')
+                    .map((credential) => (
+                      <option key={credential.id} value={credential.id}>
+                        {credential.name}
+                      </option>
+                    ))}
+                </select>
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  {t('server.panelCredentialHint')}
                 </p>
               </div>
               <div>

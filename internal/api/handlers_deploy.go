@@ -111,10 +111,15 @@ func (a *API) handleListApps(w http.ResponseWriter, r *http.Request) {
 // handleCreateApp 处理 POST /api/v1/apps。
 func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name        string `json:"name"`
-		Slug        string `json:"slug"`
-		Root        string `json:"root"`
-		Description string `json:"description"`
+		Name            string `json:"name"`
+		Slug            string `json:"slug"`
+		Root            string `json:"root"`
+		Description     string `json:"description"`
+		Provider        string `json:"provider"`
+		SiteName        string `json:"site_name"`
+		SitePort        *int   `json:"site_port"`
+		SiteType        string `json:"site_type"`
+		HealthcheckPath string `json:"healthcheck_path"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
@@ -136,6 +141,17 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 		Name:      name,
 		Slug:      slug,
 		CreatedAt: a.nowMS(),
+		Provider:  store.AppProviderBuiltin,
+	}
+	if site, err := a.normalizeAppSite(req.Provider, req.SiteName, req.SitePort, req.SiteType, req.HealthcheckPath); err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+		return
+	} else {
+		app.Provider = site.Provider
+		app.SiteName = site.SiteName
+		app.SitePort = site.SitePort
+		app.SiteType = site.SiteType
+		app.HealthcheckPath = site.HealthcheckPath
 	}
 	if req.Root != "" {
 		root := strings.TrimSpace(req.Root)
@@ -178,16 +194,23 @@ func (a *API) handlePatchApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name        *string `json:"name"`
-		Root        *string `json:"root"`
-		Description *string `json:"description"`
+		Name            *string `json:"name"`
+		Root            *string `json:"root"`
+		Description     *string `json:"description"`
+		Provider        *string `json:"provider"`
+		SiteName        *string `json:"site_name"`
+		SitePort        *int    `json:"site_port"`
+		SiteType        *string `json:"site_type"`
+		HealthcheckPath *string `json:"healthcheck_path"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
 		return
 	}
-	if req.Name == nil && req.Root == nil && req.Description == nil {
-		writeError(w, http.StatusBadRequest, codeInvalidArgument, "至少需要提供 name/root/description 之一")
+	if req.Name == nil && req.Root == nil && req.Description == nil && req.Provider == nil &&
+		req.SiteName == nil && req.SitePort == nil && req.SiteType == nil && req.HealthcheckPath == nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument,
+			"至少需要提供 name/root/description/provider/site_name/site_port/site_type/healthcheck_path 之一")
 		return
 	}
 	if req.Name != nil {
@@ -205,6 +228,23 @@ func (a *API) handlePatchApp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.Root = &root
+	}
+	// provider 与站点配置单独更新（PATCH 语义，nil 表示不改）。
+	if req.Provider != nil || req.SiteName != nil || req.SitePort != nil || req.SiteType != nil || req.HealthcheckPath != nil {
+		site, serr := a.normalizeAppSitePatch(req.Provider, req.SiteName, req.SitePort, req.SiteType, req.HealthcheckPath)
+		if serr != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, serr.Error())
+			return
+		}
+		var providerPtr *string
+		if site.Provider != "" {
+			v := site.Provider
+			providerPtr = &v
+		}
+		if err := a.st.UpdateAppSite(r.Context(), app.ID, providerPtr, site.SiteName, site.SiteType, site.HealthcheckPath, site.SitePort); err != nil {
+			a.writeStoreError(w, r, err)
+			return
+		}
 	}
 	updated, err := a.st.UpdateApp(r.Context(), app.ID, req.Name, req.Root, req.Description)
 	if err != nil {
@@ -283,7 +323,9 @@ func (a *API) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "kind 只能是 compose|systemd|binary")
 		return
 	}
-	if strings.TrimSpace(req.Content) == "" {
+	// binary 模板允许为空：表示「本次发布不需要重启服务」（宝塔面板通道也复用这一点，
+	// 由面板负责解压生效，不需要启动脚本）。compose/systemd 必须给出内容。
+	if strings.TrimSpace(req.Content) == "" && kind != store.TemplateKindBinary {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "content 不能为空")
 		return
 	}
@@ -750,7 +792,9 @@ func (a *API) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 			a.writeStoreError(w, r, err)
 			return
 		}
-		if artifact.Kind == store.ArtifactKindUpload && a.cfg.PublicURL == "" {
+		// builtin 通道让目标机按 URL 下载制品，因此必须配 public_url；
+		// baota 通道由控制端直接读取制品字节上传到面板，不依赖目标机回连控制端。
+		if artifact.Kind == store.ArtifactKindUpload && a.cfg.PublicURL == "" && app.Provider != store.AppProviderBaota {
 			writeError(w, http.StatusBadRequest, codeInvalidArgument,
 				"upload 制品需要配置 LEADSTACK_PUBLIC_URL（目标机需能访问控制端下载制品）")
 			return

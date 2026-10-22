@@ -117,6 +117,7 @@ func (a *API) Router() http.Handler {
 			r.With(permServerWrite, inScope).Post("/servers/{serverID}/refresh-host-info", a.handleRefreshHostInfo)
 			r.With(a.RequirePerm(auth.PermServerDelete), inScope).Delete("/servers/{serverID}", a.handleDeleteServer)
 			r.With(permServerWrite).Post("/credentials", a.handleCreateCredential)
+			r.With(permServerWrite).Post("/credentials/{credentialID}/test", a.handleTestCredential)
 			r.With(a.RequirePerm(auth.PermServerDelete)).Delete("/credentials/{credentialID}", a.handleDeleteCredential)
 			r.With(permServerWrite).Post("/agent/install-script", a.handleInstallScript)
 

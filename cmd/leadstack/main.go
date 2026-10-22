@@ -252,7 +252,10 @@ func run() error {
 			return value, err
 		},
 		DeployRoot: cfg.DeployRoot,
-		Logger:     logger,
+		// 宝塔面板通道：需要凭证解密与制品落盘目录；PanelFactory 留空即用真实客户端。
+		Cipher:       cipher,
+		ArtifactsDir: cfg.ArtifactsDir(),
+		Logger:       logger,
 	})
 	if closer, ok := deployRunner.(interface{ Close() }); ok && closer != nil {
 		defer closer.Close()

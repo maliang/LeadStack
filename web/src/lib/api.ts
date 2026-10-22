@@ -393,12 +393,14 @@ export interface Server {
   /** 授权分组（契约第 55.4 节） */
   group_ids: string[]
   group_names: string[]
+  /** 绑定的宝塔面板凭据（contract §57） */
+  panel_credential_id: string | null
   credential_id: string | null
   last_error: string | null
   host_info: HostInfo | null
 }
 
-export type CredentialKind = 'password' | 'key'
+export type CredentialKind = 'password' | 'key' | 'baota' | string
 
 /** 凭证对外元数据：接口绝不返回密钥内容。 */
 export interface Credential {
@@ -409,15 +411,25 @@ export interface Credential {
   fingerprint: string | null
   created_at: number | null
   server_count: number
+  /** 宝塔面板地址（kind=baota） */
+  panel_url: string | null
+  /** 是否跳过面板证书校验 */
+  insecure_skip_verify: boolean
 }
 
 export interface CreateCredentialPayload {
   name: string
   kind: CredentialKind
-  username: string
+  username?: string
   password?: string
   private_key?: string
   passphrase?: string
+  /** kind=baota：面板地址，如 https://1.2.3.4:8888 */
+  panel_url?: string
+  /** kind=baota：面板 API 密钥 */
+  api_key?: string
+  /** kind=baota：跳过面板证书校验（自签证书时使用） */
+  insecure_skip_verify?: boolean
 }
 
 export interface TestConnectionResult {
@@ -602,6 +614,9 @@ export type ReleaseStatus = 'pending' | 'running' | 'success' | 'failed' | 'canc
 export type TemplateKind = 'compose' | 'systemd' | 'binary'
 export type ArtifactKind = 'url' | 'upload' | 'image'
 
+export type AppProvider = 'builtin' | 'baota' | string
+export type BaotaSiteType = 'static' | 'php' | string
+
 export interface AppItem {
   id: string
   name: string
@@ -609,6 +624,16 @@ export interface AppItem {
   root: string | null
   description: string | null
   created_at: number | null
+  /** 部署方式：内置 SSH/Agent 或宝塔面板 */
+  provider: AppProvider
+  /** 宝塔站点名（provider=baota） */
+  site_name: string | null
+  /** 宝塔站点端口 */
+  site_port: number | null
+  /** 宝塔站点类型 static/php */
+  site_type: BaotaSiteType | null
+  /** 发布后健康检查路径 */
+  healthcheck_path: string | null
   /** 后端可能聚合出的统计；缺失时前端用 releases 列表本地折算 */
   release_count: number
   server_count: number
@@ -689,6 +714,11 @@ export interface CreateAppPayload {
   slug: string
   root?: string
   description?: string
+  provider?: AppProvider
+  site_name?: string
+  site_port?: number
+  site_type?: BaotaSiteType | null
+  healthcheck_path?: string | null
 }
 
 export interface CreateTemplatePayload {
@@ -1634,6 +1664,11 @@ export function normalizeApp(input: unknown): AppItem {
     root: toText(raw.root),
     description: toText(raw.description),
     created_at: toNumber(raw.created_at),
+    provider: toText(raw.provider) ?? 'builtin',
+    site_name: toText(raw.site_name),
+    site_port: toNumber(raw.site_port),
+    site_type: toText(raw.site_type),
+    healthcheck_path: toText(raw.healthcheck_path),
     release_count: toNumber(raw.release_count ?? raw.releases_count) ?? 0,
     server_count: toNumber(raw.server_count ?? raw.target_count) ?? 0,
     last_release: lastRelease,
@@ -1986,6 +2021,8 @@ export function normalizeCredential(input: unknown): Credential {
     fingerprint: toText(raw.fingerprint),
     created_at: toNumber(raw.created_at),
     server_count: toNumber(raw.server_count) ?? 0,
+    panel_url: toText(raw.panel_url),
+    insecure_skip_verify: toBool(raw.insecure_skip_verify),
   }
 }
 
@@ -2017,6 +2054,7 @@ export function normalizeServer(input: unknown): Server {
     group: toText(raw.group),
     group_ids: toStringArray(raw.group_ids ?? raw.groupIds),
     group_names: toStringArray(raw.group_names ?? raw.groupNames),
+    panel_credential_id: toText(raw.panel_credential_id),
     credential_id: toText(raw.credential_id),
     last_error: toText(raw.last_error),
     host_info: normalizeHostInfo(raw.host_info),
@@ -2076,6 +2114,7 @@ export interface UpdateServerPayload {
   group?: string | null
   /** 整包替换；缺省表示不改（契约第 55.4 节） */
   group_ids?: string[]
+  panel_credential_id?: string | null
 }
 
 /** POST /servers 请求体（纳管 扩展字段，契约第 10 节）。 */
@@ -2087,6 +2126,7 @@ export interface CreateServerPayload {
   credential_id?: string
   group?: string
   group_ids?: string[]
+  panel_credential_id?: string | null
   tags?: string[]
   host_key_policy?: 'insecure' | 'accept-new' | 'strict'
 }
@@ -2116,7 +2156,18 @@ export interface KeyCredentialInput {
   passphrase?: string
 }
 
-export type CreateCredentialInput = PasswordCredentialInput | KeyCredentialInput
+export interface BaotaCredentialInput {
+  name: string
+  kind: 'baota'
+  panel_url: string
+  api_key: string
+  insecure_skip_verify?: boolean
+}
+
+export type CreateCredentialInput =
+  | PasswordCredentialInput
+  | KeyCredentialInput
+  | BaotaCredentialInput
 
 export interface MetricsQuery {
   from: number
@@ -2377,6 +2428,19 @@ export const api = {
     return request<unknown>('/credentials', { method: 'POST', body: payload }).then(
       normalizeCredential,
     )
+  },
+
+  /** POST /credentials/{id}/test —— 仅宝塔凭据支持 */
+  testCredential(id: string): Promise<{ ok: boolean; message: string }> {
+    return request<unknown>(`/credentials/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+    }).then((raw) => {
+      const record = toRecord(raw) ?? {}
+      return {
+        ok: toBool(record.ok),
+        message: toText(record.message) ?? '',
+      }
+    })
   },
 
   deleteCredential(id: string): Promise<unknown> {

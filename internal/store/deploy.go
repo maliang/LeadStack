@@ -16,8 +16,11 @@ func (s *Store) CreateApp(ctx context.Context, app *App) error {
 		return errors.New("创建应用: 参数为空")
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO apps (id, name, slug, root, description, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		app.ID, app.Name, app.Slug, nullableStr(app.Root), nullableStr(app.Description), app.CreatedAt)
+		`INSERT INTO apps (id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		app.ID, app.Name, app.Slug, nullableStr(app.Root), nullableStr(app.Description), app.CreatedAt,
+		defaultProvider(app.Provider), nullableStr(app.SiteName), nullableIntFromPtr(app.SitePort),
+		nullableStr(app.SiteType), nullableStr(app.HealthcheckPath))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return fmt.Errorf("创建应用 %s: %w", app.Slug, ErrConflict)
@@ -30,19 +33,19 @@ func (s *Store) CreateApp(ctx context.Context, app *App) error {
 // GetApp 按 ID 查询应用。
 func (s *Store) GetApp(ctx context.Context, id string) (*App, error) {
 	return scanApp(s.db.QueryRowContext(ctx,
-		`SELECT id, name, slug, root, description, created_at FROM apps WHERE id = ?`, id))
+		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path FROM apps WHERE id = ?`, id))
 }
 
 // GetAppBySlug 按 slug 查询应用。
 func (s *Store) GetAppBySlug(ctx context.Context, slug string) (*App, error) {
 	return scanApp(s.db.QueryRowContext(ctx,
-		`SELECT id, name, slug, root, description, created_at FROM apps WHERE slug = ?`, slug))
+		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path FROM apps WHERE slug = ?`, slug))
 }
 
 // ListApps 返回全部应用（按创建时间倒序）。
 func (s *Store) ListApps(ctx context.Context) ([]App, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, slug, root, description, created_at FROM apps ORDER BY created_at DESC, id DESC`)
+		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path FROM apps ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询应用列表: %w", err)
 	}
@@ -141,8 +144,14 @@ func scanApp(row interface{ Scan(...any) error }) (*App, error) {
 	var (
 		app        App
 		root, desc sql.NullString
+		provider   sql.NullString
+		siteName   sql.NullString
+		sitePort   sql.NullInt64
+		siteType   sql.NullString
+		health     sql.NullString
 	)
-	err := row.Scan(&app.ID, &app.Name, &app.Slug, &root, &desc, &app.CreatedAt)
+	err := row.Scan(&app.ID, &app.Name, &app.Slug, &root, &desc, &app.CreatedAt,
+		&provider, &siteName, &sitePort, &siteType, &health)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询应用: %w", ErrNotFound)
@@ -151,7 +160,84 @@ func scanApp(row interface{ Scan(...any) error }) (*App, error) {
 	}
 	app.Root = strPtr(root)
 	app.Description = strPtr(desc)
+	app.Provider = strings.TrimSpace(provider.String)
+	if app.Provider == "" {
+		app.Provider = AppProviderBuiltin
+	}
+	app.SiteName = strPtr(siteName)
+	if sitePort.Valid {
+		v := int(sitePort.Int64)
+		app.SitePort = &v
+	}
+	app.SiteType = strPtr(siteType)
+	app.HealthcheckPath = strPtr(health)
 	return &app, nil
+}
+
+// 应用部署方式：builtin（SSH/agent 执行 shell 计划）与 baota（宝塔面板 API）。
+const (
+	AppProviderBuiltin = "builtin"
+	AppProviderBaota   = "baota"
+)
+
+// defaultProvider 把空值归一为 builtin。
+func defaultProvider(p string) string {
+	if v := strings.TrimSpace(p); v != "" {
+		return v
+	}
+	return AppProviderBuiltin
+}
+
+// nullableIntFromPtr 把 *int 转成可空 sql 值。
+func nullableIntFromPtr(p *int) *int64 {
+	if p == nil {
+		return nil
+	}
+	v := int64(*p)
+	return &v
+}
+
+// UpdateAppSite 更新应用的部署方式与面板站点配置（PATCH 语义，nil 表示不改）。
+func (s *Store) UpdateAppSite(ctx context.Context, id string, provider, siteName, siteType, healthcheckPath *string, sitePort *int) error {
+	sets := make([]string, 0, 6)
+	args := make([]any, 0, 7)
+	if provider != nil {
+		sets = append(sets, "provider = ?")
+		args = append(args, defaultProvider(*provider))
+	}
+	if siteName != nil {
+		sets = append(sets, "site_name = ?")
+		args = append(args, nullableStr(emptyToNil(*siteName)))
+	}
+	if sitePort != nil {
+		sets = append(sets, "site_port = ?")
+		args = append(args, *sitePort)
+	}
+	if siteType != nil {
+		sets = append(sets, "site_type = ?")
+		args = append(args, nullableStr(emptyToNil(*siteType)))
+	}
+	if healthcheckPath != nil {
+		sets = append(sets, "healthcheck_path = ?")
+		args = append(args, nullableStr(emptyToNil(*healthcheckPath)))
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	query := `UPDATE apps SET ` + strings.Join(sets, ", ") + ` WHERE id = ?`
+	args = append(args, id)
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("更新应用 %s 部署配置: %w", id, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("更新应用 %s 后读取影响行数: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("更新应用 %s: %w", id, ErrNotFound)
+	}
+	return nil
 }
 
 // ------------------------------------------------ 模板 ------------------------------------------------
