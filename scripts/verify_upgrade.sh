@@ -61,9 +61,15 @@ tar -czf "$PKG_DIR/leadstack_0.0.3_darwin_arm64.tar.gz" -C "$WORK/new" leadstack
 rm -f "$PKG_DIR/leadstack_0.0.3_darwin_arm64.tar.gz"
 TMPC="$WORK/crashdir"; mkdir -p "$TMPC"; cp "$WORK/new-crash-leadstack" "$TMPC/leadstack"
 tar -czf "$PKG_DIR/leadstack_0.0.3_darwin_arm64.tar.gz" -C "$TMPC" leadstack
+# 真实发行版同时包含 leadstack-agent_*，且 GitHub 按名字排序返回（agent 在前）。
+# 这里如实模拟：agent 归档里没有 leadstack 可执行文件——若升级逻辑误选它，必然失败。
+TMPA="$WORK/agentdir"; mkdir -p "$TMPA"; printf 'not-a-control-plane-binary\n' > "$TMPA/leadstack-agent"
+tar -czf "$PKG_DIR/leadstack-agent_0.0.2_darwin_arm64.tar.gz" -C "$TMPA" leadstack-agent
+SHA2A="$(shasum -a 256 "$PKG_DIR/leadstack-agent_0.0.2_darwin_arm64.tar.gz" | awk '{print $1}')"
 SHA2="$(shasum -a 256 "$PKG_DIR/leadstack_0.0.2_darwin_arm64.tar.gz" | awk '{print $1}')"
 SHA3="$(shasum -a 256 "$PKG_DIR/leadstack_0.0.3_darwin_arm64.tar.gz" | awk '{print $1}')"
 cat > "$PKG_DIR/checksums.txt" <<EOF
+${SHA2A}  leadstack-agent_0.0.2_darwin_arm64.tar.gz
 ${SHA2}  leadstack_0.0.2_darwin_arm64.tar.gz
 ${SHA3}  leadstack_0.0.3_darwin_arm64.tar.gz
 EOF
@@ -88,6 +94,9 @@ class H(http.server.BaseHTTPRequestHandler):
                         "html_url": "https://example.invalid/release",
                         "body": "测试版本\n<!-- schema_changed: " + ("true" if st.get("schema") else "false") + " -->",
                         "assets": [
+                          {"name": f"leadstack-agent_{ver[1:]}_darwin_arm64.tar.gz",
+                           "browser_download_url": f"{base}/pkg/leadstack-agent_{ver[1:]}_darwin_arm64.tar.gz",
+                           "size": 100},
                           {"name": f"leadstack_{ver[1:]}_darwin_arm64.tar.gz",
                            "browser_download_url": f"{base}/pkg/leadstack_{ver[1:]}_darwin_arm64.tar.gz",
                            "size": 100},

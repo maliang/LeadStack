@@ -452,7 +452,7 @@ leadstack network --show                 # 查看当前生效的网络配置
 
 ## 版本升级与回滚
 
-发布物在 GitHub Releases（每个 tag 产出 5 平台 × 2 二进制 + `checksums.txt`）。
+发布物在 GitHub Releases（每个 tag 产出 5 平台 × 2 二进制 + `checksums.txt`）。升级地址、各平台实测结果与已知限制见 [升级链路验证报告](docs/UPGRADE-VERIFY.md)。
 
 **控制台一键升级**（推荐）：新版本会出现在控制台（用户菜单「版本与升级」与设置页），点一下就完成
 **检查 → 自动备份 → 下载校验 → A/B 替换 → 重启**；若新版本起不来，**独立 watchdog 会自动回退**

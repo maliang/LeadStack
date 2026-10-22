@@ -270,9 +270,17 @@ func (a *API) pickAsset(info UpdateInfo, target string) (UpdateAsset, error) {
 		return UpdateAsset{}, fmt.Errorf("目标版本 %s 与最新版本 %s 不一致，请先刷新更新信息", target, info.Latest)
 	}
 	for _, asset := range info.Assets {
-		if asset.OS == runtime.GOOS && asset.Arch == runtime.GOARCH {
-			return asset, nil
+		if asset.OS != runtime.GOOS || asset.Arch != runtime.GOARCH {
+			continue
 		}
+		// 兜底：即便上游缓存里混入了 agent 包或非归档，也不当作控制端升级源。
+		// 名字为空的历史缓存（早期版本写入）保持兼容，不做判定。
+		if asset.Name != "" {
+			if _, _, ok := classifyAsset(asset.Name); !ok {
+				continue
+			}
+		}
+		return asset, nil
 	}
 	return UpdateAsset{}, fmt.Errorf("发行版中没有适用于当前平台 %s/%s 的产物", runtime.GOOS, runtime.GOARCH)
 }

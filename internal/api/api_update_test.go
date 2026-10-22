@@ -220,7 +220,10 @@ func TestApplyAbortsWhenBackupFails(t *testing.T) {
 		client: mock.Client(), logger: noopLogger{},
 		cached: &UpdateInfo{
 			Current: "v0.0.1", Latest: "v0.9.9", HasUpdate: true, Upgradable: true,
-			Assets:    []UpdateAsset{{OS: runtime.GOOS, Arch: runtime.GOARCH, URL: mock.URL + "/dl/new.tar.gz"}},
+			Assets: []UpdateAsset{{
+				OS: runtime.GOOS, Arch: runtime.GOARCH, URL: mock.URL + "/dl/new.tar.gz",
+				Name: "leadstack_0.9.9_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz",
+			}},
 			CheckedAt: time.Now().UnixMilli(),
 		},
 	}

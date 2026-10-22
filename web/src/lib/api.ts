@@ -290,8 +290,10 @@ export interface UpdateInfo {
   /** 该版本包含数据库迁移 */
   schema_changed: boolean
   assets: UpdateAsset[]
-  /** 当前平台/架构是否有可用产物 */
+  /** 当前平台/架构是否有可用产物（Windows 上恒为 false：不支持替换运行中的可执行文件） */
   upgradable: boolean
+  /** 不能一键升级时的原因（如 Windows 平台限制），空表示无 */
+  upgrade_note: string | null
   checked_at: number | null
   /** 检查失败原因（空表示成功）；失败时保留上次数据 */
   error: string | null
@@ -1927,6 +1929,7 @@ export function normalizeUpdateInfo(input: unknown): UpdateInfo {
       }
     }),
     upgradable: toBool(raw.upgradable, true),
+    upgrade_note: toText(raw.upgrade_note),
     checked_at: toNumber(raw.checked_at),
     error: toText(raw.error),
     upgrade_enabled: toBool(raw.upgrade_enabled, true),

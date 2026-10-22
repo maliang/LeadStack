@@ -110,9 +110,11 @@ func (c *updateChecker) refresh(ctx context.Context) UpdateInfo {
 	assets := make([]UpdateAsset, 0, len(release.Assets))
 	upgradable := false
 	for _, a := range release.Assets {
-		name := strings.ToLower(a.Name)
-		osName, arch := platformFromAssetName(name)
-		if osName == "" {
+		// 只认控制端包：发行版里还有 leadstack-agent_* 与 checksums.txt，
+		// 且 GitHub 按名字排序返回（leadstack-agent_ 排在 leadstack_ 前面），
+		// 单看 os/arch 会误选 agent 包，解包时找不到 leadstack 二进制 → 升级必然失败。
+		osName, arch, ok := classifyAsset(a.Name)
+		if !ok {
 			continue
 		}
 		assets = append(assets, UpdateAsset{
@@ -137,6 +139,13 @@ func (c *updateChecker) refresh(ctx context.Context) UpdateInfo {
 		info.PublishedAt = published.UnixMilli()
 	}
 	info.HasUpdate = versionIsNewer(release.TagName, c.currentVersion)
+
+	// 平台能力：Windows 无法替换运行中的可执行文件，本机自升级**按设计不支持**。
+	// 这里把 upgradable 置 false 并给出原因，避免「点升级 → 403」的挫败路径。
+	if reason := platformUpgradeUnsupported(); reason != "" {
+		info.Upgradable = false
+		info.UpgradeNote = reason
+	}
 
 	c.mu.Lock()
 	c.cached = &info
@@ -188,6 +197,25 @@ func versionIsNewer(candidate, current string) bool {
 }
 
 // platformFromAssetName 从产物文件名推断 os/arch（如 leadstack_linux_amd64.tar.gz）。
+// classifyAsset 判断资产名是否为控制端升级包，并解析出 os/arch。
+//
+// 发行版同时包含控制端（leadstack_*）与节点 agent（leadstack-agent_*）两类归档，
+// 只有前者可以作为控制端自升级的下载源；checksums.txt 等非归档一律跳过。
+func classifyAsset(name string) (osName, arch string, ok bool) {
+	base := strings.ToLower(strings.TrimSpace(name))
+	if !strings.HasPrefix(base, "leadstack_") {
+		return "", "", false
+	}
+	if !strings.HasSuffix(base, ".tar.gz") && !strings.HasSuffix(base, ".zip") {
+		return "", "", false
+	}
+	osName, arch = platformFromAssetName(base)
+	if osName == "" || arch == "" {
+		return "", "", false
+	}
+	return osName, arch, true
+}
+
 func platformFromAssetName(name string) (osName, arch string) {
 	lower := strings.ToLower(name)
 	oses := []string{"linux", "darwin", "windows", "freebsd"}

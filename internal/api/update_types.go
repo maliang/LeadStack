@@ -44,8 +44,10 @@ type UpdateInfo struct {
 	SchemaChanged bool          `json:"schema_changed"`
 	Assets        []UpdateAsset `json:"assets"`
 	Upgradable    bool          `json:"upgradable"`
-	CheckedAt     int64         `json:"checked_at"`
-	Error         string        `json:"error"`
+	// UpgradeNote 说明「为什么不能在本平台一键升级」（空串表示可升级）。
+	UpgradeNote string `json:"upgrade_note,omitempty"`
+	CheckedAt   int64  `json:"checked_at"`
+	Error       string `json:"error"`
 }
 
 // UpgradeState 是 <data_dir>/upgrade/state.json 的内容（watchdog 与自检共用）。
