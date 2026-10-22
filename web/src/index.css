@@ -31,10 +31,24 @@ body {
   background-color: color-mix(in oklab, var(--color-indigo-500) 30%, transparent);
 }
 
-/* ---------------- 主题色（5 种）----------------
+/* ---------------- 主题色（6 种，默认绿色）----------------
  * Tailwind 4 的工具类引用 --color-indigo-* 变量，这里按 data-accent 覆盖整条色阶，
  * 无需改动任何组件的 indigo 类名即可全局换色。
  */
+html[data-accent='green'] {
+  --color-indigo-50: var(--color-green-50);
+  --color-indigo-100: var(--color-green-100);
+  --color-indigo-200: var(--color-green-200);
+  --color-indigo-300: var(--color-green-300);
+  --color-indigo-400: var(--color-green-400);
+  --color-indigo-500: var(--color-green-500);
+  --color-indigo-600: var(--color-green-600);
+  --color-indigo-700: var(--color-green-700);
+  --color-indigo-800: var(--color-green-800);
+  --color-indigo-900: var(--color-green-900);
+  --color-indigo-950: var(--color-green-950);
+}
+
 html[data-accent='blue'] {
   --color-indigo-50: var(--color-blue-50);
   --color-indigo-100: var(--color-blue-100);

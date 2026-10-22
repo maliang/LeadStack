@@ -1,15 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 430 96" role="img" aria-label="LeadStack 领栈">
   <defs>
     <linearGradient id="ls-tile" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#6366f1"/>
-      <stop offset="1" stop-color="#4338ca"/>
+      <stop offset="0" stop-color="#22c55e"/>
+      <stop offset="1" stop-color="#15803d"/>
+    </linearGradient>
+    <linearGradient id="ls-sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".20"/>
+      <stop offset=".65" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
   </defs>
   <g transform="translate(16 16)">
-    <rect width="64" height="64" rx="15" fill="url(#ls-tile)"/>
+    <rect width="64" height="64" rx="17" fill="url(#ls-tile)"/>
+    <rect width="64" height="64" rx="17" fill="url(#ls-sheen)"/>
+    <rect x=".6" y=".6" width="62.8" height="62.8" rx="16.5" fill="none"
+          stroke="#ffffff" stroke-opacity=".16" stroke-width="1.2"/>
     <path d="M17 11 V45 H52" fill="none" stroke="#ffffff" stroke-width="7.2" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M26 33 L32 33 L36 21 L42 38 L46 27 L52 27" fill="none" stroke="#34d399" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M26 33 L32 33 L36 21 L42 38 L46 27 L52 27" fill="none" stroke="#ecfdf5" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
-  <text x="100" y="52" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="34" font-weight="650" letter-spacing="-0.4" fill="#1e1b4b">LeadStack</text>
-  <text x="101" y="78" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" font-weight="500" letter-spacing="6" fill="#818cf8">领栈</text>
+  <text x="100" y="52" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="34" font-weight="650" letter-spacing="-0.4" fill="#052e16">LeadStack</text>
+  <text x="101" y="78" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" font-weight="500" letter-spacing="6" fill="#16a34a">领栈</text>
 </svg>

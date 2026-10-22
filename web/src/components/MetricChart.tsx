@@ -14,7 +14,7 @@ interface MetricChartProps {
   emptyHint?: string
 }
 
-const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#0ea5e9', '#a855f7']
+const COLORS = ['#16a34a', '#0ea5e9', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6']
 
 /** uPlot 需要对齐的 [x, y1, y2...] 数组，缺失点补 null。 */
 function buildAlignedData(series: MetricSeries[]): uPlot.AlignedData {

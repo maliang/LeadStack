@@ -12,7 +12,7 @@ import { applyTheme } from './theme'
 import { t } from '../i18n'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
-export type Accent = 'blue' | 'indigo' | 'cyan' | 'emerald' | 'violet'
+export type Accent = 'green' | 'blue' | 'indigo' | 'cyan' | 'emerald' | 'violet'
 export type FontSizePref = 'small' | 'normal' | 'large'
 export type Density = 'comfortable' | 'compact'
 export type Language = 'zh-CN' | 'en-US'
@@ -38,6 +38,7 @@ export const FONT_SIZE_PX: Record<FontSizePref, number> = {
 }
 
 export const ACCENTS: { value: Accent; label: string; color: string }[] = [
+  { value: 'green', label: t('accent.green'), color: '#16a34a' },
   { value: 'blue', label: t('s.0645'), color: '#2563eb' },
   { value: 'indigo', label: t('s.0646'), color: '#4f46e5' },
   { value: 'cyan', label: t('s.0647'), color: '#0891b2' },
@@ -47,7 +48,7 @@ export const ACCENTS: { value: Accent; label: string; color: string }[] = [
 
 export const DEFAULT_PREFERENCES: Preferences = {
   theme: 'system',
-  accent: 'indigo',
+  accent: 'green',
   fontSize: 'normal',
   density: 'comfortable',
   language: 'zh-CN',

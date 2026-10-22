@@ -73,7 +73,7 @@ await context.addInitScript(
   ([t]) => {
     window.localStorage.setItem('leadstack_token', t)
     window.localStorage.setItem('leadstack.lang', 'zh-CN')
-    window.localStorage.setItem('leadstack.accent', 'indigo')
+    window.localStorage.setItem('leadstack.accent', 'green')
     window.localStorage.setItem('leadstack.fontSize', 'normal')
     window.localStorage.setItem('leadstack.density', 'comfortable')
     if (!window.localStorage.getItem('leadstack.theme')) {
@@ -143,7 +143,7 @@ await darkContext.addInitScript(
   ([t]) => {
     window.localStorage.setItem('leadstack_token', t)
     window.localStorage.setItem('leadstack.lang', 'zh-CN')
-    window.localStorage.setItem('leadstack.accent', 'indigo')
+    window.localStorage.setItem('leadstack.accent', 'green')
     window.localStorage.setItem('leadstack.fontSize', 'normal')
     window.localStorage.setItem('leadstack.density', 'comfortable')
     window.localStorage.setItem('leadstack.theme', 'dark')
