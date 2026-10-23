@@ -307,8 +307,24 @@ printf '%s' "$PRESETS" | jq -e '.data[] | select(.key=="laravel-swoole") | .temp
 printf '%s' "$NONE" | jq -e '.data.servers[0].notes | join(" ") | test("制品")' >/dev/null 2>&1 \
   && pass "inplace 缺制品时预览给出明确提示（不静默）" || fail "缺制品提示不明确"
 
+# ---------------------------------------------------------------- 本机接入
+step "5. 本机接入（agent 一键命令）"
+LOCAL="$(api POST /api/v1/servers/local '{"name":"本机-e2e","ttl_s":600}' "$TOKEN")"
+LOCAL_ID="$(sget "$LOCAL" '.data.server.id')"
+[ -n "$LOCAL_ID" ] && pass "本机服务器已创建" || fail "本机接入失败：$LOCAL"
+[ "$(sget "$LOCAL" '.data.server.mode')" = "agent" ] && pass "本机服务器为 agent 模式" || fail "本机服务器模式不符"
+LOCAL_CMD="$(sget "$LOCAL" '.data.command')"
+printf '%s' "$LOCAL_CMD" | grep -q "/install.sh" && printf '%s' "$LOCAL_CMD" | grep -q -- "--token '" \
+  && pass "返回可执行的安装命令" || fail "安装命令格式不符：$LOCAL_CMD"
+printf '%s' "$LOCAL_CMD" | grep -q "127.0.0.1" && pass "安装命令使用回环地址（本机场景）" || fail "安装命令地址不符"
+LOCAL_TOKEN="$(sget "$LOCAL" '.data.token')"
+printf '%s' "$LOCAL_CMD" | grep -q "$LOCAL_TOKEN" && pass "命令内嵌一次性令牌" || fail "命令未包含令牌"
+LOCAL_LIST="$(api GET /api/v1/servers "" "$TOKEN")"
+printf '%s' "$LOCAL_LIST" | jq -e --arg id "$LOCAL_ID" '.data[] | select(.id==$id) | .mode=="agent"' >/dev/null 2>&1 \
+  && pass "本机服务器出现在服务器列表中" || fail "列表未包含本机服务器"
+
 # ---------------------------------------------------------------- C. 接管向导
-step "4. 接管向导（只读探测）"
+step "6. 接管向导（只读探测）"
 DISC="$(api POST "/api/v1/servers/$SRV_ID/discover" "" "$TOKEN")"
 D_OK="$(sget "$DISC" '.data.server_id')"
 [ "$D_OK" = "$SRV_ID" ] && pass "探测接口返回报告" || fail "探测接口异常：$DISC"

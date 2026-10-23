@@ -12,6 +12,7 @@ import { useReleaseRuns } from '../lib/useReleaseRuns'
 import { errorMessage } from '../lib/errors'
 import { formatClockTime, formatRelativeTime, formatUptime } from '../lib/format'
 import { AddServerWizard } from '../components/AddServerWizard'
+import { LocalServerDialog } from '../components/LocalServerDialog'
 import { NetworkFallbackBanner } from '../components/NetworkFallbackBanner'
 import { BatchActionBar } from '../components/BatchActionBar'
 import { BatchResultDialog } from '../components/BatchResultDialog'
@@ -71,6 +72,7 @@ export default function DashboardPage() {
   const now = useNow()
 
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [localOpen, setLocalOpen] = useState(false)
   const [renaming, setRenaming] = useState<Server | null>(null)
   const [deleting, setDeleting] = useState<Server | null>(null)
   const [tagEditing, setTagEditing] = useState<Server | null>(null)
@@ -223,6 +225,15 @@ export default function DashboardPage() {
           >
             {t('s.0689')}
           </Button>
+          {can('enroll.manage') ? (
+            <Button
+              variant="secondary"
+              onClick={() => setLocalOpen(true)}
+              icon={<ServerIcon className="h-4 w-4" />}
+            >
+              {t('localServer.entry')}
+            </Button>
+          ) : null}
           {can('server.write') ? (
           <Button onClick={() => setWizardOpen(true)} icon={<PlusIcon className="h-4 w-4" />}>
             {t('s.0029')}
@@ -592,6 +603,15 @@ export default function DashboardPage() {
         open={wizardOpen}
         onClose={() => setWizardOpen(false)}
         onFinished={handleChanged}
+        onUseLocal={() => {
+          setWizardOpen(false)
+          setLocalOpen(true)
+        }}
+      />
+      <LocalServerDialog
+        open={localOpen}
+        onClose={() => setLocalOpen(false)}
+        onChanged={handleChanged}
       />
       <EditServerDialog
         server={renaming}

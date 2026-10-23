@@ -1,4 +1,27 @@
 const enUS: Record<string, string> = {
+  'localServer.tokenRemaining': '{time} left',
+
+  'localServer.entry': 'Onboard this host',
+  'localServer.title': 'Onboard this host',
+  'localServer.description': 'Install the agent on the control-plane host; no SSH polling, near real-time status',
+  'localServer.creating': 'Creating the local server…',
+  'localServer.createFailed': 'Failed to create the local server',
+  'localServer.command': 'Install command',
+  'localServer.copy': 'Copy',
+  'localServer.copied': 'Copied',
+  'localServer.copyFailed': 'Copy failed; select the command manually',
+  'localServer.tokenExpiry': 'Token valid for ',
+  'localServer.noExpiry': 'no expiry',
+  'localServer.oneTime': ' (shown once; run it now)',
+  'localServer.hint': 'Run it on the control-plane host. Installing the system service requires root. The agent pushes status over a long-lived connection, more real-time than SSH polling.',
+  'localServer.waiting': 'Waiting for the agent… (checking every 3s)',
+  'localServer.online': 'Connected. The server list has been refreshed.',
+  'localServer.expired': 'The token expired. Click "Regenerate" for a new command.',
+  'localServer.regenerate': 'Regenerate',
+  'localServer.quickTitle': 'This host (recommended, agent)',
+  'localServer.quickHint': 'Is the control-plane host also the target? Generate the install command instead of typing 127.0.0.1 manually.',
+  'localServer.quickAction': 'Onboard this host',
+
   'apps.deployMode': 'Deploy mode',
 
   'apps.workdir': 'Working directory',

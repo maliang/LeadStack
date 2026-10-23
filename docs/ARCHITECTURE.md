@@ -2113,3 +2113,37 @@ prepare（mkdir <work>/.leadstack/scripts）
 返回 `checks[]`（pass/warn/fail + detail）与 `recommendation`：
 git 仓库 → 建议 `script` 模式并给出 `git pull --ff-only && bash start.sh restart` 脚本；
 否则建议 `inplace`；systemd 候选给出 `systemctl restart <unit>`、ExecStart 是否落在目标目录内作为 warn 提示。
+
+---
+
+## 62. 本机接入（agent 一键安装）
+
+### 62.1 为什么走 agent 而不是 SSH
+
+同一台机器上用 SSH 也能部署，但两个问题：要给控制端开 sshd；且 SSH 通道是**轮询**（默认 30s 采集、连续 3 次失败才判离线，最差 ~90s）。
+agent 常驻后是**推送**：心跳 20s、指标 15s、45s 无心跳判离线，部署任务走长连下发，状态更接近实时。
+
+### 62.2 接口
+
+`POST /api/v1/servers/local`（`enroll.manage`，admin-only）：
+
+```json
+{"name":"本机（mac-mini）","ttl_s":3600,"server_url":"http://127.0.0.1:8080"}
+```
+
+→ 201：
+```json
+{"data":{"server":{…mode=agent, host=127.0.0.1…},"token":"<一次性明文>","expires_at":…,
+  "command":"curl -fsSL 'http://127.0.0.1:8080/install.sh' | sh -s -- --server 'http://127.0.0.1:8080' --token '…'"}}
+```
+
+- 一次性完成：建服务器（mode=agent）+ 建接入令牌（预绑定该服务器）+ 生成安装命令；
+- 地址推导：显式 `server_url` > 请求 Host 的端口 + 回环地址 > `127.0.0.1:8080`（本机 agent 只走回环）；
+- 令牌明文只返回一次；`ttl_s` 默认 1 小时，范围 60s–30d；
+- 执行命令后 agent 起来 → 服务器状态转 online（agent 推送），随后即可用三种部署模式。
+
+### 62.3 权限与边界
+
+- 端点要求 `enroll.manage`（内置 admin 独占；自定义角色含该权限会被 400 拒绝，见 §52）；
+- 执行安装命令需要目标机器 root（安装 systemd/launchd 服务），控制端不代跑安装；
+- 本机 agent 与控制端同机时，注意控制端端口变更后要重新生成命令（地址是生成时快照）。

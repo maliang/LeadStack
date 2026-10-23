@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -214,5 +215,77 @@ func TestListAppsIncludesRollbackScript(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"rollback_script":null`) && !strings.Contains(string(body), `"rollback_script":""`) {
 		t.Fatalf("列表响应缺少 rollback_script 字段: %s", body)
+	}
+}
+
+// TestCreateLocalServer 本机接入：创建 agent 模式服务器 + 一次性令牌 + 安装命令。
+func TestCreateLocalServer(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+	code, body := env.request(http.MethodPost, "/api/v1/servers/local", jwt,
+		map[string]any{"name": "本机测试", "ttl_s": 600})
+	if code != http.StatusCreated {
+		t.Fatalf("接入本机应 201，实际 %d：%s", code, body)
+	}
+	var resp struct {
+		Data struct {
+			Server struct {
+				ID   string `json:"id"`
+				Mode string `json:"mode"`
+				Host string `json:"host"`
+			} `json:"server"`
+			Token   string `json:"token"`
+			Command string `json:"command"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if resp.Data.Server.Mode != "agent" || resp.Data.Server.Host != "127.0.0.1" {
+		t.Fatalf("本机服务器应为 agent/127.0.0.1，实际 %+v", resp.Data.Server)
+	}
+	if resp.Data.Token == "" || !strings.Contains(resp.Data.Command, "--token '"+resp.Data.Token+"'") {
+		t.Fatalf("安装命令应包含令牌: %s", resp.Data.Command)
+	}
+	if !strings.Contains(resp.Data.Command, "/install.sh") || !strings.Contains(resp.Data.Command, "--server 'http://127.0.0.1:") {
+		t.Fatalf("安装命令格式不符: %s", resp.Data.Command)
+	}
+	// 令牌应预绑定到这台服务器
+	srv, err := env.st.GetServer(context.Background(), resp.Data.Server.ID)
+	if err != nil || srv.Mode != "agent" {
+		t.Fatalf("服务器未正确落库: %+v %v", srv, err)
+	}
+}
+
+// TestCreateLocalServerRequiresEnrollPerm 非管理员不能接入本机（令牌管理是 admin-only 权限）。
+func TestCreateLocalServerRequiresEnrollPerm(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+	// 建一个只有运维权限的账号
+	code, body := env.request(http.MethodPost, "/api/v1/users", jwt, map[string]any{
+		"username": "local-ops", "password": "local-ops-pass-123", "role": "operator",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("创建运维账号失败: %d %s", code, body)
+	}
+	var user struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(body, &user)
+	code, loginBody := env.request(http.MethodPost, "/api/v1/auth/login", "",
+		map[string]string{"username": "local-ops", "password": "local-ops-pass-123"})
+	if code != http.StatusOK {
+		t.Skipf("运维账号登录失败（%d），跳过权限断言", code)
+	}
+	var loginOut struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(loginBody, &loginOut)
+	opsJWT := loginOut.Data.Token
+	code, _ = env.request(http.MethodPost, "/api/v1/servers/local", opsJWT, map[string]any{})
+	if code != http.StatusForbidden {
+		t.Fatalf("运维角色不应能接入本机，实际 %d", code)
 	}
 }

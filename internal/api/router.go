@@ -218,6 +218,8 @@ func (a *API) Router() http.Handler {
 			permEnrollManage := a.RequirePerm(auth.PermEnrollManage)
 			r.With(permEnrollManage).Get("/enroll-tokens", a.handleListEnrollTokens)
 			r.With(permEnrollManage).Post("/enroll-tokens", a.handleCreateEnrollToken)
+			// 本机接入：创建 mode=agent 的本机服务器 + 一次性令牌 + 一行安装命令。
+			r.With(permEnrollManage).Post("/servers/local", a.handleCreateLocalServer)
 
 			r.With(a.RequirePerm(auth.PermAuditRead), a.RequireGlobalScope).Get("/audit-logs", a.handleListAuditLogs)
 

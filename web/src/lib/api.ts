@@ -2289,6 +2289,20 @@ export interface InstallScriptPayload {
   server_url: string
 }
 
+export interface LocalServerPayload {
+  name?: string
+  server_url?: string
+  ttl_s?: number
+}
+
+export interface LocalServerResult {
+  server: Server
+  /** 一次性明文令牌，仅创建时返回 */
+  token: string
+  expires_at: number | null
+  command: string
+}
+
 export interface PasswordCredentialInput {
   name: string
   kind: 'password'
@@ -2528,6 +2542,21 @@ export const api = {
 
   servers(filters?: ServerFilters): Promise<Server[]> {
     return fetchServers(filters)
+  },
+
+  /** POST /servers/local —— 一键接入本机（admin-only enroll.manage） */
+  createLocalServer(payload?: LocalServerPayload): Promise<LocalServerResult> {
+    return request<unknown>('/servers/local', { method: 'POST', body: payload ?? {} }).then(
+      (raw) => {
+        const record = toRecord(raw) ?? {}
+        return {
+          server: normalizeServer(record.server),
+          token: toText(record.token) ?? '',
+          expires_at: toNumber(record.expires_at),
+          command: toText(record.command) ?? '',
+        }
+      },
+    )
   },
 
   createServer(payload: CreateServerPayload): Promise<Server> {

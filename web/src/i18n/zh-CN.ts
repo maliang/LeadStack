@@ -1,4 +1,27 @@
 const zhCN: Record<string, string> = {
+  'localServer.tokenRemaining': '剩余 {time}',
+
+  'localServer.entry': '接入本机',
+  'localServer.title': '接入本机',
+  'localServer.description': '在控制端所在机器安装 agent，免 SSH 轮询，状态更实时',
+  'localServer.creating': '正在创建本机服务器…',
+  'localServer.createFailed': '创建本机服务器失败',
+  'localServer.command': '安装命令',
+  'localServer.copy': '复制',
+  'localServer.copied': '已复制',
+  'localServer.copyFailed': '复制失败，请手动选择命令',
+  'localServer.tokenExpiry': '令牌有效期：',
+  'localServer.noExpiry': '长期有效',
+  'localServer.oneTime': '（仅显示一次，请立即执行）',
+  'localServer.hint': '在控制端所在机器上执行；需要 root 权限安装系统服务；agent 通过长连接推送状态，比 SSH 轮询更实时。',
+  'localServer.waiting': '等待 agent 上线…（每 3 秒检查一次）',
+  'localServer.online': '已接入成功，服务器列表已刷新',
+  'localServer.expired': '令牌已过期，请点「重新生成」获取新命令',
+  'localServer.regenerate': '重新生成',
+  'localServer.quickTitle': '本机（推荐 agent）',
+  'localServer.quickHint': '控制端所在机器就是目标服务器？一键生成安装命令，无需手填 127.0.0.1。',
+  'localServer.quickAction': '一键接入本机',
+
   'apps.deployMode': '部署模式',
 
   'apps.workdir': '工作目录',

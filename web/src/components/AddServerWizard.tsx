@@ -50,12 +50,14 @@ interface AddServerWizardProps {
   onClose: () => void
   /** 已产生变更（生成令牌 / 新增服务器）时通知列表刷新。 */
   onFinished: () => void
+  /** 本机一键接入快捷入口（由父级关闭向导并打开接入本机弹窗）。 */
+  onUseLocal?: () => void
 }
 
 /**
  * 添加服务器向导：先选接入方式（Agent 一键接入 / SSH 免安装），再进入对应流程。
  */
-export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardProps) {
+export function AddServerWizard({ open, onClose, onFinished, onUseLocal }: AddServerWizardProps) {
   const { toast } = useToast()
   const [mode, setMode] = useState<WizardMode | null>(null)
   const [changed, setChanged] = useState(false)
@@ -296,6 +298,22 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
         footer={footer}
       >
         {mode === null ? (
+          <>
+          {onUseLocal ? (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2.5 dark:border-emerald-500/30 dark:bg-emerald-500/10">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-emerald-900 dark:text-emerald-200">
+                  {t('localServer.quickTitle')}
+                </p>
+                <p className="mt-0.5 text-xs text-emerald-800/80 dark:text-emerald-300/80">
+                  {t('localServer.quickHint')}
+                </p>
+              </div>
+              <Button size="sm" onClick={onUseLocal}>
+                {t('localServer.quickAction')}
+              </Button>
+            </div>
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-2">
             <button
               type="button"
@@ -335,6 +353,7 @@ export function AddServerWizard({ open, onClose, onFinished }: AddServerWizardPr
               </span>
             </button>
           </div>
+          </>
         ) : mode === 'agent' ? (
           token === null ? (
             <div className="space-y-5">
