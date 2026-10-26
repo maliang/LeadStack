@@ -151,6 +151,18 @@ done
 [ "$OFFLINE" = "1" ] && pass "agent 停止后服务器状态变为 offline" || fail "75 秒内未判定 offline（当前：${S:-未知}）"
 
 # ---------------------------------------------------------------- 汇总
+step "7. agent 安装脚本流程可见性（deploy/install.sh --dry-run）"
+AGENT_DRY="$DATA_DIR/agent-dry.log"
+sh deploy/install.sh --dry-run --server http://127.0.0.1:1 --token verify-token \
+	--install-dir "$DATA_DIR/agentbin" > "$AGENT_DRY" 2>&1
+AGENT_RC=$?
+[ "$AGENT_RC" -eq 0 ] && pass "dry-run 退出码 0" || fail "dry-run 失败：$(tail -3 "$AGENT_DRY")"
+[ "$(grep -cE '\([1-4]/4\)' "$AGENT_DRY" 2>/dev/null || echo 0)" -eq 4 ] \
+	&& pass "输出 4 个阶段标题（1/4 … 4/4）" || fail "阶段标题缺失"
+[ "$(grep -cE '✓|– 跳过' "$AGENT_DRY" 2>/dev/null || echo 0)" -ge 4 ] \
+	&& pass "每个阶段都有 ✓/跳过 结论" || fail "结论行缺失"
+grep -q "未指定 --version" "$AGENT_DRY" && pass "latest 版本解析步骤可见" || fail "未提示版本解析"
+
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"
-[ "$FAIL" -eq 0 ] && { printf '\033[32mM0 验收通过\033[0m\n'; exit 0; } || { printf '\033[31mM0 验收未通过\033[0m\n'; exit 1; }
+[ "$FAIL" -eq 0 ] && { printf '\033[32m引导与接入 验收通过\033[0m\n'; exit 0; } || { printf '\033[31m引导与接入 验收未通过\033[0m\n'; exit 1; }

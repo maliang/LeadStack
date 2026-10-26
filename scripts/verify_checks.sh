@@ -298,6 +298,6 @@ STEP_KEEP="$(printf '%s' "$SMALL" | jq -r '.data.step // empty' 2>/dev/null)"
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"
-if [ "$FAIL" -eq 0 ]; then printf '\033[32mM2 验收通过\033[0m\n'; exit 0; fi
-printf '\033[31mM2 验收未通过\033[0m\n'
+if [ "$FAIL" -eq 0 ]; then printf '\033[32m检测与指标 验收通过\033[0m\n'; exit 0; fi
+printf '\033[31m检测与指标 验收未通过\033[0m\n'
 exit 1

@@ -51,6 +51,54 @@ log()  { printf '[leadstack-install] %s\n' "$*"; }
 warn() { printf '[leadstack-install] 警告：%s\n' "$*" >&2; }
 die()  { printf '[leadstack-install] 错误：%s\n' "$*" >&2; exit 1; }
 
+# ---------------------------------------------------------------------------
+# 进度输出
+# ---------------------------------------------------------------------------
+# 用户的原话是「没有流程输出」——下载十几 MB 时盯着空屏几十秒，比失败还难受。
+# 所以每个阶段都打一行 (n/6) 带标题，结束时打一行 ✓ 带耗时；非交互环境同样输出
+# （CI 日志里也需要），只有「下载进度条」在非 tty 下关闭（否则日志会被 \r 刷爆）。
+TTY_OUT=0
+if [ -t 1 ] || [ -t 2 ]; then TTY_OUT=1; fi
+STEP_TOTAL=6
+STEP_N=0
+STEP_T0=0
+STEP_ALL_T0=0
+
+step() { # <标题>
+	STEP_N=$((STEP_N + 1))
+	STEP_T0=$(date +%s)
+	printf '\n[leadstack-install] (%d/%d) %s\n' "$STEP_N" "$STEP_TOTAL" "$*"
+}
+
+step_took() {
+	_now=$(date +%s)
+	_took=$((_now - STEP_T0))
+	[ "$_took" -ge 1 ] || _took="<1"
+	printf '%s' "$_took"
+}
+
+step_ok() { # <说明...>
+	printf '[leadstack-install]    ✓ %s（%ss）\n' "$*" "$(step_took)"
+}
+
+step_skip() { # <原因...>
+	printf '[leadstack-install]    – 跳过：%s\n' "$*"
+}
+
+human_size() { # <字节数>
+	_b=${1:-0}
+	case "$_b" in
+		''|*[!0-9]*) printf '未知大小'; return 0 ;;
+	esac
+	if [ "$_b" -ge 1048576 ]; then
+		awk -v b="$_b" 'BEGIN { printf "%.1f MB", b / 1048576 }'
+	elif [ "$_b" -ge 1024 ]; then
+		awk -v b="$_b" 'BEGIN { printf "%.0f KB", b / 1024 }'
+	else
+		printf '%s B' "$_b"
+	fi
+}
+
 usage() {
 	cat <<'EOF'
 LeadStack 控制端一键安装
@@ -354,6 +402,7 @@ sha256_of() {
 # 下载与校验
 # ---------------------------------------------------------------------------
 DOWNLOAD_TOOL=""
+PROGRESS_ARG=""
 detect_download_tool() {
 	if command -v curl >/dev/null 2>&1; then
 		DOWNLOAD_TOOL="curl"
@@ -362,14 +411,41 @@ detect_download_tool() {
 	else
 		die "需要 curl 或 wget 之一来下载二进制；离线安装请用 --from-file <本地 leadstack 路径>"
 	fi
+	detect_progress
+}
+
+# 只有交互终端才开进度条：curl/wget 的进度写 stderr，所以「curl … | sudo sh」也能看到。
+detect_progress() {
+	PROGRESS_ARG=""
+	[ "$TTY_OUT" -eq 1 ] || return 0
+	case "$DOWNLOAD_TOOL" in
+		curl) PROGRESS_ARG="--progress-bar" ;;
+		wget)
+			if wget --help 2>&1 | grep -q -- '--show-progress'; then
+				PROGRESS_ARG="--show-progress"
+			fi
+			;;
+	esac
 }
 
 download() {
 	_dl_url=$1
 	_dl_dest=$2
 	case "$DOWNLOAD_TOOL" in
-		curl) curl -fsSL --retry 3 --connect-timeout 15 -o "$_dl_dest" "$_dl_url" ;;
-		wget) wget -q -T 15 -O "$_dl_dest" "$_dl_url" ;;
+		curl)
+			if [ -n "$PROGRESS_ARG" ]; then
+				curl -fL "$PROGRESS_ARG" --retry 3 --connect-timeout 15 -o "$_dl_dest" "$_dl_url"
+			else
+				curl -fsSL --retry 3 --connect-timeout 15 -o "$_dl_dest" "$_dl_url"
+			fi
+			;;
+		wget)
+			if [ -n "$PROGRESS_ARG" ]; then
+				wget -q "$PROGRESS_ARG" -T 15 -O "$_dl_dest" "$_dl_url"
+			else
+				wget -q -T 15 -O "$_dl_dest" "$_dl_url"
+			fi
+			;;
 	esac
 }
 
@@ -459,76 +535,96 @@ stop_service_before_upgrade() {
 	fi
 }
 
-install_binary() {
+# 取二进制：解析版本、下载归档到临时目录（设置 SRC_BIN / ARCHIVE / ARCHIVE_URL / TMPDIR_DL）
+fetch_binary() {
 	if [ -n "$FROM_FILE" ]; then
 		[ -f "$FROM_FILE" ] || die "--from-file 指定的文件不存在：$FROM_FILE"
-		log "使用本地二进制：$FROM_FILE"
-		run_priv install -m 0755 "$FROM_FILE" "$BIN_PATH"
+		SRC_BIN="$FROM_FILE"
 		return 0
 	fi
 
-	_version_label="$VERSION"
 	if [ "$VERSION" = "latest" ]; then
 		if [ "$DRY_RUN" -eq 1 ]; then
 			log "[dry-run] 未指定 --version：将调用 ${RELEASE_API} 解析最新 release tag 后再下载"
-			_version_label="<最新 tag>"
+			VERSION_LABEL="<最新 tag>"
 		else
 			resolve_latest_version
-			_version_label="$VERSION"
+			VERSION_LABEL="$VERSION"
 		fi
+	else
+		VERSION_LABEL="$VERSION"
 	fi
 
-	_archive="${BIN_NAME}_${_version_label}_${OS}_${ARCH}.tar.gz"
-	_url="${BASE_URL}/v${_version_label}/${_archive}"
+	ARCHIVE="${BIN_NAME}_${VERSION_LABEL}_${OS}_${ARCH}.tar.gz"
+	ARCHIVE_URL="${BASE_URL}/v${VERSION_LABEL}/${ARCHIVE}"
 
 	if [ "$DRY_RUN" -eq 1 ]; then
-		log "[dry-run] 下载 ${_url}"
-		log "[dry-run] 校验 ${BASE_URL}/v${_version_label}/checksums.txt（存在时校验 sha256）"
-		log "[dry-run] 解压 ${_archive} 并取其中的 ${BIN_NAME}"
-		printf '  + install -m 0755 <解压出的 %s> %s\n' "$BIN_NAME" "$BIN_PATH"
+		log "[dry-run] 下载 ${ARCHIVE_URL}"
+		log "[dry-run] 校验 ${BASE_URL}/v${VERSION_LABEL}/checksums.txt（存在时校验 sha256）"
+		log "[dry-run] 解压 ${ARCHIVE} 并取其中的 ${BIN_NAME}"
 		return 0
 	fi
 
-	_tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/leadstack-install.XXXXXX")
+	TMPDIR_DL=$(mktemp -d "${TMPDIR:-/tmp}/leadstack-install.XXXXXX")
 	# shellcheck disable=SC2064
-	trap 'rm -rf "${_tmpdir:-}"' EXIT INT TERM
+	trap 'rm -rf "${TMPDIR_DL:-}"' EXIT INT TERM
 
-	log "下载：$_url"
-	download_retry "$_url" "${_tmpdir}/${_archive}" || die "下载控制端二进制失败
-  请求地址：$_url
+	log "地址：${ARCHIVE_URL}"
+	download_retry "$ARCHIVE_URL" "${TMPDIR_DL}/${ARCHIVE}" || die "下载控制端二进制失败
+  请求地址：${ARCHIVE_URL}
   目标平台：${OS}/${ARCH}    版本：${VERSION}
   请依次确认：
     1) 发布地址是否可达（代理、镜像可用 --base-url <前缀> 指定）
     2) 该版本是否发布了 ${OS}/${ARCH} 产物（到 release 页面核对文件名与 checksums.txt）
     3) 版本号是否写错（--version 需为 latest 或 vX.Y.Z）
   离线安装：--from-file <本地 leadstack 路径>（仓库根 make build 后即 bin/leadstack）"
+	DL_BYTES=$(wc -c < "${TMPDIR_DL}/${ARCHIVE}" 2>/dev/null | tr -d '[:space:]')
+}
 
-	if download_optional "${BASE_URL}/v${VERSION}/checksums.txt" "${_tmpdir}/checksums.txt"; then
-		_want=$(awk -v f="$_archive" '$2 == f || $2 == "*"f {print $1}' "${_tmpdir}/checksums.txt" | head -n 1)
+# 校验 sha256 并解包（设置 SRC_BIN 与 SHA_VERIFIED）
+verify_and_extract() {
+	[ -n "$FROM_FILE" ] && return 0
+	[ "$DRY_RUN" -eq 1 ] && return 0
+
+	SHA_VERIFIED=0
+	log "校验 sha256"
+	if download_optional "${BASE_URL}/v${VERSION_LABEL}/checksums.txt" "${TMPDIR_DL}/checksums.txt"; then
+		_want=$(awk -v f="$ARCHIVE" '$2 == f || $2 == "*"f {print $1}' "${TMPDIR_DL}/checksums.txt" | head -n 1)
 		if [ -n "$_want" ]; then
-			_got=$(sha256_of "${_tmpdir}/${_archive}") || _got=""
+			_got=$(sha256_of "${TMPDIR_DL}/${ARCHIVE}") || _got=""
 			if [ -z "$_got" ]; then
 				warn "系统缺少 sha256sum/shasum/openssl，跳过校验"
 			elif [ "$_want" != "$_got" ]; then
 				die "校验和不匹配：期望 ${_want}，实际 ${_got}（文件可能损坏，请重试或联系维护者）"
 			else
-				log "sha256 校验通过"
+				SHA_VERIFIED=1
+				log "sha256 校验通过：${_got}"
 			fi
 		else
-			warn "checksums.txt 中没有 ${_archive} 的记录，跳过校验"
+			warn "checksums.txt 中没有 ${ARCHIVE} 的记录，跳过校验"
 		fi
 	else
 		warn "未找到 checksums.txt，跳过 sha256 校验"
 	fi
 
-	tar -xzf "${_tmpdir}/${_archive}" -C "$_tmpdir" || die "解压失败：${_archive}（文件可能不完整）"
-	_src="${_tmpdir}/${BIN_NAME}"
+	log "解压 ${ARCHIVE}"
+	tar -xzf "${TMPDIR_DL}/${ARCHIVE}" -C "$TMPDIR_DL" || die "解压失败：${ARCHIVE}（文件可能不完整）"
+	_src="${TMPDIR_DL}/${BIN_NAME}"
 	if [ ! -f "$_src" ]; then
-		_src=$(find "$_tmpdir" -type f -name "${BIN_NAME}" ! -name "*.tar.gz" | head -n 1)
+		_src=$(find "$TMPDIR_DL" -type f -name "${BIN_NAME}" ! -name "*.tar.gz" | head -n 1)
 	fi
 	[ -n "$_src" ] && [ -f "$_src" ] || die "压缩包内未找到 ${BIN_NAME} 可执行文件"
+	SRC_BIN="$_src"
+}
 
-	run_priv install -m 0755 "$_src" "$BIN_PATH"
+# 把取到的可执行文件装到 BIN_PATH
+install_binary_file() {
+	if [ "$DRY_RUN" -eq 1 ]; then
+		printf '  + install -m 0755 <取到的 %s> %s\n' "$BIN_NAME" "$BIN_PATH"
+		return 0
+	fi
+	[ -n "${SRC_BIN:-}" ] && [ -f "$SRC_BIN" ] || die "内部错误：没有取到可用的 ${BIN_NAME} 可执行文件"
+	run_priv install -m 0755 "$SRC_BIN" "$BIN_PATH"
 }
 
 # ---------------------------------------------------------------------------
@@ -666,12 +762,15 @@ install_service() {
 		warn "环境变量目录 ${ENV_DIR} 不可写，跳过环境文件"
 	fi
 
+	SERVICE_STATE="registered"
 	if [ "$NO_SERVICE" -eq 1 ]; then
 		log "已指定 --no-service，跳过服务注册"
+		SERVICE_STATE="env-only"
 		return 0
 	fi
 	if [ "$OS" = "linux" ] && [ "$DRY_RUN" -eq 0 ] && ! command -v systemctl >/dev/null 2>&1; then
 		warn "未检测到 systemctl，跳过服务注册（二进制已安装，可手动运行 ${BIN_PATH}）"
+		SERVICE_STATE="skipped"
 		return 0
 	fi
 
@@ -706,6 +805,7 @@ install_service() {
 
 # 装完探活：只对本机可达的监听地址做（0.0.0.0 也按 127.0.0.1 探）
 health_check() {
+	HEALTH_OK=0
 	[ "$NO_SERVICE" -eq 1 ] && return 0
 	[ "$DRY_RUN" -eq 1 ] && return 0
 	command -v curl >/dev/null 2>&1 || return 0
@@ -717,6 +817,8 @@ health_check() {
 	while [ "$_i" -lt 20 ]; do
 		if curl -fsS --max-time 2 "http://${_host}:${_p}/healthz" >/dev/null 2>&1; then
 			log "健康检查通过：http://${_host}:${_p}/healthz"
+			HEALTH_OK=1
+			HEALTH_PORT="$_p"
 			return 0
 		fi
 		_i=$((_i + 1))
@@ -800,7 +902,16 @@ do_uninstall() {
 }
 
 do_install() {
+	STEP_N=0
+	STEP_TOTAL=6
+	STEP_ALL_T0=$(date +%s)
+
+	# ---- 1/6 环境 ----
+	step "检查权限、平台与下载工具"
 	detect_privilege
+	if [ -z "$FROM_FILE" ]; then
+		detect_download_tool
+	fi
 	log "安装 LeadStack 控制端：os=${OS} arch=${ARCH} version=${VERSION}"
 	log "  监听地址：${LISTEN}"
 	log "  数据目录：${DATA_DIR}"
@@ -808,21 +919,87 @@ do_install() {
 	if [ -n "$PUBLIC_URL" ]; then log "  对外地址：${PUBLIC_URL}"; fi
 	if [ "$NO_SERVICE" -eq 1 ]; then log "  服务注册：跳过（--no-service）"; fi
 	if [ "$DRY_RUN" -eq 1 ]; then log "  模式：dry-run（只打印动作，不改动系统）"; fi
+	stop_service_before_upgrade
+	if [ "$(id -u)" -eq 0 ]; then
+		_priv="当前已是 root"
+	elif [ "$SUDO" = "sudo" ]; then
+		_priv="需要时用 sudo"
+	else
+		_priv="目标目录可写，无需 sudo"
+	fi
+	step_ok "环境就绪（${_priv}${PROGRESS_ARG:+，下载显示进度}）"
 
-	if [ -z "$FROM_FILE" ]; then
-		detect_download_tool
+	# ---- 2/6 取二进制 ----
+	if [ -n "$FROM_FILE" ]; then
+		step "获取控制端二进制（本地文件）"
+		fetch_binary
+		step_ok "使用本地文件 ${FROM_FILE}"
+	else
+		step "下载控制端二进制"
+		fetch_binary
+		if [ "$DRY_RUN" -eq 1 ]; then
+			step_ok "dry-run：只打印下载动作"
+		else
+			step_ok "已下载 $(human_size "${DL_BYTES:-0}")（版本 ${VERSION}）"
+		fi
 	fi
 
-	stop_service_before_upgrade
+	# ---- 3/6 校验与解包 ----
+	step "校验与解包"
+	verify_and_extract
+	if [ -n "$FROM_FILE" ]; then
+		step_skip "本地文件无需下载与解包"
+	elif [ "$DRY_RUN" -eq 1 ]; then
+		step_ok "dry-run：只打印校验与解包动作"
+	elif [ "${SHA_VERIFIED:-0}" -eq 1 ]; then
+		step_ok "sha256 校验通过，已解出 ${BIN_NAME}"
+	else
+		step_ok "已解出 ${BIN_NAME}（未做 sha256 校验）"
+	fi
+
+	# ---- 4/6 落地文件 ----
+	step "创建用户与目录、安装二进制"
 	ensure_user_and_dirs
-
 	run_priv mkdir -p "$INSTALL_DIR"
-	install_binary
-	install_service
-	health_check
+	install_binary_file
+	step_ok "已安装 ${BIN_PATH}"
 
+	# ---- 5/6 环境文件与服务 ----
+	step "写入环境文件与服务单元"
+	SERVICE_STATE=""
+	install_service
+	case "${SERVICE_STATE:-}" in
+		registered)
+			if [ "$OS" = "darwin" ]; then
+				step_ok "已注册 launchd 任务 ${LAUNCHD_LABEL}"
+			else
+				step_ok "已注册 systemd 服务 ${SERVICE_NAME} 并启动"
+			fi
+			;;
+		env-only) step_skip "指定了 --no-service：只写环境文件，不注册服务" ;;
+		skipped) step_skip "系统没有 systemctl，未注册服务（可直接运行 ${BIN_PATH}）" ;;
+		*) step_ok "环境文件已写入" ;;
+	esac
+
+	# ---- 6/6 健康检查 ----
+	step "健康检查"
+	if [ "$NO_SERVICE" -eq 1 ]; then
+		step_skip "--no-service 未注册服务，跳过探活"
+	elif [ "$DRY_RUN" -eq 1 ]; then
+		step_skip "dry-run 跳过探活"
+	else
+		health_check
+		if [ "${HEALTH_OK:-0}" -eq 1 ]; then
+			step_ok "http://127.0.0.1:${HEALTH_PORT}/healthz 已返回 ok"
+		else
+			step_skip "未在 10 秒内探通，见上方日志提示"
+		fi
+	fi
+
+	# ---- 汇总 ----
+	_total=$(( $(date +%s) - STEP_ALL_T0 ))
 	_p=$(listen_port "$LISTEN")
-	log "安装完成。"
+	log "安装完成（总耗时 ${_total}s）。"
 	log "  二进制：${BIN_PATH}"
 	log "  环境文件：${ENV_FILE}"
 	if [ "$NO_SERVICE" -eq 0 ]; then log "  服务单元：${UNIT_PATH}"; fi

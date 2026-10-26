@@ -43,6 +43,46 @@ log()  { printf '[leadstack-install] %s\n' "$*"; }
 warn() { printf '[leadstack-install] 警告：%s\n' "$*" >&2; }
 die()  { printf '[leadstack-install] 错误：%s\n' "$*" >&2; exit 1; }
 
+# ---------------------------------------------------------------------------
+# 进度输出（下载十几 MB 时不能盯着空屏；非交互环境也照常打阶段行，只是关掉进度条）
+# ---------------------------------------------------------------------------
+TTY_OUT=0
+if [ -t 1 ] || [ -t 2 ]; then TTY_OUT=1; fi
+STEP_TOTAL=4
+STEP_N=0
+STEP_T0=0
+STEP_ALL_T0=0
+
+step() { # <标题>
+	STEP_N=$((STEP_N + 1))
+	STEP_T0=$(date +%s)
+	printf '\n[leadstack-install] (%d/%d) %s\n' "$STEP_N" "$STEP_TOTAL" "$*"
+}
+
+step_took() {
+	_now=$(date +%s)
+	_took=$((_now - STEP_T0))
+	[ "$_took" -ge 1 ] || _took="<1"
+	printf '%s' "$_took"
+}
+
+step_ok() { printf '[leadstack-install]    ✓ %s（%ss）\n' "$*" "$(step_took)"; }
+step_skip() { printf '[leadstack-install]    – 跳过：%s\n' "$*"; }
+
+human_size() { # <字节数>
+	_b=${1:-0}
+	case "$_b" in
+		''|*[!0-9]*) printf '未知大小'; return 0 ;;
+	esac
+	if [ "$_b" -ge 1048576 ]; then
+		awk -v b="$_b" 'BEGIN { printf "%.1f MB", b / 1048576 }'
+	elif [ "$_b" -ge 1024 ]; then
+		awk -v b="$_b" 'BEGIN { printf "%.0f KB", b / 1024 }'
+	else
+		printf '%s B' "$_b"
+	fi
+}
+
 usage() {
 	cat <<'EOF'
 LeadStack agent 安装脚本
@@ -185,12 +225,24 @@ if [ "$INSECURE" -eq 1 ]; then
 		<string>--insecure</string>"
 fi
 
+# 目录可能尚不存在（--install-dir /tmp/new-dir）：向上找最近一个存在的祖先来判断可写性，
+# 否则 `-w` 对不存在的路径恒为 false，会被误判成「必须 sudo」，非交互安装直接失败。
+writable_dir() {
+	_wd_p=$1
+	while [ ! -e "$_wd_p" ]; do
+		_wd_prev=$_wd_p
+		_wd_p=$(dirname "$_wd_p")
+		[ "$_wd_p" = "$_wd_prev" ] && break
+	done
+	[ -w "$_wd_p" ]
+}
+
 detect_privilege() {
 	if [ "$(id -u)" -eq 0 ]; then
 		SUDO=""
 		return 0
 	fi
-	if [ "$NO_SERVICE" -eq 1 ] && [ -w "$INSTALL_DIR" ] 2>/dev/null; then
+	if [ "$NO_SERVICE" -eq 1 ] && writable_dir "$INSTALL_DIR" && writable_dir "$ENV_DIR"; then
 		SUDO=""
 		return 0
 	fi
@@ -258,6 +310,7 @@ write_file() {
 # 下载与校验
 # ---------------------------------------------------------------------------
 DOWNLOAD_TOOL=""
+PROGRESS_ARG=""
 detect_download_tool() {
 	if command -v curl >/dev/null 2>&1; then
 		DOWNLOAD_TOOL="curl"
@@ -266,14 +319,41 @@ detect_download_tool() {
 	else
 		die "需要 curl 或 wget 之一来下载二进制；离线安装请用 --from-file <本地二进制路径>"
 	fi
+	detect_progress
+}
+
+# 只有交互终端才开进度条：进度写 stderr，所以「curl … | sh」也能看到。
+detect_progress() {
+	PROGRESS_ARG=""
+	[ "$TTY_OUT" -eq 1 ] || return 0
+	case "$DOWNLOAD_TOOL" in
+		curl) PROGRESS_ARG="--progress-bar" ;;
+		wget)
+			if wget --help 2>&1 | grep -q -- '--show-progress'; then
+				PROGRESS_ARG="--show-progress"
+			fi
+			;;
+	esac
 }
 
 download() { # download <url> <目标文件>
 	_dl_url=$1
 	_dl_dest=$2
 	case "$DOWNLOAD_TOOL" in
-		curl) curl -fsSL --retry 3 --connect-timeout 15 -o "$_dl_dest" "$_dl_url" ;;
-		wget) wget -q -T 15 -O "$_dl_dest" "$_dl_url" ;;
+		curl)
+			if [ -n "$PROGRESS_ARG" ]; then
+				curl -fL "$PROGRESS_ARG" --retry 3 --connect-timeout 15 -o "$_dl_dest" "$_dl_url"
+			else
+				curl -fsSL --retry 3 --connect-timeout 15 -o "$_dl_dest" "$_dl_url"
+			fi
+			;;
+		wget)
+			if [ -n "$PROGRESS_ARG" ]; then
+				wget -q "$PROGRESS_ARG" -T 15 -O "$_dl_dest" "$_dl_url"
+			else
+				wget -q -T 15 -O "$_dl_dest" "$_dl_url"
+			fi
+			;;
 	esac
 }
 
@@ -385,6 +465,9 @@ install_binary() {
     3) 版本号是否写错（--version / --agent-version 需为 latest 或 vX.Y.Z）
   离线安装：--from-file <本地 leadstack-agent 路径>（仓库根 make build 后即 bin/leadstack-agent）"
 
+	_dl_bytes=$(wc -c < "${_tmpdir}/${_archive}" 2>/dev/null | tr -d '[:space:]')
+	log "已下载 $(human_size "${_dl_bytes:-0}")"
+
 	if download_optional "${BASE_URL}/v${VERSION}/checksums.txt" "${_tmpdir}/checksums.txt"; then
 		_want=$(awk -v f="$_archive" '$2 == f || $2 == "*"f {print $1}' "${_tmpdir}/checksums.txt" | head -n 1)
 		if [ -n "$_want" ]; then
@@ -394,7 +477,8 @@ install_binary() {
 			elif [ "$_want" != "$_got" ]; then
 				die "校验和不匹配：期望 ${_want}，实际 ${_got}（文件可能损坏，请重试或联系维护者）"
 			else
-				log "sha256 校验通过"
+				SHA_VERIFIED=1
+				log "sha256 校验通过：${_got}"
 			fi
 		else
 			warn "checksums.txt 中没有 ${_archive} 的记录，跳过校验"
@@ -488,20 +572,23 @@ EOF
 install_service() {
 	# 环境变量文件即使不注册服务也写（--no-service 场景下手动启动可直接 source）
 	_env_writable=0
-	if [ "$(id -u)" -eq 0 ] || [ "$SUDO" = "sudo" ] || [ -w "$ENV_DIR" ]; then _env_writable=1; fi
+	if [ "$(id -u)" -eq 0 ] || [ "$SUDO" = "sudo" ] || writable_dir "$ENV_DIR"; then _env_writable=1; fi
 	if [ "$_env_writable" -eq 1 ]; then
 		emit_env_file | write_file "$ENV_FILE" 0600
 	else
 		warn "环境变量目录 ${ENV_DIR} 不可写，跳过凭证文件（本次以 --no-service 运行时可忽略）"
 	fi
 
+	SERVICE_STATE="registered"
 	if [ "$NO_SERVICE" -eq 1 ]; then
 		log "已指定 --no-service，跳过服务注册"
+		SERVICE_STATE="env-only"
 		return 0
 	fi
 	# dry-run 下即使本机没有 systemd 也把单元内容打印出来，便于人工核对
 	if [ "$OS" = "linux" ] && [ "$DRY_RUN" -eq 0 ] && ! command -v systemctl >/dev/null 2>&1; then
 		warn "未检测到 systemctl，跳过服务注册（二进制已安装，可手动运行 ${BIN_PATH}）"
+		SERVICE_STATE="skipped"
 		return 0
 	fi
 
@@ -600,6 +687,12 @@ do_uninstall() {
 }
 
 do_install() {
+	STEP_N=0
+	STEP_TOTAL=4
+	STEP_ALL_T0=$(date +%s)
+
+	# ---- 1/4 参数与权限 ----
+	step "检查参数、平台与权限"
 	[ -n "$SERVER" ] || die "缺少 --server（控制端地址），例如：--server http://127.0.0.1:8080"
 	[ -n "$TOKEN" ]  || die "缺少 --token（接入令牌，先在控制台生成接入令牌）"
 	case "$SERVER" in
@@ -632,17 +725,66 @@ do_install() {
 	if [ "$DRY_RUN" -eq 1 ]; then log "  模式：dry-run（只打印动作，不改动系统）"; fi
 
 	detect_privilege
-
 	if [ -z "$FROM_FILE" ]; then
 		detect_download_tool
 	fi
+	if [ "$(id -u)" -eq 0 ]; then
+		_priv="当前已是 root"
+	elif [ "$SUDO" = "sudo" ]; then
+		_priv="需要时用 sudo"
+	else
+		_priv="安装目录可写，无需 sudo"
+	fi
+	step_ok "环境就绪（${_priv}${PROGRESS_ARG:+，下载显示进度}）"
 
-	run_priv mkdir -p "$INSTALL_DIR"
-	install_binary
+	# ---- 2/4 下载、校验并安装 ----
+	if [ -n "$FROM_FILE" ]; then
+		step "安装 agent 二进制（本地文件）"
+		run_priv mkdir -p "$INSTALL_DIR"
+		install_binary
+		step_ok "已从 ${FROM_FILE} 安装到 ${BIN_PATH}"
+	else
+		step "下载、校验并安装 agent 二进制"
+		run_priv mkdir -p "$INSTALL_DIR"
+		install_binary
+		if [ "$DRY_RUN" -eq 1 ]; then
+			step_ok "dry-run：只打印下载与安装动作"
+		elif [ "${SHA_VERIFIED:-0}" -eq 1 ]; then
+			step_ok "已下载 $(human_size "${_dl_bytes:-0}")，sha256 校验通过，已安装 ${BIN_PATH}"
+		else
+			step_ok "已下载 $(human_size "${_dl_bytes:-0}") 并安装 ${BIN_PATH}（未做 sha256 校验）"
+		fi
+	fi
+
+	# ---- 3/4 可执行性自检 ----
+	step "确认二进制可执行"
 	verify_binary
-	install_service
+	if [ "$DRY_RUN" -eq 1 ]; then
+		step_skip "dry-run 未落盘"
+	else
+		step_ok "${BIN_PATH} 可执行"
+	fi
 
-	log "安装完成。"
+	# ---- 4/4 服务注册 ----
+	step "写入凭证并注册服务"
+	SERVICE_STATE=""
+	install_service
+	case "${SERVICE_STATE:-}" in
+		registered)
+			if [ "$OS" = "darwin" ]; then
+				step_ok "已注册 launchd 任务 ${LAUNCHD_LABEL} 并启动"
+			else
+				step_ok "已注册 systemd 服务 ${SERVICE_NAME} 并启动"
+			fi
+			;;
+		env-only) step_skip "指定了 --no-service：只写凭证文件，不注册服务" ;;
+		skipped) step_skip "系统没有 systemctl，未注册服务（可手动运行 ${BIN_PATH}）" ;;
+		*) step_ok "凭证文件已写入" ;;
+	esac
+
+	# ---- 汇总 ----
+	_total=$(( $(date +%s) - STEP_ALL_T0 ))
+	log "安装完成（总耗时 ${_total}s）。"
 	log "  二进制：${BIN_PATH}"
 	if [ "$NO_SERVICE" -eq 0 ]; then log "  服务单元：${UNIT_PATH}"; fi
 	if [ "$NO_SERVICE" -eq 1 ]; then

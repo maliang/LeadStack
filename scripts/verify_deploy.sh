@@ -337,6 +337,6 @@ DEL_CODE="$(status_of -X DELETE -H "Authorization: Bearer ${TOKEN}" "${BASE}/api
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"
-if [ "$FAIL" -eq 0 ]; then printf '\033[32mM4 验收通过\033[0m\n'; exit 0; fi
-printf '\033[31mM4 验收未通过\033[0m\n'
+if [ "$FAIL" -eq 0 ]; then printf '\033[32m部署与回滚 验收通过\033[0m\n'; exit 0; fi
+printf '\033[31m部署与回滚 验收未通过\033[0m\n'
 exit 1

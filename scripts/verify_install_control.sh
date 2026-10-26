@@ -240,6 +240,31 @@ else
 	skip "本机没有可用的 docker，跳过 Linux 单元渲染断言"
 fi
 
+# ---------------------------------------------------------------- 10. 流程可见性
+step "10. 流程可见性（下载进度与阶段输出）"
+# 用户反馈过「没有流程输出」：十几 MB 下载期间盯着空屏无法判断是否卡住。
+DL_STEPS=$(grep -cE '\([1-6]/6\)' "$DL_LOG" 2>/dev/null || true)
+[ "${DL_STEPS:-0}" -eq 6 ] && pass "真实安装输出 6 个阶段标题（1/6 … 6/6）" \
+	|| fail "阶段标题数量异常：${DL_STEPS:-0}"
+grep -q "已下载 .*B" "$DL_LOG" && pass "下载完成打印文件大小" || fail "未打印下载大小"
+grep -q "sha256 校验通过" "$DL_LOG" && pass "校验阶段有明确结论" || fail "校验阶段无结论"
+grep -qE "已安装 .*/(leadstack|.+/leadstack)$|已安装 " "$DL_LOG" && pass "安装阶段有明确结论" || fail "安装阶段无结论"
+grep -q "安装完成（总耗时" "$DL_LOG" && pass "结束打印总耗时" || fail "未打印总耗时"
+# 非交互（无 tty）时不应残留 curl 进度条（否则日志会被 \r 刷爆）
+if grep -qE '[0-9]+\.[0-9]%' "$DL_LOG"; then
+	fail "非 tty 下仍输出了进度条百分比"
+else
+	pass "非 tty 下不输出进度条（只输出阶段与结论）"
+fi
+# 每个阶段都要有结论行（✓ 或 跳过），不能只打标题就没了
+DL_CONCLUSIONS=$(grep -cE '✓|– 跳过' "$DL_LOG" 2>/dev/null || true)
+[ "${DL_CONCLUSIONS:-0}" -ge 6 ] && pass "每个阶段都有 ✓/跳过 结论行" \
+	|| fail "结论行偏少：${DL_CONCLUSIONS:-0}"
+DRY_OUT="$BASE_DIR/progress-dry.log"
+run_install --dry-run --version "$VER" --base-url "$MOCK_BASE" --port 9103 > "$DRY_OUT" 2>&1
+grep -q "(1/6) 检查权限" "$DRY_OUT" && grep -q "(6/6) 健康检查" "$DRY_OUT" \
+	&& pass "dry-run 同样给出完整阶段序列" || fail "dry-run 阶段序列缺失"
+
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"

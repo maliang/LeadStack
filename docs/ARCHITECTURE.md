@@ -2245,10 +2245,26 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 
 ### 64.4 验收
 
-`scripts/verify_install_control.sh`（39 项，`make verify-install`）：端口参数与非法值、环境文件引号编码、按 env 真实启动并 `curl /healthz` + 登录、幂等重装换端口、本地 mock 发布服务的真实下载与篡改包中止、`LEADSTACK_RELEASE_API` 解析、卸载保留数据 / `--purge` 删除、docker 内 systemd 单元渲染（`User=leadstack`、`EnvironmentFile`、`ProtectSystem=strict`）。
+`scripts/verify_install_control.sh`（47 项，`make verify-install`）：端口参数与非法值、环境文件引号编码、按 env 真实启动并 `curl /healthz` + 登录、幂等重装换端口、本地 mock 发布服务的真实下载与篡改包中止、`LEADSTACK_RELEASE_API` 解析、卸载保留数据 / `--purge` 删除、docker 内 systemd 单元渲染（`User=leadstack`、`EnvironmentFile`、`ProtectSystem=strict`）。
 
 踩过的坑（写测试时才会暴露）：
 
 - 用 `( … ) &` 启动被测服务时，`kill $!` 只杀子 shell，**里的二进制会变成占端口的孤儿**，后续断言会「对着旧进程」假通过——必须直接后台启动二进制，并在 cleanup 里按临时目录 `pkill -f` 兜底；
 - macOS 的 `ls -l` 会带扩展属性标记（`-rw-------@`），判断权限要用 `stat -f '%Lp'` / `stat -c '%a'`；
 - 容器内（colima）**单文件 bind mount 不可见**，只共享工作目录，所以 Linux 侧的验证要把交叉编译产物放进仓库目录再挂载。
+
+### 64.5 进度输出（不能让人盯着空屏）
+
+下载十几 MB、校验、解包、注册服务全部静默执行时，用户唯一的感受是「卡住了」——实操里这条反馈出现过一次，所以两个安装脚本（`install-control.sh` 与 agent 的 `install.sh`）都统一成：
+
+- 每阶段一行 `(n/总数) 标题`，结束时一行 `   ✓ 说明（Ns）`，跳过的一行 `   – 跳过：原因`（`--no-service` / dry-run / 无 systemctl 都是显式跳过而不是默默不做事）；
+- 下载在交互终端下带进度条：`curl --progress-bar` / `wget --show-progress`。进度写 stderr，所以 `curl … | sudo sh` 一样能看到；
+- 下载完成打印实际大小（`已下载 6.7 MB`），`sha256 校验通过：<hash>` 打出全量摘要，结束打印 `安装完成（总耗时 Ns）`；
+- **非 tty 关掉进度条**（否则 CI 日志会被 `\r` 刷爆），但阶段行与结论行照常输出——日志里也要能看出走到哪一步。
+
+两个连带修掉的权限判断缺陷（都在 agent 的 `install.sh`，非交互安装会直接失败）：
+
+- `--install-dir /tmp/new-dir` 这种**目录尚不存在**的情况：`-w "$dir"` 恒为 false，被误判成「必须 sudo」，于是非交互会话里直接报「sudo 需要密码」。改为 `writable_dir()`：向上找最近一个存在的祖先再判断可写性；
+- `install_service` 写环境文件前同样用 `-w "$ENV_DIR"` 判断，同样会误判「目录不可写，跳过凭证文件」，一并改成 `writable_dir()`。
+
+验收对应 `verify_install_control.sh` 第 10 节（8 项：6 个阶段标题、大小、校验结论、安装结论、总耗时、非 tty 无进度条残留、每阶段有结论行、dry-run 阶段序列）与 `verify_bootstrap.sh` 第 7 节（4 项：agent 脚本 dry-run 的 4 阶段与结论行）。

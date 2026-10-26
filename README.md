@@ -154,6 +154,29 @@ sudo sh install-control.sh --from-file ./leadstack --port 8080
 安装到 `/usr/local/bin/leadstack` → 生成 `0600` 的环境文件 `/etc/leadstack/leadstack.env` →
 注册并启动服务（Linux systemd / macOS launchd）→ 打印访问地址与初始密码。
 
+安装过程会**逐步打印进度**，下载十几 MB 期间不会长时间空屏（共 6 个阶段，每阶段有 ✓ 与耗时）：
+
+```text
+[leadstack-install] (1/6) 检查权限、平台与下载工具
+[leadstack-install]    ✓ 环境就绪（需要时用 sudo，下载显示进度）（<1s）
+
+[leadstack-install] (2/6) 下载控制端二进制
+#####                                                                      5.6%
+[leadstack-install]    ✓ 已下载 6.7 MB（版本 0.1.5）（4s）
+
+[leadstack-install] (3/6) 校验与解包
+[leadstack-install] sha256 校验通过：072d85d055ad039c326fa7a1c1cb7281c38d2679501c28bea8afea48cbeb1685
+[leadstack-install]    ✓ sha256 校验通过，已解出 leadstack（3s）
+
+...
+[leadstack-install] (6/6) 健康检查
+[leadstack-install]    ✓ http://127.0.0.1:8080/healthz 已返回 ok（1s）
+[leadstack-install] 安装完成（总耗时 12s）。
+```
+
+下载进度条只在交互终端显示（`curl … | sudo sh` 也算交互终端，照样能看到）；
+`--dry-run` 会打印同样的阶段序列，只是每个阶段都是「只打印动作」。
+
 | 参数 | 说明 |
 |---|---|
 | `--port N` | 监听端口（默认 8080）。**这就是「一键安装时指定端口」的入口** |
@@ -303,7 +326,9 @@ data/
 curl -fsSL http://<控制端>:8080/install.sh | sh -s -- \
   --server http://<控制端>:8080 --token <令牌>
 ```
-安装脚本会安装到 `/usr/local/bin`、注册 systemd（Linux）或 launchd（macOS）服务。手动安装也可：
+安装脚本会安装到 `/usr/local/bin`、注册 systemd（Linux）或 launchd（macOS）服务；
+执行时同样分阶段打印进度（`(1/4) 检查参数` → `(2/4) 下载、校验并安装` → `(3/4) 确认可执行` → `(4/4) 注册服务`），
+下载带进度条，装完打印「安装完成（总耗时 Ns）」。手动安装也可：
 
 ```bash
 ./leadstack-agent --server http://<控制端>:8080 --token <令牌>
@@ -874,5 +899,5 @@ bash scripts/verify_install_control.sh  # 控制端一键安装：端口、下�
 
 ## 状态
 
-功能已完整交付，**十三套验收共 446 项断言全绿**（`make test-e2e`）。已知环境限制：
+功能已完整交付，**十三套验收共 458 项断言全绿**（`make test-e2e`）。已知环境限制：
 macOS 公证 / Windows 代码签名需证书；钉钉/飞书/Slack/Telegram/邮件需你的真实凭据才能验证实际投递。

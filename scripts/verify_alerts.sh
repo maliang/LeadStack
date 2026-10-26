@@ -309,6 +309,6 @@ fi
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"
-if [ "$FAIL" -eq 0 ]; then printf '\033[32mM3 验收通过\033[0m\n'; exit 0; fi
-printf '\033[31mM3 验收未通过\033[0m\n'
+if [ "$FAIL" -eq 0 ]; then printf '\033[32m告警与通知 验收通过\033[0m\n'; exit 0; fi
+printf '\033[31m告警与通知 验收未通过\033[0m\n'
 exit 1
