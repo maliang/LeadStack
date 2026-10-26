@@ -771,7 +771,9 @@ do_install() {
 	install_service
 	case "${SERVICE_STATE:-}" in
 		registered)
-			if [ "$OS" = "darwin" ]; then
+			if [ "$DRY_RUN" -eq 1 ]; then
+				step_ok "dry-run：只打印凭证文件与服务注册内容"
+			elif [ "$OS" = "darwin" ]; then
 				step_ok "已注册 launchd 任务 ${LAUNCHD_LABEL} 并启动"
 			else
 				step_ok "已注册 systemd 服务 ${SERVICE_NAME} 并启动"

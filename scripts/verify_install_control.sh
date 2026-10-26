@@ -264,6 +264,12 @@ DRY_OUT="$BASE_DIR/progress-dry.log"
 run_install --dry-run --version "$VER" --base-url "$MOCK_BASE" --port 9103 > "$DRY_OUT" 2>&1
 grep -q "(1/6) 检查权限" "$DRY_OUT" && grep -q "(6/6) 健康检查" "$DRY_OUT" \
 	&& pass "dry-run 同样给出完整阶段序列" || fail "dry-run 阶段序列缺失"
+# 干跑不能撒谎：没改系统就不能说「已安装 / 已注册」
+if grep -qE "✓ 已安装|✓ 已注册" "$DRY_OUT"; then
+	fail "dry-run 出现了「已安装/已注册」的既成结论"
+else
+	pass "dry-run 的结论措辞与「未改动系统」一致"
+fi
 
 # ---------------------------------------------------------------- 汇总
 step "验收结果"

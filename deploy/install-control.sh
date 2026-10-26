@@ -962,7 +962,11 @@ do_install() {
 	ensure_user_and_dirs
 	run_priv mkdir -p "$INSTALL_DIR"
 	install_binary_file
-	step_ok "已安装 ${BIN_PATH}"
+	if [ "$DRY_RUN" -eq 1 ]; then
+		step_ok "dry-run：只打印创建目录与安装动作"
+	else
+		step_ok "已安装 ${BIN_PATH}"
+	fi
 
 	# ---- 5/6 环境文件与服务 ----
 	step "写入环境文件与服务单元"
@@ -970,7 +974,9 @@ do_install() {
 	install_service
 	case "${SERVICE_STATE:-}" in
 		registered)
-			if [ "$OS" = "darwin" ]; then
+			if [ "$DRY_RUN" -eq 1 ]; then
+				step_ok "dry-run：只打印环境文件与服务注册内容"
+			elif [ "$OS" = "darwin" ]; then
 				step_ok "已注册 launchd 任务 ${LAUNCHD_LABEL}"
 			else
 				step_ok "已注册 systemd 服务 ${SERVICE_NAME} 并启动"
