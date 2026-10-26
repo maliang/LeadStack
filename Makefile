@@ -201,12 +201,12 @@ devssh: ## 构建 DEV-ONLY 测试 SSH 服务到 bin/leadstack-devssh（不参与
 	CGO_ENABLED=0 $(GO) build $(GOFLAGS_BUILD) -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/leadstack-devssh $(CMD_DEVSSH)
 
 # 验收脚本清单（按序执行；由 lead 维护，缺失时自动跳过，落地后无需改 Makefile）
-E2E_SCRIPTS := verify_bootstrap verify_servers verify_checks verify_alerts verify_deploy verify_deploy_v2 verify_deploy_script verify_deploy_rollout verify_baota verify_backup verify_ops verify_authz
+E2E_SCRIPTS := verify_bootstrap verify_servers verify_checks verify_alerts verify_deploy verify_deploy_v2 verify_deploy_script verify_deploy_rollout verify_baota verify_backup verify_ops verify_authz verify_install_control
 
 # 依次跑 基础/纳管/检测 验收脚本；输出（含脚本内部打印的控制端/agent 日志尾部）tee 到 $(E2E_LOG_DIR)/，
 # CI 失败时把该目录作为 artifact 上传。某个脚本缺失时打印提示并跳过（不算失败）；
 # 任一已存在的脚本失败 → 立即停止（不再跑后续脚本）并让 make 失败。
-test-e2e: ## 端到端验收：按序 verify_bootstrap → … → ops → authz（前置：make build && make devssh）
+test-e2e: ## 端到端验收：按序 verify_bootstrap → … → authz → install_control（前置：make build && make devssh）
 	@mkdir -p $(E2E_LOG_DIR)
 	@printf '>> 前置产物：bin/leadstack、bin/leadstack-agent（make build）+ bin/leadstack-devssh（make devssh）\n'
 	@set -eu; scripts='$(E2E_SCRIPTS)'; total=0; i=0; \
@@ -223,6 +223,9 @@ test-e2e: ## 端到端验收：按序 verify_bootstrap → … → ops → authz
 
 verify-authz: ## 单独跑权限体系验收（前置：make build）
 	@bash scripts/verify_authz.sh
+
+verify-install: ## 单独跑控制端一键安装验收（前置：make build；有 docker 时额外验证 systemd 单元）
+	@bash scripts/verify_install_control.sh
 
 verify-baota: ## 单独跑宝塔面板部署验收（前置：make build）
 	@bash scripts/verify_baota.sh

@@ -69,7 +69,21 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量节点 agent，跨平台、开箱
 
 ## 快速开始（5 分钟）
 
-**前置要求**：Go 1.27+、Node 20+ 与 pnpm 10+（仅「源码构建」需要；用预编译包或 Docker 不需要）。
+**前置要求**：Go 1.27+、Node 20+ 与 pnpm 10+（仅「源码构建」需要；用一键安装脚本、预编译包或 Docker 都不需要）。
+
+**只是想把它跑起来（生产推荐）**——一条命令搞定安装、端口、systemd 服务与初始密码：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maliang/leadstack/master/deploy/install-control.sh \
+  | sudo sh -s -- --port 9000 --admin-password '换成你自己的密码'
+# 装完即可访问：http://<主机IP>:9000 （--port 不写则默认 8080）
+```
+
+脚本会在 Linux 上注册 systemd 单元（非 root 用户 `leadstack` 运行、开机自启）、在 macOS 上注册 launchd 服务，
+并把端口写进 `/etc/leadstack/leadstack.env`。**重复执行同一条命令就是升级**（先停服务再换二进制），
+`--uninstall` 可干净卸载（默认保留数据目录）。完整选项见[第 2 步](#第-2-步安装控制端四选一)。
+
+也可以从源码构建：
 
 ```bash
 # 1. 构建（产出两个二进制，前端已内嵌进控制端）
@@ -115,9 +129,51 @@ curl -fsSL http://<控制端地址>:8080/install.sh | sh -s -- \
 
 > ⚠️ **不要把控制端跑在会合盖休眠的笔记本上**，否则你会在"为什么没收到告警"上浪费一个晚上。
 
-### 第 2 步：安装控制端（三选一）
+### 第 2 步：安装控制端（四选一）
 
-**A. 源码构建（开发或自建）**
+**A. 一键安装脚本（生产推荐）**
+
+```bash
+# 最简：默认 8080，只监听 127.0.0.1
+curl -fsSL https://raw.githubusercontent.com/maliang/leadstack/master/deploy/install-control.sh \
+  | sudo sh -s -- --port 8080
+
+# 对外提供服务：监听所有网卡（建议前面再加一个 TLS 反代）
+curl -fsSL https://raw.githubusercontent.com/maliang/leadstack/master/deploy/install-control.sh \
+  | sudo sh -s -- --bind 0.0.0.0 --port 8080 --public-url https://leadstack.example.com
+
+# 先看它要做什么，不动系统
+curl -fsSL https://raw.githubusercontent.com/maliang/leadstack/master/deploy/install-control.sh \
+  | sh -s -- --dry-run --port 8080
+
+# 离线机器：把二进制拷过去直接装
+sudo sh install-control.sh --from-file ./leadstack --port 8080
+```
+
+它做的事：下载对应平台的发布包 → 校验 `checksums.txt` 里的 sha256（不匹配就中止，不覆盖已有二进制）→
+安装到 `/usr/local/bin/leadstack` → 生成 `0600` 的环境文件 `/etc/leadstack/leadstack.env` →
+注册并启动服务（Linux systemd / macOS launchd）→ 打印访问地址与初始密码。
+
+| 参数 | 说明 |
+|---|---|
+| `--port N` | 监听端口（默认 8080）。**这就是「一键安装时指定端口」的入口** |
+| `--bind ADDR` | 监听地址（默认 `127.0.0.1` 仅本机；对外用 `0.0.0.0`） |
+| `--listen ADDR:PORT` | 直接给完整监听地址，优先级高于 `--bind`/`--port` |
+| `--admin-password P` | 指定初始管理员密码（留空则随机生成并只打印一次） |
+| `--public-url URL` | 目标机回连地址，**反代/公网访问时必填**（否则生成的安装命令是内网地址） |
+| `--trusted-proxies CIDR` | 可信反代列表，逗号分隔；配了才会采信 `X-Forwarded-For` 记录真实 IP |
+| `--version V` | 安装指定版本（默认 `latest`，自动解析最新 release） |
+| `--data-dir DIR` | 数据目录（Linux 默认 `/var/lib/leadstack/data`） |
+| `--no-service` | 只装二进制与环境文件，不注册服务 |
+| `--uninstall [--purge]` | 卸载（默认保留数据目录；`--purge` 连数据一起删） |
+
+安装之后改端口有两种方式：重跑脚本带新 `--port`（服务会自动重启），或编辑
+`/etc/leadstack/leadstack.env` 里的 `LEADSTACK_LISTEN` 后 `systemctl restart leadstack`。
+
+验收脚本：`make verify-install`（或 `bash scripts/verify_install_control.sh`，39 项）——覆盖端口参数校验、
+按端口真实监听、篡改包必须中止、幂等重装、卸载保留数据、环境文件引号编码，以及 Linux systemd 单元渲染（有 docker 时）。
+
+**B. 源码构建（开发或自建）**
 
 ```bash
 git clone <repo> && cd LeadStack-领栈
@@ -127,7 +183,7 @@ make devssh         # 可选：DEV-ONLY 测试 SSH 服务，用于本地验收�
 
 其他常用目标：`make run`（构建并启动）、`make test`（跑测试）、`make help`（全部目标）。
 
-**B. 预编译二进制（发布包）**
+**C. 预编译二进制（发布包）**
 
 从 release 页面下载对应平台压缩包（5 平台：linux/darwin × amd64/arm64、windows/amd64），解压后直接运行：
 
@@ -138,7 +194,7 @@ make devssh         # 可选：DEV-ONLY 测试 SSH 服务，用于本地验收�
 
 也可以用 goreleaser 自己出包：`make release-snapshot`（产物在 `dist/`）。
 
-**C. Docker**
+**D. Docker**
 
 ```bash
 # 只绑本机 8080；要对外访问把 ports 改成 "8080:8080" 并自行加 TLS 反代
@@ -771,7 +827,7 @@ make build          # 构建（含前端）
 make test           # Go 测试
 make fmt-check      # gofmt 闸门
 make test-race      # 竞态检测（api + store）
-make test-e2e       # 端到端验收（8 个脚本，逐段断言）
+make test-e2e       # 端到端验收（13 个脚本，逐段断言）
 make dev            # 开发模式（另开 make web-dev 走前端热更新）
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check   # Docker 构建 + 容器内健康检查 + 备份校验
@@ -781,14 +837,19 @@ node scripts/capture-screenshots.mjs  # 重新采集 README 截图（需先起�
 单独跑某一套验收（需要 `make build && make devssh`）：
 
 ```bash
-bash scripts/verify_bootstrap.sh   # 接入、指标、离线判定
-bash scripts/verify_servers.sh     # 凭证、SSH 纳管、主机信息、批量、历史
-bash scripts/verify_checks.sh      # 五类检测、两条执行通道、调度、降级
-bash scripts/verify_alerts.sh      # 渠道、firing、去重、确认、恢复、指标规则、静默
-bash scripts/verify_deploy.sh      # 发布、产物落盘校验、失败保护、回滚、批量、重试、注入防护
-bash scripts/verify_backup.sh      # 加密有效性、篡改检测、离线恢复、暂存恢复、定时与保留
-bash scripts/verify_ops.sh         # 审计、RBAC、Token、分页、导入、终端、文件、定时任务、端口
-bash scripts/verify_authz.sh       # 权限点、自定义角色、分组与资源级授权、登录限流与失败锁定
+bash scripts/verify_bootstrap.sh        # 接入、指标、离线判定
+bash scripts/verify_servers.sh          # 凭证、SSH 纳管、主机信息、批量、历史
+bash scripts/verify_checks.sh           # 五类检测、两条执行通道、agent 代检、调度、降级
+bash scripts/verify_alerts.sh           # 渠道、firing、去重、确认、恢复、指标规则、静默
+bash scripts/verify_deploy.sh           # 发布、产物落盘校验、失败保护、回滚、批量、重试、注入防护
+bash scripts/verify_deploy_v2.sh        # 接管目录、健康检查、首版初始化、本机接入
+bash scripts/verify_deploy_script.sh    # 脚本模式（git pull / start.sh restart 类流程）
+bash scripts/verify_deploy_rollout.sh   # 灰度、回滚到指定版本、接管体检
+bash scripts/verify_baota.sh            # 宝塔面板通道（mock 面板校验签名）
+bash scripts/verify_backup.sh           # 加密有效性、篡改检测、离线恢复、暂存恢复、定时与保留
+bash scripts/verify_ops.sh              # 审计、RBAC、Token、分页、导入、终端、文件、定时任务、端口
+bash scripts/verify_authz.sh            # 权限点、自定义角色、分组与资源级授权、可信代理、登录限流
+bash scripts/verify_install_control.sh  # 控制端一键安装：端口、下载校验、幂等升级、卸载、systemd 单元
 ```
 
 ---
@@ -813,5 +874,5 @@ bash scripts/verify_authz.sh       # 权限点、自定义角色、分组与资�
 
 ## 状态
 
-功能已完整交付，**七套验收共 228 项断言全绿**（`make test-e2e`）。已知环境限制：
+功能已完整交付，**十三套验收共 446 项断言全绿**（`make test-e2e`）。已知环境限制：
 macOS 公证 / Windows 代码签名需证书；钉钉/飞书/Slack/Telegram/邮件需你的真实凭据才能验证实际投递。

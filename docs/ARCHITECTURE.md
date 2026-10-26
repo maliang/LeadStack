@@ -2214,3 +2214,41 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 
 - 单元：`internal/checker/probe_via_test.go`、`internal/jobs/probe_test.go`、`internal/agent/probe_job_test.go`（含探测任务与 TLS 配置/自定义 CA 用例）、`internal/api/probe_via_test.go`、`internal/api/client_ip_test.go`、`internal/config/trusted_proxies_test.go`；
 - 端到端：`scripts/verify_checks.sh` 第 8 节（agent 代检成功、SSH 服务器明确拒绝且不回落、`process` 带 `probe_via` → 400、`params` 原样回显）；`scripts/verify_authz.sh` 第 8 节（按转发 IP 分桶、审计记录真实客户端 IP、未配白名单时忽略 XFF）。
+
+## 64. 控制端一键安装脚本（`deploy/install-control.sh`）
+
+目标：让「装一个控制端」从「下载包 → 放二进制 → 写 env → 配 systemd」四步变成一条命令，并且**端口可指定**。
+
+### 64.1 为什么是脚本而不是安装包
+
+- 控制端是单文件二进制（前端、agent 安装脚本都 `//go:embed` 在里面），没有运行时依赖，脚本只需要做四件事：下载 / 校验 / 落盘 / 注册服务；
+- `.deb` / `.rpm` / Homebrew 都要各自维护打包与仓库，而脚本对所有 Linux 发行版与 macOS 是同一份；
+- 与 `deploy/install.sh`（agent）对称：同一个仓库、同一种「管道执行」的心智模型。
+
+### 64.2 参数与落点
+
+| 参数 | 落点 / 语义 |
+|---|---|
+| `--port N` | 合成监听地址 `127.0.0.1:N`，写进环境文件的 `LEADSTACK_LISTEN`（校验 1–65535） |
+| `--bind ADDR` | 只换地址部分；地址里带端口直接报错（提示改用 `--port`），避免出现「两个端口谁生效」的歧义 |
+| `--listen ADDR:PORT` | 直接给完整值，优先级最高（`--port`/`--bind` 被忽略） |
+| `--data-dir` / `--install-dir` / `--env-dir` / `--user` | 除 `--data-dir` 外都有平台默认值；`--no-service` 时只落二进制与环境文件 |
+| `--version` / `--base-url` / `--from-file` | 版本默认 `latest`（解析 `LEADSTACK_RELEASE_API` 的 `tag_name`）；`--base-url` 指向镜像；`--from-file` 完全离线 |
+| `--uninstall` / `--purge` | 停服务 → 删单元 → 删二进制 → 删环境文件；**默认保留数据目录**，`--purge` 才删 |
+
+### 64.3 安全与幂等
+
+- **必校验 sha256**：先取 `checksums.txt`，比对通过才解压替换；不匹配 `die` 且**不动已安装的二进制**（先装到临时目录再 `install`）；
+- **绝不静默 sudo**：所有需要特权的动作走 `run_priv`，非 root 且无 `sudo` 时报错退出；`--no-service` + 目录可写时完全不需要提权（这条也修过 bug：对尚不存在的目录做 `-w` 判断恒为假，改成向上找最近存在目录的 `writable_dir()`）；
+- **写入前先落 0600**：环境文件用 `umask 077` + 临时文件 + `mv`，中途失败不会留下「半截明文密码」；
+- **幂等即升级**：重复执行 = 停服务 → 换二进制 → 起服务；端口/env 全部按本次参数重写，不残留旧值。
+
+### 64.4 验收
+
+`scripts/verify_install_control.sh`（39 项，`make verify-install`）：端口参数与非法值、环境文件引号编码、按 env 真实启动并 `curl /healthz` + 登录、幂等重装换端口、本地 mock 发布服务的真实下载与篡改包中止、`LEADSTACK_RELEASE_API` 解析、卸载保留数据 / `--purge` 删除、docker 内 systemd 单元渲染（`User=leadstack`、`EnvironmentFile`、`ProtectSystem=strict`）。
+
+踩过的坑（写测试时才会暴露）：
+
+- 用 `( … ) &` 启动被测服务时，`kill $!` 只杀子 shell，**里的二进制会变成占端口的孤儿**，后续断言会「对着旧进程」假通过——必须直接后台启动二进制，并在 cleanup 里按临时目录 `pkill -f` 兜底；
+- macOS 的 `ls -l` 会带扩展属性标记（`-rw-------@`），判断权限要用 `stat -f '%Lp'` / `stat -c '%a'`；
+- 容器内（colima）**单文件 bind mount 不可见**，只共享工作目录，所以 Linux 侧的验证要把交叉编译产物放进仓库目录再挂载。

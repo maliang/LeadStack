@@ -66,6 +66,13 @@ make_artifact() { # <name> -> sha (tar.gz)
 upload_artifact() { # <file> -> id
   sget "$(curl -sS -X POST "${BASE}/api/v1/artifacts/upload" -H "Authorization: Bearer ${TOKEN}" -F "file=@$1;type=application/gzip")" '.data.id'
 }
+dump_runs() { # <release_id>：失败时打印每台的状态与日志尾部，便于定位（不改变断言结果）
+  local rel="$1" runs
+  runs="$(api GET "/api/v1/releases/$rel/runs" "" "$TOKEN")"
+  printf '    runs: %s\n' "$(printf '%s' "$runs" | jq -c '[.data.runs[] | {server_id,status,failed_step,error}]' 2>/dev/null)"
+  printf '%s' "$runs" | jq -r '.data.runs[0].log // empty' 2>/dev/null | tail -12 | sed 's/^/    | /'
+}
+
 create_release() { # <app> <tmpl> <version> <artifact> <strategy> <canary> <hold>
   local body resp
   body="$(jq -n --arg a "$1" --arg t "$2" --arg v "$3" --arg art "$4" --arg st "$5" \
@@ -86,7 +93,7 @@ ssh-keygen -q -t ed25519 -N '' -f "$DATA_DIR/id" >/dev/null 2>&1
   --authorized-key-file "$DATA_DIR/id.pub" --port-file "$DATA_DIR/ssh.port" > "$DATA_DIR/devssh.log" 2>&1 &
 DEVSSH_PID=$!
 SPORT=""
-for _ in $(seq 1 40); do SPORT="$(tr -d '[:space:]' < "$DATA_DIR/ssh.port" 2>/dev/null)"; [ -n "$SPORT" ] && break; sleep 0.25; done
+for _ in $(seq 1 40); do SPORT="$(cat "$DATA_DIR/ssh.port" 2>/dev/null | tr -d '[:space:]')"; [ -n "$SPORT" ] && break; sleep 0.25; done
 [ -n "$SPORT" ] && pass "devssh 已就绪" || { fail "devssh 未就绪"; exit 1; }
 
 env LEADSTACK_LISTEN="127.0.0.1:${PORT}" \
@@ -135,7 +142,7 @@ CANARY_META="$(sget "$(api GET "/api/v1/releases/$CANARY" "" "$TOKEN")" '.data.r
 step "3. 回滚到指定版本"
 SHA2="$(make_artifact r2)"; ART2="$(upload_artifact "$DATA_DIR/r2.tar.gz")"
 REL2="$(create_release "$APP_ID" "$TPL_ID" "1.0.1" "$ART2" all 0 0)"
-[ "$(wait_release "$REL2" success 120)" = "success" ] && pass "第二个版本发布成功" || fail "第二个版本发布失败"
+[ "$(wait_release "$REL2" success 120)" = "success" ] && pass "第二个版本发布成功" || { fail "第二个版本发布失败"; dump_runs "$REL2"; }
 
 TARGETS="$(api GET "/api/v1/apps/$APP_ID/rollback-targets" "" "$TOKEN")"
 TARGET_COUNT="$(printf '%s' "$TARGETS" | jq -r '.data | length' 2>/dev/null)"
