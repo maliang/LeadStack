@@ -373,6 +373,24 @@ download() {
 	esac
 }
 
+# 网络抖动（曾实测到 curl: (35) SSL_ERROR_SYSCALL，github.com 直连偶发）不该让用户看到
+# 「下载失败」就重来一遍：在脚本层面重试 3 次，失败信息仍是原来那条。
+download_retry() { # <url> <dest>
+	_dr_attempt=1
+	while [ "$_dr_attempt" -le 3 ]; do
+		if download "$1" "$2"; then
+			return 0
+		fi
+		if [ "$_dr_attempt" -ge 3 ]; then
+			return 1
+		fi
+		warn "下载失败（第 ${_dr_attempt} 次），2 秒后重试"
+		sleep 2
+		_dr_attempt=$((_dr_attempt + 1))
+	done
+	return 1
+}
+
 download_optional() {
 	_dlo_url=$1
 	_dlo_dest=$2
@@ -476,7 +494,7 @@ install_binary() {
 	trap 'rm -rf "${_tmpdir:-}"' EXIT INT TERM
 
 	log "下载：$_url"
-	download "$_url" "${_tmpdir}/${_archive}" || die "下载控制端二进制失败
+	download_retry "$_url" "${_tmpdir}/${_archive}" || die "下载控制端二进制失败
   请求地址：$_url
   目标平台：${OS}/${ARCH}    版本：${VERSION}
   请依次确认：

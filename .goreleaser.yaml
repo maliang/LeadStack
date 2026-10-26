@@ -132,6 +132,17 @@ release:
   # 注意：footer 的模板上下文是 Release（只有 .Tag/.Version/.Env 等），
   # 没有 .Os/.Arch（那是 archives 的上下文）——写了会导致发布阶段渲染失败。
   footer: |
+    ## 安装控制端（一条命令，端口可指定）
+
+    ```sh
+    curl -fsSL https://raw.githubusercontent.com/maliang/leadstack/v{{ .Version }}/deploy/install-control.sh \
+      | sudo sh -s -- --port 8080
+    ```
+
+    > 自动完成下载 / sha256 校验 / 安装 / 注册服务（Linux systemd、macOS launchd），
+    > 端口写进 `/etc/leadstack/leadstack.env`；重复执行即升级，`--uninstall` 干净卸载。
+    > 离线环境用 `--from-file ./leadstack`。
+
     ## 安装 agent
 
     ```sh
