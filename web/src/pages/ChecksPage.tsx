@@ -12,7 +12,12 @@ import { formatLatency, formatRelativeTime } from '../lib/format'
 import { Button, IconButton } from '../components/Button'
 import { EnableSwitch } from '../components/EnableSwitch'
 import { CheckFormDialog } from '../components/CheckFormDialog'
-import { CheckKindBadge, CheckStateBadge, availabilityTone } from '../components/CheckBadges'
+import {
+  CheckKindBadge,
+  CheckStateBadge,
+  ProbeAgentBadge,
+  availabilityTone,
+} from '../components/CheckBadges'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { EmptyState } from '../components/EmptyState'
 import {
@@ -344,7 +349,10 @@ export default function ChecksPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 align-top">
-                        <CheckKindBadge kind={check.kind} />
+                        <div className="flex flex-wrap items-center gap-1">
+                          <CheckKindBadge kind={check.kind} />
+                          {check.params.probe_via === 'agent' ? <ProbeAgentBadge /> : null}
+                        </div>
                       </td>
                       <td className="max-w-[240px] px-4 py-3 align-top">
                         <span

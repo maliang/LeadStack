@@ -79,6 +79,7 @@ export function CheckFormDialog({
   const [processUser, setProcessUser] = useState('')
   const [exitZeroOk, setExitZeroOk] = useState(true)
   const [expectStdout, setExpectStdout] = useState('')
+  const [probeVia, setProbeVia] = useState<'control' | 'agent'>('control')
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
@@ -106,6 +107,7 @@ export function CheckFormDialog({
     setProcessUser(String(params.user ?? ''))
     setExitZeroOk(params.exit_zero_ok !== false)
     setExpectStdout(String(params.expect_stdout ?? ''))
+    setProbeVia(params.probe_via === 'agent' ? 'agent' : 'control')
     setSelected(new Set(check?.server_ids ?? []))
     setSearch('')
     setPickerGroup('')
@@ -186,6 +188,10 @@ export function CheckFormDialog({
     if (kind === 'script') {
       params.exit_zero_ok = exitZeroOk
       if (expectStdout.trim()) params.expect_stdout = expectStdout.trim()
+    }
+    // 探测通道仅适用于 tcp/http/ping；process/script 必须清掉，否则后端 400
+    if (kind === 'tcp' || kind === 'http' || kind === 'ping') {
+      params.probe_via = probeVia
     }
     return params
   }
@@ -370,6 +376,52 @@ export function CheckFormDialog({
             </p>
           ) : null}
         </div>
+
+        {kind === 'tcp' || kind === 'http' || kind === 'ping' ? (
+          <div>
+            <span className={labelClass}>{t('checks.probeChannel')}</span>
+            <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+              {(
+                [
+                  {
+                    value: 'control' as const,
+                    title: t('checks.probeControl'),
+                    hint: t('checks.probeControlHint'),
+                  },
+                  {
+                    value: 'agent' as const,
+                    title: t('checks.probeAgent'),
+                    hint: t('checks.probeAgentHint'),
+                  },
+                ]
+              ).map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setProbeVia(option.value)}
+                  className={cn(
+                    'rounded-lg border px-3 py-2 text-left transition-colors',
+                    probeVia === option.value
+                      ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-400 dark:bg-indigo-500/10'
+                      : 'border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-600',
+                  )}
+                >
+                  <span className="block text-sm font-medium text-slate-800 dark:text-slate-100">
+                    {option.title}
+                  </span>
+                  <span className="mt-0.5 block text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                    {option.hint}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {probeVia === 'agent' ? (
+              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                {t('checks.probeAgentNote')}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {kind === 'http' ? (
           <div className="grid gap-4 sm:grid-cols-3">

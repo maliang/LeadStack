@@ -19,6 +19,7 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量节点 agent，跨平台、开箱
 - [界面一览](#界面一览)
 - [快速开始（5 分钟）](#快速开始5-分钟)
 - [详细开始流程](#详细开始流程)
+- [受限网络部署](#受限网络部署不能开端口--只有-ip--目标机要独立探活)
 - [生产部署：systemd](#生产部署systemd)
 - [版本升级与回滚](#版本升级与回滚)
 - [常见问题](#常见问题)
@@ -423,6 +424,110 @@ leadstack network --reset                     # 清除网络设置，回落环�
 
 ---
 
+## 受限网络部署（不能开端口 / 只有 IP / 目标机要独立探活）
+
+三个真实场景，结论先给：**目标机永远不需要开放入向端口**，因为 agent 是出向客户端。
+
+| 你的网络限制 | 能不能用 | 怎么做 |
+|---|---|---|
+| 目标机不能多开端口（只允许出向 80/443） | ✅ | 用 **agent 接入**：agent 主动连控制端 `/agent/ws`，目标机上一个端口都不用开 |
+| 不想给目标机 SSH 账号，又想用已有端口 | ✅ | 让 nginx 从现有 443 反代到控制端（见下方配置），目标机照样走 agent |
+| 只能 IP 访问、没法上 HTTPS | ✅ | 明文 HTTP（靠防火墙白名单兜底）或自签证书 + `--ca`，见下文 |
+| 目标机必须自己探测本机端口/HTTP | ✅ | 检测项选「由 agent 执行」（`probe_via=agent`） |
+| 目标机完全不能出网 | ❌ | 任何模式都不行（控制端连不进去，agent 也出不来） |
+
+### 1. SSH 还是 agent？
+
+| | agent 模式（推荐） | SSH 模式 |
+|---|---|---|
+| 目标机开端口 | **不需要** | 需要 22（或在设置里改的 SSH 端口） |
+| 状态实时性 | 心跳 20s / 指标 15s，断线 45s 判定离线 | 每 30s 轮询一次，连续 3 次失败才判离线（最差 ~90s） |
+| 需要凭据 | 只填接入令牌 | 需要账号密码或私钥 |
+| 部署执行 | agent 执行 | 控制端 SSH 执行 |
+
+> 端口与实时性的差异见「端口与网络」上方对比；本机接入见第 5 步的「一键接入本机」。
+
+### 2. 用 nginx 从已有端口反代（不开新端口）
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name leadstack.example.com;
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+    client_max_body_size 512m;   # 制品可能很大
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;                     # ← 必须：WebSocket 需要 1.1
+        proxy_set_header Upgrade $http_upgrade;      # ← 必须：agent 长连接靠它升级
+        proxy_set_header Connection "upgrade";       # ← 必须
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;                   # ← 心跳 20s，别短于它
+        proxy_buffering off;
+    }
+}
+```
+
+反代之后还有 **两件必做**：
+
+1. **设置 → 网络与端口 → 对外地址** 改成 `https://leadstack.example.com`。否则安装命令和制品下载地址还会是 `127.0.0.1:8080`，目标机拿到就跑不通（改完立即生效，不用重启）。
+2. **加可信代理白名单**，否则审计与登录限流看到的全是 nginx 的 IP：
+
+```bash
+LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
+```
+
+> 只有对端 IP 命中白名单时才会解析 `X-Forwarded-For`（从右往左取第一个不信任的地址），非白名单的请求头里写什么都不认。
+
+优先用**子域名**而不是子路径：`/agent/ws`、`/api/v1`、`/install.sh` 都是绝对路径，挂到 `/leadstack/` 下需要额外 rewrite。
+
+验证反代是否通（期望 `401`，说明已到控制端只是没带令牌；`502/504` 说明反代本身有问题）：
+
+```bash
+curl -i -H 'Connection: Upgrade' -H 'Upgrade: websocket' https://leadstack.example.com/agent/ws
+```
+
+### 3. 只有 IP、没有 HTTPS（或自签证书）
+
+agent 只信任系统证书库，所以：
+
+- **明文 HTTP**：`--server http://1.2.3.4:8080` 直接可用。**但要清楚代价**：这条通道能下发任意命令，等于 root。至少配好防火墙白名单（只放目标机 IP）或走 VPN。
+- **自签 HTTPS**：证书必须包含目标机访问用的 **IP SAN**，否则会报
+  `x509: cannot validate certificate for 1.2.3.4 because it doesn't contain any IP SANs`。然后给 agent 指定 CA：
+
+```bash
+# 生成带 IP SAN 的自签证书
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  -keyout key.pem -out cert.pem \
+  -subj "/CN=1.2.3.4" -addext "subjectAltName=IP:1.2.3.4"
+
+# 目标机：把 cert.pem 拷过去，安装 agent 时带上
+sh install.sh --server https://1.2.3.4:8443 --token <token> --ca /etc/leadstack/ca.pem
+```
+
+`--ca` 是**追加**信任（保留系统 CA），仍会校验证书链与主机名；只有实在没法装 CA 时才用 `--insecure`（跳过校验，不推荐）。
+
+- **连证书都不想折腾**：在目标机上开一条反向隧道，agent 连本地端口即可（仍然是出向，不需要目标机开端口）：
+
+```bash
+ssh -N -L 127.0.0.1:9090:127.0.0.1:8080 user@控制端
+./leadstack-agent --server http://127.0.0.1:9090 --token <token>
+```
+
+### 4. 目标机自己探活（`probe_via=agent`）
+
+默认 `tcp` / `http` / `ping` 检测是**控制端直连**目标——目标机在内网 NAT 后面时这就探不到（控制端连不进去）。把检测项的「探测通道」改成 **由 agent 执行**，探测就由目标机自己发起：
+
+- 支持 `tcp` / `http` / `ping`；`process` / `script` 本来就在目标机执行，不接受这个参数（传了返回 400）。
+- 服务器必须是 **agent 接入**；SSH 接入的服务器会返回明确错误，**不会静默回落到控制端直连**。
+- 请求路径：控制端把它包成一次 `job.exec`（`kind=probe`）下发给 agent，agent 在本地执行后回传结果（延迟、状态码、消息）。
+
+---
+
 ## 生产部署：systemd
 
 **为什么要 systemd**：控制端必须常驻（检测、告警、采集都靠它）。用 `nohup` 或终端跑，一旦退出监控就静默失效。
@@ -609,6 +714,7 @@ sudo systemctl start leadstack
 | `LEADSTACK_LOGIN_LOCK_DURATION` | `15m` | 账号锁定时长 |
 | `LEADSTACK_LOGIN_IP_LIMIT` | `20` | 同一 IP 在窗口内的登录请求上限（0=关闭） |
 | `LEADSTACK_LOGIN_IP_WINDOW` | `1m` | IP 限流窗口 |
+| `LEADSTACK_TRUSTED_PROXIES` | 空（不信任任何代理头） | 可信反向代理 CIDR/IP 列表，逗号分隔；配置后才解析 `X-Forwarded-For` |
 
 > ⚠️ `master.key` 丢失 → 已存凭证无法解密；`backup.pass` 丢失 → 备份永久无法解密。两者都要与数据目录一并备份，且**分开保管**。
 
@@ -627,6 +733,8 @@ leadstack restore --file <f> --data-dir <d>   # 离线恢复（需先停服务�
 
 leadstack-agent --server <url> --token <t>    # 节点 agent
 leadstack-agent --once            # 单次上报后退出（自测）
+leadstack-agent --ca <pem>        # 额外信任该 CA（控制端用自签证书时）
+leadstack-agent --insecure        # 跳过 TLS 证书校验（不推荐）
 ```
 
 ---

@@ -525,6 +525,8 @@ export interface CheckParams {
   expect_stdout?: string
   /** 状态判定：连续失败次数阈值，默认 3 */
   fail_threshold?: number
+  /** 探测通道：control=控制端直连（默认）；agent=由目标机 agent 代检（仅 tcp/http/ping） */
+  probe_via?: 'control' | 'agent' | string
   /** 兼容后端可能多带的字段 */
   [key: string]: unknown
 }

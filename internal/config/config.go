@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,6 +31,9 @@ const (
 	EnvLogLevel          = "LEADSTACK_LOG_LEVEL"
 	// EnvMasterKey 直接提供 32 字节 hex 主密钥；设置后不再读取 master.key 文件。
 	EnvMasterKey = "LEADSTACK_MASTER_KEY"
+	// EnvTrustedProxies 是可信反向代理的地址/CIDR 列表（逗号分隔）。
+	// 只有来自这些地址的请求，才采信 X-Forwarded-For / X-Real-IP。
+	EnvTrustedProxies = "LEADSTACK_TRUSTED_PROXIES"
 	// EnvSSHInterval 是 agentless（mode=ssh）采集间隔，支持 Go duration 字符串（如 30s、3s）。
 	EnvSSHInterval = "LEADSTACK_SSH_INTERVAL"
 	// EnvCheckConcurrency 是检测调度器的最大并发探测数。
@@ -167,6 +171,9 @@ type Config struct {
 	LoginIPLimit int
 	// LoginIPWindow 是 IP 限流窗口。
 	LoginIPWindow time.Duration
+	// TrustedProxies 是可信反向代理的地址/CIDR 列表（逗号分隔，原始字符串）。
+	// 为空表示不信任任何代理头，客户端 IP 一律取 TCP 对端地址。
+	TrustedProxies string
 	// ShutdownTimeout 是优雅关闭的最长等待时间。
 	ShutdownTimeout time.Duration
 	// Version 是构建版本号，由 main 传入（-ldflags 注入）。
@@ -238,6 +245,7 @@ func Load(version string, args []string) (*Config, error) {
 	loginLockDuration := fs.Duration("login-lock-duration", defaultDurationOr(EnvLoginLockDuration, DefaultLoginLockDuration), "账号锁定时长，如 15m（环境变量 "+EnvLoginLockDuration+"）")
 	loginIPLimit := fs.Int("login-ip-limit", envIntOr(EnvLoginIPLimit, DefaultLoginIPLimit), "同一 IP 限流窗口内的登录请求上限，0=关闭（环境变量 "+EnvLoginIPLimit+"）")
 	loginIPWindow := fs.Duration("login-ip-window", defaultDurationOr(EnvLoginIPWindow, DefaultLoginIPWindow), "IP 限流窗口，如 1m（环境变量 "+EnvLoginIPWindow+"）")
+	trustedProxies := fs.String("trusted-proxies", strings.TrimSpace(os.Getenv(EnvTrustedProxies)), "可信反向代理地址/CIDR，逗号分隔；只有它们转发的 X-Forwarded-For 才被采信（环境变量 "+EnvTrustedProxies+"）")
 	shutdownTimeout := fs.Duration("shutdown-timeout", DefaultShutdownTimeout, "优雅关闭最长等待时间")
 	masterKeyHex := fs.String("master-key", os.Getenv(EnvMasterKey), "32 字节 hex 主密钥；留空则读取 <data-dir>/master.key（环境变量 "+EnvMasterKey+"）")
 	sshInterval := fs.Duration("ssh-interval", defaultSSHInterval(), "agentless 采集间隔，如 30s（环境变量 "+EnvSSHInterval+"）")
@@ -277,6 +285,7 @@ func Load(version string, args []string) (*Config, error) {
 		LoginLockDuration:      *loginLockDuration,
 		LoginIPLimit:           *loginIPLimit,
 		LoginIPWindow:          *loginIPWindow,
+		TrustedProxies:         strings.TrimSpace(*trustedProxies),
 		ShutdownTimeout:        *shutdownTimeout,
 		Version:                version,
 		SSHInterval:            *sshInterval,
@@ -334,6 +343,10 @@ func Load(version string, args []string) (*Config, error) {
 	}
 	if cfg.ShutdownTimeout <= 0 {
 		return nil, errors.New("配置错误: shutdown-timeout 必须为正数")
+	}
+
+	if _, err := ParseTrustedProxies(cfg.TrustedProxies); err != nil {
+		return nil, err
 	}
 
 	if cfg.SSHInterval < time.Second || cfg.SSHInterval > 24*time.Hour {
@@ -586,4 +599,41 @@ func envBoolOr(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+// ParseTrustedProxies 解析可信代理列表：支持单个 IP（v4/v6）与 CIDR，逗号分隔。
+//
+// 为什么不默认信任代理头：X-Forwarded-For 是客户端可伪造的。
+// 只有对端确实是自己的反向代理时，采信它才有意义；否则任何人都能把
+// 审计日志与登录限流里的 IP 写成任意值。默认空列表 = 完全不信代理头。
+func ParseTrustedProxies(raw string) ([]*net.IPNet, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var out []*net.IPNet
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if strings.Contains(item, "/") {
+			_, n, err := net.ParseCIDR(item)
+			if err != nil {
+				return nil, fmt.Errorf("配置错误: trusted-proxies 中的 %q 不是合法 CIDR", item)
+			}
+			out = append(out, n)
+			continue
+		}
+		ip := net.ParseIP(item)
+		if ip == nil {
+			return nil, fmt.Errorf("配置错误: trusted-proxies 中的 %q 不是合法 IP 或 CIDR", item)
+		}
+		bits := 32
+		if ip.To4() == nil {
+			bits = 128
+		}
+		out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+	return out, nil
 }

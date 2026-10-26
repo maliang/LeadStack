@@ -123,12 +123,41 @@ type HostInfo struct {
 	CollectedAt    int64    `json:"collected_at"`
 }
 
+// 任务种类（JobExec.Kind）。
+const (
+	// JobKindCommand 是在目标机上执行 shell 命令（默认，兼容旧 agent）。
+	JobKindCommand = "command"
+	// JobKindProbe 是请目标机原生执行一次探测（tcp/http/ping），
+	// 用于目标机没有入向端口、控制端连不进去的场景。
+	JobKindProbe = "probe"
+)
+
 // JobExec 是控制端下发的任务。
 type JobExec struct {
-	RunID    string `json:"run_id"`
-	Kind     string `json:"kind"` // 基础 固定 "command"
+	RunID string `json:"run_id"`
+	// Kind 为任务种类：空值等同 "command"（兼容旧版控制端）。
+	Kind string `json:"kind,omitempty"`
+	// Command 在 Kind=command 时是 shell 命令；在 Kind=probe 时是 ProbeRequest 的 JSON。
 	Command  string `json:"command"`
 	TimeoutS int    `json:"timeout_s"`
+}
+
+// ProbeRequest 是 Kind=probe 任务携带的探测参数。
+// Params 直接对应检测项的 params（expect_status/method/keyword/insecure 等）。
+type ProbeRequest struct {
+	Kind     string         `json:"kind"` // tcp | http | ping
+	Target   string         `json:"target"`
+	TimeoutS int            `json:"timeout_s"`
+	Params   map[string]any `json:"params,omitempty"`
+}
+
+// ProbeResult 是 Kind=probe 任务的探测结果（由 agent 以 job.done 的 stdout 回传 JSON）。
+type ProbeResult struct {
+	OK         bool   `json:"ok"`
+	LatencyMS  int64  `json:"latency_ms"`
+	StatusCode int    `json:"status_code,omitempty"`
+	Message    string `json:"message,omitempty"`
+	TS         int64  `json:"ts,omitempty"`
 }
 
 // JobAck 表示 agent 已接手任务。

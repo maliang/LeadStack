@@ -17,6 +17,8 @@
 #   --agent-version V  --version 的别名（显式指定要安装的 agent 版本，便于回滚）
 #   --base-url URL     发布包前缀，默认 https://github.com/maliang/leadstack/releases/download
 #   --from-file PATH   直接安装本地二进制（离线场景 / 自测），跳过下载
+#   --ca PATH          额外信任的 CA 证书（PEM）；控制端用自签证书时使用
+#   --insecure         跳过 TLS 证书校验（自签且无法分发 CA 时使用，不推荐）
 #   --install-dir DIR  安装目录，默认 /usr/local/bin
 #   --env-dir DIR      环境变量目录，默认 /etc/leadstack（Linux）/ /usr/local/etc/leadstack（macOS）
 #   --no-service       只装二进制，不安装 / 不启动系统服务
@@ -56,6 +58,8 @@ LeadStack agent 安装脚本
   --agent-version V  --version 的别名（显式指定 agent 版本，便于回滚）
   --base-url URL     发布包下载前缀，默认 GitHub Releases
   --from-file PATH   使用本地二进制安装（离线 / 自测）
+  --ca PATH          额外信任的 CA 证书（PEM），用于控制端自签 HTTPS
+  --insecure         跳过 TLS 证书校验（自签且无法分发 CA 时使用，不推荐）
   --install-dir DIR  安装目录，默认 /usr/local/bin
   --env-dir DIR      环境变量目录，默认 /etc/leadstack 或 /usr/local/etc/leadstack
   --no-service       只安装二进制，不注册系统服务
@@ -95,6 +99,8 @@ BASE_URL="${LEADSTACK_INSTALL_BASE_URL:-$DEFAULT_BASE_URL}"
 FROM_FILE="${LEADSTACK_AGENT_BINARY:-}"
 INSTALL_DIR="$DEFAULT_INSTALL_DIR"
 ENV_DIR_OVERRIDE="${LEADSTACK_ENV_DIR:-}"
+CA_FILE="${LEADSTACK_AGENT_CA:-}"
+INSECURE=0
 NO_SERVICE=0
 DRY_RUN=0
 UNINSTALL=0
@@ -113,6 +119,8 @@ while [ $# -gt 0 ]; do
 		--agent-version) need_value "$_opt" $(($# - 1)); VERSION=$2; shift 2 ;;
 		--base-url)   need_value "$_opt" $(($# - 1)); BASE_URL=$2; shift 2 ;;
 		--from-file)  need_value "$_opt" $(($# - 1)); FROM_FILE=$2; shift 2 ;;
+		--ca)         need_value "$_opt" $(($# - 1)); CA_FILE=$2; shift 2 ;;
+		--insecure)   INSECURE=1; shift ;;
 		--install-dir) need_value "$_opt" $(($# - 1)); INSTALL_DIR=$2; shift 2 ;;
 		--env-dir)    need_value "$_opt" $(($# - 1)); ENV_DIR_OVERRIDE=$2; shift 2 ;;
 		--no-service) NO_SERVICE=1; shift ;;
@@ -162,6 +170,21 @@ SUDO=""
 SUDO_CHECKED=0
 
 # 判断是否需要 root：root 直接写；否则若目标目录可写且不装服务，则不需要 sudo
+# 附加的 TLS 参数：systemd 行内拼接，launchd 用独立 <string> 数组项。
+AGENT_EXTRA=""
+LAUNCHD_EXTRA=""
+if [ -n "$CA_FILE" ]; then
+	AGENT_EXTRA="${AGENT_EXTRA} --ca ${CA_FILE}"
+	LAUNCHD_EXTRA="${LAUNCHD_EXTRA}
+		<string>--ca</string>
+		<string>${CA_FILE}</string>"
+fi
+if [ "$INSECURE" -eq 1 ]; then
+	AGENT_EXTRA="${AGENT_EXTRA} --insecure"
+	LAUNCHD_EXTRA="${LAUNCHD_EXTRA}
+		<string>--insecure</string>"
+fi
+
 detect_privilege() {
 	if [ "$(id -u)" -eq 0 ]; then
 		SUDO=""
@@ -405,7 +428,7 @@ Wants=network-online.target
 Type=simple
 # 凭证放在 EnvironmentFile（权限 0600），由 systemd 在启动时展开到 ExecStart
 EnvironmentFile=-${ENV_FILE}
-ExecStart=${BIN_PATH} --server \${LEADSTACK_AGENT_SERVER} --token \${LEADSTACK_AGENT_TOKEN} --verbose
+ExecStart=${BIN_PATH} --server \${LEADSTACK_AGENT_SERVER} --token \${LEADSTACK_AGENT_TOKEN} --verbose${AGENT_EXTRA}
 Restart=always
 RestartSec=5
 # agent 需要执行运维任务，保持 root；如需降权请自行调整 User=
@@ -433,7 +456,7 @@ emit_launchd_plist() {
 		<string>${SERVER}</string>
 		<string>--token</string>
 		<string>${TOKEN}</string>
-		<string>--verbose</string>
+		<string>--verbose</string>${LAUNCHD_EXTRA}
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -586,6 +609,20 @@ do_install() {
 	case "$TOKEN" in
 		*[!A-Za-z0-9._~-]*) warn "--token 含非常规字符，请确认复制时没有带入空格或换行" ;;
 	esac
+	# TLS 选项：--ca 必须指向本机可读的 PEM；--insecure 只对外走 https/wss 时才有意义。
+	if [ -n "$CA_FILE" ]; then
+		[ -r "$CA_FILE" ] || die "--ca 指向的证书不可读：${CA_FILE}"
+		case "$CA_FILE" in
+			/*) : ;;
+			*) die "--ca 必须是绝对路径（服务以 root 启动，相对路径没有意义）：${CA_FILE}" ;;
+		esac
+	fi
+	if [ "$INSECURE" -eq 1 ]; then
+		case "$SERVER" in
+			https://*|wss://*) warn "已启用 --insecure：将跳过 TLS 证书校验，仅应在受控链路中使用" ;;
+			*) warn "--insecure 只对 https/wss 生效，当前控制端地址是 ${SERVER}" ;;
+		esac
+	fi
 	validate_agent_version
 
 	log "安装 LeadStack agent：os=${OS} arch=${ARCH} version=${VERSION}"
@@ -609,7 +646,7 @@ do_install() {
 	log "  二进制：${BIN_PATH}"
 	if [ "$NO_SERVICE" -eq 0 ]; then log "  服务单元：${UNIT_PATH}"; fi
 	if [ "$NO_SERVICE" -eq 1 ]; then
-		log "  手动启动：${BIN_PATH} --server ${SERVER} --token <token>"
+		log "  手动启动：${BIN_PATH} --server ${SERVER} --token <token>${AGENT_EXTRA}"
 	elif [ "$OS" = "linux" ]; then
 		log "  查看状态：systemctl status ${SERVICE_NAME}"
 		log "  查看日志：journalctl -u ${SERVICE_NAME} -f"

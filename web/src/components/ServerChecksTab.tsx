@@ -5,7 +5,12 @@ import { usePolling } from '../lib/hooks'
 import { formatLatency, formatRelativeTime } from '../lib/format'
 import { cn } from '../lib/cn'
 import { Button } from '../components/Button'
-import { CheckKindBadge, CheckStateBadge, availabilityTone } from '../components/CheckBadges'
+import {
+  CheckKindBadge,
+  CheckStateBadge,
+  ProbeAgentBadge,
+  availabilityTone,
+} from '../components/CheckBadges'
 import { CheckTimeline } from '../components/CheckTimeline'
 import { EmptyState } from '../components/EmptyState'
 import { AlertTriangleIcon, ShieldCheckIcon } from '../components/Icons'
@@ -122,6 +127,7 @@ export function ServerChecksTab({ serverId }: { serverId: string }) {
                     {check.name}
                   </h3>
                   <CheckKindBadge kind={check.kind} />
+                  {check.params.probe_via === 'agent' ? <ProbeAgentBadge /> : null}
                   <CheckStateBadge state={check.state} />
                   {!check.enabled ? (
                     <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">

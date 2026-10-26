@@ -307,7 +307,7 @@ func (a *API) auditMiddleware(next http.Handler) http.Handler {
 		if path := r.URL.Path; path != "" {
 			entry.Path = &path
 		}
-		if ip := remoteHost(r); ip != "" {
+		if ip := clientIP(r); ip != "" {
 			entry.IP = &ip
 		}
 		if ua := r.UserAgent(); ua != "" {
@@ -465,7 +465,7 @@ func (a *API) auditManual(r *http.Request, action, resourceType, resourceID, det
 	if path := r.URL.Path; path != "" {
 		entry.Path = &path
 	}
-	if ip := remoteHost(r); ip != "" {
+	if ip := clientIP(r); ip != "" {
 		entry.IP = &ip
 	}
 	if ua := r.UserAgent(); ua != "" {
@@ -500,7 +500,7 @@ func (a *API) auditLogin(r *http.Request, username string, ok bool, reason strin
 	if path := r.URL.Path; path != "" {
 		entry.Path = &path
 	}
-	if ip := remoteHost(r); ip != "" {
+	if ip := clientIP(r); ip != "" {
 		entry.IP = &ip
 	}
 	if ua := r.UserAgent(); ua != "" {

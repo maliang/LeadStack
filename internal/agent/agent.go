@@ -13,6 +13,8 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -56,6 +59,10 @@ type Config struct {
 	Version string
 	// Once 为 true 时只做一次连接与上报后退出，便于本地自测。
 	Once bool
+	// CAFile 是额外信任的 CA 证书文件（PEM）；用于控制端使用自签证书的场景。
+	CAFile string
+	// InsecureTLS 为 true 时跳过 TLS 证书校验（自签且无法安装 CA 时的最后手段）。
+	InsecureTLS bool
 	// Logger 是日志器，nil 时使用默认 info 级别。
 	Logger *slog.Logger
 }
@@ -77,6 +84,10 @@ type Agent struct {
 	jobs *jobManager
 	// upgrader 处理 agent.upgrade 自升级指令。
 	upgrader *upgrader
+	// tlsCfg 是拨号用的 TLS 配置（仅在配置了 -ca 或 -insecure 时非 nil）。
+	tlsCfg *tls.Config
+	// tlsErr 是 TLS 配置错误：启动时立刻暴露，避免每次拨号都失败重连。
+	tlsErr error
 
 	rndMu sync.Mutex
 	rnd   *rand.Rand
@@ -88,6 +99,7 @@ func New(cfg Config) *Agent {
 	if log == nil {
 		log = slog.Default()
 	}
+	tlsCfg, tlsErr := buildTLSConfig(cfg, log)
 	a := &Agent{
 		cfg:      cfg,
 		log:      log,
@@ -96,6 +108,8 @@ func New(cfg Config) *Agent {
 		notify:   make(chan struct{}, 1),
 		jobs:     newJobManager(log),
 		upgrader: newUpgrader(log),
+		tlsCfg:   tlsCfg,
+		tlsErr:   tlsErr,
 		rnd:      rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	a.applyIntervals(protocol.DefaultHeartbeatIntervalS, protocol.DefaultMetricsIntervalS)
@@ -104,6 +118,9 @@ func New(cfg Config) *Agent {
 
 // Run 启动 agent 主循环，直到 ctx 被取消（或 --once 模式完成一次上报）才返回。
 func (a *Agent) Run(ctx context.Context) error {
+	if a.tlsErr != nil {
+		return a.tlsErr
+	}
 	if a.cfg.Once {
 		return a.runOnce(ctx)
 	}
@@ -203,6 +220,9 @@ func (a *Agent) dial(ctx context.Context) (*wsConn, error) {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: dialTimeout,
 		Proxy:            http.ProxyFromEnvironment,
+	}
+	if a.tlsCfg != nil {
+		dialer.TLSClientConfig = a.tlsCfg
 	}
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+a.cfg.Token)
@@ -652,4 +672,37 @@ func newEnvelope(msgType string, payload any) protocol.Envelope {
 // nowMillis 返回当前 Unix 毫秒时间戳。
 func nowMillis() int64 {
 	return time.Now().UnixMilli()
+}
+
+// buildTLSConfig 按配置构造拨号用的 TLS 配置。
+//
+// 两个来源：-ca（额外信任的 CA，适合控制端自签但能分发证书）与
+// -insecure（跳过校验，最后手段：既自签又无法分发 CA 时，仍需自行保证链路可信，
+// 例如走 SSH 隧道或内网专线）。两者都没配时返回 nil，沿用系统信任库。
+func buildTLSConfig(cfg Config, log *slog.Logger) (*tls.Config, error) {
+	if cfg.CAFile == "" && !cfg.InsecureTLS {
+		return nil, nil
+	}
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if cfg.InsecureTLS {
+		// #nosec G402 —— 显式由用户选择：跳过校验只适合受控链路，日志里必须留痕。
+		tlsCfg.InsecureSkipVerify = true
+		log.Warn("已禁用 TLS 证书校验（-insecure）：仅应在受控链路（内网/VPN/SSH 隧道）中使用")
+	}
+	if cfg.CAFile != "" {
+		pem, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("读取 CA 文件 %s 失败: %w", cfg.CAFile, err)
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("CA 文件 %s 中没有可用的 PEM 证书", cfg.CAFile)
+		}
+		tlsCfg.RootCAs = pool
+		log.Info("已加载额外 CA 证书", "file", cfg.CAFile)
+	}
+	return tlsCfg, nil
 }

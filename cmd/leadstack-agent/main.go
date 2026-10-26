@@ -4,6 +4,7 @@
 //
 //	./leadstack-agent --server http://127.0.0.1:8080 --token <接入令牌>
 //	./leadstack-agent --server http://127.0.0.1:8080 --token <令牌> --once   # 单次上报后退出，自测用
+//	./leadstack-agent --server https://10.0.0.1:8443 --token <令牌> --ca /etc/leadstack/ca.pem  # 自签证书
 package main
 
 import (
@@ -13,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/maliang/leadstack/internal/agent"
@@ -30,6 +32,8 @@ func main() {
 		serverAddr  = flag.String("server", "http://127.0.0.1:8080", "控制端地址，支持 http:// 或 https://（自动转 ws/wss）")
 		token       = flag.String("token", "", "接入令牌（必填）")
 		once        = flag.Bool("once", false, "单次上报后退出，便于本地自测")
+		caFile      = flag.String("ca", "", "额外信任的 CA 证书文件（PEM）；控制端用自签证书时使用")
+		insecure    = flag.Bool("insecure", false, "跳过 TLS 证书校验（自签且无法安装 CA 时使用，不推荐）")
 		verbose     = flag.Bool("verbose", false, "输出调试日志")
 		showVersion = flag.Bool("version", false, "打印版本后退出")
 	)
@@ -52,17 +56,21 @@ func main() {
 	defer stop()
 
 	ag := agent.New(agent.Config{
-		Server:  *serverAddr,
-		Token:   *token,
-		Version: version,
-		Once:    *once,
-		Logger:  logger,
+		Server:      *serverAddr,
+		Token:       *token,
+		Version:     version,
+		Once:        *once,
+		CAFile:      strings.TrimSpace(*caFile),
+		InsecureTLS: *insecure,
+		Logger:      logger,
 	})
 
 	logger.Info("leadstack-agent 启动",
 		"version", version,
 		"server", *serverAddr,
-		"once", *once)
+		"once", *once,
+		"ca", strings.TrimSpace(*caFile),
+		"insecure", *insecure)
 
 	if err := ag.Run(ctx); err != nil {
 		logger.Error("agent 异常退出", "err", err)

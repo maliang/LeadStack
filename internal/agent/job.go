@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/maliang/leadstack/internal/checker"
 	"github.com/maliang/leadstack/pkg/protocol"
 )
 
@@ -48,7 +50,11 @@ func (m *jobManager) start(parent context.Context, w *wsConn, spec protocol.JobE
 		m.log.Warn("收到缺少 run_id 的任务，已忽略")
 		return
 	}
-	if spec.Kind != "" && spec.Kind != "command" {
+	kind := spec.Kind
+	if kind == "" {
+		kind = protocol.JobKindCommand
+	}
+	if kind != protocol.JobKindCommand && kind != protocol.JobKindProbe {
 		m.log.Warn("暂不支持的任务类型", "kind", spec.Kind, "run_id", spec.RunID)
 		_ = w.send(parent, newEnvelope(protocol.TypeJobDone, protocol.JobDone{
 			RunID:    spec.RunID,
@@ -85,6 +91,10 @@ func (m *jobManager) start(parent context.Context, w *wsConn, spec protocol.JobE
 				m.log.Error("执行任务时发生 panic", "run_id", spec.RunID, "panic", r)
 			}
 		}()
+		if kind == protocol.JobKindProbe {
+			m.runProbe(jobCtx, w, spec)
+			return
+		}
 		m.run(jobCtx, w, spec)
 	}()
 }
@@ -162,6 +172,69 @@ func (m *jobManager) run(ctx context.Context, w *wsConn, spec protocol.JobExec) 
 
 	m.log.Info("任务执行结束", "run_id", spec.RunID, "exit_code", exitCode)
 	m.finish(ctx, w, spec.RunID, exitCode, errMsg)
+}
+
+// runProbe 在目标机上原生执行一次探测（Kind=probe），
+// 结果序列化成 ProbeResult JSON 放到 job.log(stdout)，再以 exit 0 结束。
+//
+// 为什么不拼 shell 命令：目标机可能没装 curl、也不一定能装；而且 shell 拿不到
+// 延迟与状态码这些结构化信息。这里直接复用 checker 在本机执行 tcp/http/ping。
+func (m *jobManager) runProbe(ctx context.Context, w *wsConn, spec protocol.JobExec) {
+	if err := w.send(ctx, newEnvelope(protocol.TypeJobAck, protocol.JobAck{RunID: spec.RunID})); err != nil {
+		m.log.Warn("发送 job.ack 失败，放弃探测任务", "run_id", spec.RunID, "err", err)
+		return
+	}
+
+	var req protocol.ProbeRequest
+	if err := json.Unmarshal([]byte(spec.Command), &req); err != nil {
+		m.finish(ctx, w, spec.RunID, -1, fmt.Sprintf("解析探测请求失败: %v", err))
+		return
+	}
+
+	timeout := time.Duration(spec.TimeoutS) * time.Second
+	if timeout <= 0 {
+		timeout = defaultJobTimeout
+	}
+	if timeout > maxJobTimeout {
+		timeout = maxJobTimeout
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	m.log.Info("开始执行探测任务", "run_id", spec.RunID, "kind", req.Kind, "target", req.Target)
+
+	res := checker.ProbeLocally(probeCtx, checker.Spec{
+		Kind:     checker.Kind(req.Kind),
+		Target:   req.Target,
+		TimeoutS: req.TimeoutS,
+		Params:   req.Params,
+	}, nil, "")
+
+	out := protocol.ProbeResult{
+		OK:         res.OK,
+		LatencyMS:  res.LatencyMS,
+		StatusCode: res.StatusCode,
+		Message:    res.Message,
+		TS:         res.TS,
+	}
+	payload, err := json.Marshal(out)
+	if err != nil {
+		m.finish(ctx, w, spec.RunID, -1, fmt.Sprintf("序列化探测结果失败: %v", err))
+		return
+	}
+
+	// 结果必须经 job.log 回传：控制端的 Dispatcher 以 job.log 聚合 stdout。
+	if err := w.send(ctx, newEnvelope(protocol.TypeJobLog, protocol.JobLog{
+		RunID:  spec.RunID,
+		Seq:    0,
+		Stream: "stdout",
+		Chunk:  string(payload),
+	})); err != nil {
+		m.log.Warn("回传探测结果失败", "run_id", spec.RunID, "err", err)
+		return
+	}
+	m.log.Info("探测任务结束", "run_id", spec.RunID, "ok", res.OK, "latency_ms", res.LatencyMS)
+	m.finish(ctx, w, spec.RunID, 0, "")
 }
 
 // pump 读取一路输出并分块回传 job.log；连接断开时丢弃剩余输出。

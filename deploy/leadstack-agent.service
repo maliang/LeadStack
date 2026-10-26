@@ -10,6 +10,13 @@
 #   sudo install -m 0755 bin/leadstack-agent /usr/local/bin/leadstack-agent
 #   sudo install -m 0644 deploy/leadstack-agent.service /etc/systemd/system/leadstack-agent.service
 #   sudo systemctl daemon-reload && sudo systemctl enable --now leadstack-agent
+#
+# 控制端使用自签证书时（目标机无法访问公网 CA），二选一：
+#   1) 把控制端证书的签发 CA 放到目标机，例如 /etc/leadstack/ca.pem，然后在 ExecStart 末尾加
+#        --ca /etc/leadstack/ca.pem
+#      （自签证书必须包含目标机访问时使用的 IP 或域名 SAN，否则仍会校验失败）
+#   2) 实在无法安装 CA 时才用 --insecure（跳过证书校验，链路上任何人都能冒充控制端）
+# 完整说明见 README「受限网络部署」与 docs/ARCHITECTURE.md 第 63 节。
 
 [Unit]
 Description=LeadStack Agent（节点采集与上报）
@@ -21,6 +28,9 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=-/etc/leadstack/agent.env
 ExecStart=/usr/local/bin/leadstack-agent --server ${LEADSTACK_AGENT_SERVER} --token ${LEADSTACK_AGENT_TOKEN} --verbose
+# 自签证书场景按需追加（二者都不需要就别加）：
+#   --ca /etc/leadstack/ca.pem      额外信任该 PEM 里的 CA
+#   --insecure                      跳过证书校验（不推荐）
 
 Restart=always
 RestartSec=5

@@ -98,3 +98,19 @@ export function availabilityTone(value: number | null): { text: string; classNam
   if (value >= 95) return { text, className: 'text-amber-600 dark:text-amber-400' }
   return { text, className: 'text-rose-600 dark:text-rose-400' }
 }
+
+/** 探测通道徽标：仅 probe_via=agent 时展示「agent 代检」。 */
+export function ProbeAgentBadge({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset',
+        'bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-400/30',
+        className,
+      )}
+      title={t('checks.probeAgentHint')}
+    >
+      {t('checks.probeAgentBadge')}
+    </span>
+  )
+}

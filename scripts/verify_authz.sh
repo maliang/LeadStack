@@ -61,6 +61,7 @@ start_lead() {
       LEADSTACK_LOGIN_LOCK_DURATION="$LOCK_DURATION" \
       LEADSTACK_LOGIN_IP_LIMIT="${IP_LIMIT:-0}" \
       LEADSTACK_LOGIN_IP_WINDOW="60s" \
+      LEADSTACK_TRUSTED_PROXIES="${TRUSTED_PROXIES:-}" \
       ./bin/leadstack > "$BASE_DIR/lead.log" 2>&1 &
   LEAD_PID=$!
   for _ in $(seq 1 80); do [ "$(code GET /healthz)" = "200" ] && return 0; sleep 0.3; done
@@ -221,6 +222,54 @@ done
 RETRY_HEADER="$(curl -sS -o /dev/null -D - -X POST "${BASE}/api/v1/auth/login" -H 'Content-Type: application/json' \
   -d '{"username":"nobody-here","password":"WrongPass-000"}' 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="retry-after:"{print $2; exit}')"
 [ -n "$RETRY_HEADER" ] && pass "429 响应带 Retry-After 头（${RETRY_HEADER}s）" || fail "缺少 Retry-After 头"
+
+# ---------------------------------------------------------------- 8. 可信代理
+step "8. 可信代理：X-Forwarded-For 解析（契约：可信代理白名单）"
+stop_lead
+IP_LIMIT=3
+TRUSTED_PROXIES="127.0.0.1/32"
+export IP_LIMIT TRUSTED_PROXIES
+start_lead || { fail "开启可信代理后启动失败"; tail -20 "$BASE_DIR/lead.log"; }
+
+xf_login() { # <xff>
+  curl -sS -X POST "${BASE}/api/v1/auth/login" -H 'Content-Type: application/json' \
+    -H "X-Forwarded-For: $1" -d '{"username":"nobody-xff","password":"WrongPass-000"}' 2>/dev/null
+}
+A_LAST=""; A_CODE=""
+for i in 1 2 3 4 5; do
+  A_LAST="$(xf_login 203.0.113.9)"
+  A_CODE="$(printf '%s' "$A_LAST" | jq -r '.error.code // empty' 2>/dev/null)"
+  [ "$A_CODE" = "rate_limited" ] && break
+done
+[ "$A_CODE" = "rate_limited" ] && pass "XFF 来源 A（203.0.113.9）触发限流：按转发 IP 分桶" \
+  || fail "可信代理下 XFF 来源未被单独计数（最后响应：$A_LAST）"
+
+B_LAST="$(xf_login 203.0.113.10)"
+B_CODE="$(printf '%s' "$B_LAST" | jq -r '.error.code // empty' 2>/dev/null)"
+[ "$B_CODE" != "rate_limited" ] && pass "XFF 来源 B（203.0.113.10）不受 A 影响：未全站共享一个桶" \
+  || fail "不同 XFF 来源仍共用限流桶：$B_LAST"
+
+AUDIT_XFF="$(api GET "/api/v1/audit-logs?limit=200" "" "$ADMIN")"
+# 登录失败在审计里记作 auth.login + status_code=401（路由级审计按路由命名，不区分成败）
+LOGIN_FAIL_SEL='select(.path=="/api/v1/auth/login") | select(.status_code==401)'
+XFF_N="$(printf '%s' "$AUDIT_XFF" | jq "[.data.logs[] | $LOGIN_FAIL_SEL | select(.ip==\"203.0.113.9\")] | length" 2>/dev/null)"
+[ "${XFF_N:-0}" -ge 1 ] 2>/dev/null && pass "审计记录真实客户端 IP（XFF 203.0.113.9）" \
+  || fail "审计未记录转发客户端 IP（命中 ${XFF_N:-0} 条）"
+
+# 对照：去掉白名单后 XFF 必须被忽略，来源 IP 一律记为对端（127.0.0.1）
+stop_lead
+TRUSTED_PROXIES=""
+export TRUSTED_PROXIES
+start_lead || { fail "关闭可信代理后启动失败"; tail -20 "$BASE_DIR/lead.log"; }
+xf_login 203.0.113.11 >/dev/null
+AUDIT_PLAIN="$(api GET "/api/v1/audit-logs?limit=50" "" "$ADMIN")"
+PLAIN_N="$(printf '%s' "$AUDIT_PLAIN" | jq "[.data.logs[] | $LOGIN_FAIL_SEL | select(.ip==\"203.0.113.11\")] | length" 2>/dev/null)"
+PLAIN_LOOP="$(printf '%s' "$AUDIT_PLAIN" | jq "[.data.logs[] | $LOGIN_FAIL_SEL | select(.ip==\"127.0.0.1\")] | length" 2>/dev/null)"
+if [ "${PLAIN_N:-0}" -eq 0 ] && [ "${PLAIN_LOOP:-0}" -ge 1 ] 2>/dev/null; then
+  pass "未配置白名单时 XFF 被忽略（记为对端 127.0.0.1）"
+else
+  fail "未配置白名单时仍采信 XFF（伪造命中 ${PLAIN_N:-0}，对端命中 ${PLAIN_LOOP:-0}）"
+fi
 
 # ---------------------------------------------------------------- 汇总
 echo

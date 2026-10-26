@@ -1,4 +1,12 @@
 const enUS: Record<string, string> = {
+  'checks.probeChannel': 'Probe channel',
+  'checks.probeControl': 'Control plane (default)',
+  'checks.probeControlHint': 'The control plane dials the target; the target must be reachable.',
+  'checks.probeAgent': 'Run on agent',
+  'checks.probeAgentHint': 'Probes run on the target itself; no inbound port needed (server must be enrolled via agent).',
+  'checks.probeAgentNote': 'Agent probing fails on SSH-enrolled servers; switch the server to agent mode first.',
+  'checks.probeAgentBadge': 'agent probe',
+
   'localServer.tokenRemaining': '{time} left',
 
   'localServer.entry': 'Onboard this host',

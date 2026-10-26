@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -89,7 +90,7 @@ func (a *API) middlewareLog(next http.Handler) http.Handler {
 			"path", r.URL.Path,
 			"status", status,
 			"bytes", rec.bytes,
-			"remote", remoteHost(r),
+			"remote", clientIP(r),
 			"duration_ms", time.Since(start).Milliseconds(),
 			"request_id", requestIDFromContext(r),
 		)
@@ -145,11 +146,100 @@ func isWebSocketUpgrade(r *http.Request) bool {
 	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 }
 
-// remoteHost 从 RemoteAddr 提取主机部分（不信任代理头，避免伪造）。
-func remoteHost(r *http.Request) string {
+// trustedProxies 是可信反向代理的网段，启动时由 SetTrustedProxies 写入。
+// 为空表示不信任任何代理头（默认）。
+var trustedProxies atomic.Pointer[[]*net.IPNet]
+
+// SetTrustedProxies 设置可信反向代理网段；只应在进程启动时调用一次。
+func SetTrustedProxies(nets []*net.IPNet) {
+	trustedProxies.Store(&nets)
+}
+
+// peerHost 从 RemoteAddr 提取主机部分（TCP 对端，可能是反向代理）。
+func peerHost(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// clientIP 返回真实客户端 IP：对端不在可信代理列表时直接用 TCP 对端地址，
+// 否则沿 X-Forwarded-For 从右往左找到第一个不可信的地址。
+//
+// 为什么必须显式配置可信代理：X-Forwarded-For 是客户端可伪造的，
+// 无条件采信等于让任何人自选审计日志与登录限流里的 IP。
+func clientIP(r *http.Request) string {
+	var trusted []*net.IPNet
+	if p := trustedProxies.Load(); p != nil {
+		trusted = *p
+	}
+	return clientIPWith(r, trusted)
+}
+
+// clientIPWith 是 clientIP 的纯函数版本，便于测试。
+func clientIPWith(r *http.Request, trusted []*net.IPNet) string {
+	cur := peerHost(r)
+	if !ipTrusted(cur, trusted) {
+		return cur
+	}
+
+	// XFF 允许重复头，按出现顺序拼成一条链（左=最早=最靠近真实客户端）。
+	var parts []string
+	for _, v := range r.Header.Values("X-Forwarded-For") {
+		for _, item := range strings.Split(v, ",") {
+			if ip := normalizeIP(item); ip != "" {
+				parts = append(parts, ip)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		if ip := normalizeIP(r.Header.Get("X-Real-IP")); ip != "" && !ipTrusted(ip, trusted) {
+			return ip
+		}
+		return cur
+	}
+
+	// 从右往左：右侧是最近一跳（我们自己的代理），遇到不可信地址即为客户端。
+	for i := len(parts) - 1; i >= 0; i-- {
+		cur = parts[i]
+		if !ipTrusted(parts[i], trusted) {
+			return parts[i]
+		}
+	}
+	return cur
+}
+
+// normalizeIP 把 XFF/X-Real-IP 里的条目归一成纯 IP 文本，非法条目返回空串。
+func normalizeIP(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" || strings.EqualFold(s, "unknown") {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(s); err == nil {
+		s = host
+	}
+	s = strings.Trim(strings.TrimSpace(s), "[]")
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
+}
+
+// ipTrusted 判断地址是否落在可信代理网段内。
+func ipTrusted(host string, trusted []*net.IPNet) bool {
+	if len(trusted) == 0 {
+		return false
+	}
+	ip := net.ParseIP(strings.Trim(strings.TrimSpace(host), "[]"))
+	if ip == nil {
+		return false
+	}
+	for _, n := range trusted {
+		if n != nil && n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

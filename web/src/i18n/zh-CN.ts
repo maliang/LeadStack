@@ -1,4 +1,12 @@
 const zhCN: Record<string, string> = {
+  'checks.probeChannel': '探测通道',
+  'checks.probeControl': '控制端直连（默认）',
+  'checks.probeControlHint': '由控制端发起连接，目标机需要可被访问。',
+  'checks.probeAgent': '由 agent 执行',
+  'checks.probeAgentHint': '探测在目标机上执行，目标机无需开放入向端口（要求服务器以 agent 方式接入）。',
+  'checks.probeAgentNote': '选 agent 代检时，若服务器是 SSH 接入会报错，请先把该服务器切成 agent 接入。',
+  'checks.probeAgentBadge': 'agent 代检',
+
   'localServer.tokenRemaining': '剩余 {time}',
 
   'localServer.entry': '接入本机',

@@ -129,6 +129,16 @@ func New(opts Options) (*API, error) {
 	if hub == nil {
 		hub = NewHub()
 	}
+	// 可信反向代理：配置合法时启动即生效；非法 CIDR 在 config.Load 已拦下，这里只兜底。
+	trustedNets, err := config.ParseTrustedProxies(opts.Config.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	SetTrustedProxies(trustedNets)
+	if len(trustedNets) > 0 {
+		logger.Info("已启用可信代理 IP 解析", "networks", opts.Config.TrustedProxies)
+	}
+
 	artifacts, err := newArtifactStore(opts.Config.ArtifactsDir(), opts.Config.ArtifactMaxBytes())
 	if err != nil {
 		return nil, err

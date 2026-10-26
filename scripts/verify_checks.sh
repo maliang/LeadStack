@@ -209,8 +209,61 @@ if [ -n "$SRV_AGENT" ]; then
   fi
 fi
 
-# ---------------------------------------------------------------- 8. 查询接口
-step "8. 结果时间线与服务器维度视图"
+# ---------------------------------------------------------------- 8. 探测通道（probe_via）
+step "8. 探测通道：agent 代检与拒绝静默降级"
+PV_ID=""
+if [ -n "$SRV_AGENT" ]; then
+  PV_BODY="$(jq -n --arg t "$TCP_TARGET" --arg sid "$SRV_AGENT" \
+    '{name:"m2-probe-agent",kind:"tcp",target:$t,interval_s:30,timeout_s:10,params:{probe_via:"agent"},server_ids:[$sid]}')"
+  PV_RESP="$(api POST /api/v1/checks "$PV_BODY" "$TOKEN")"
+  PV_ID="$(jget "$PV_RESP" '.data.id')"
+  if [ -n "$PV_ID" ]; then
+    pass "probe_via=agent 的检测项创建成功"
+    PV_ECHO="$(api GET "/api/v1/checks/${PV_ID}" "" "$TOKEN")"
+    PV_BACK="$(printf '%s' "$PV_ECHO" | jq -r '.data.params.probe_via // empty' 2>/dev/null)"
+    [ "$PV_BACK" = "agent" ] && pass "params.probe_via 原样回显（agent）" \
+      || fail "params.probe_via 回显异常：${PV_BACK:-空}"
+    PV_OK="$(run_field "$PV_ID" "$TOKEN" ok)"
+    PV_MSG="$(run_field "$PV_ID" "$TOKEN" message)"
+    [ "$PV_OK" = "true" ] && pass "agent 代检 tcp 成功（目标 ${TCP_TARGET}）" \
+      || fail "agent 代检 tcp 失败：${PV_MSG:-无消息}"
+  else
+    fail "probe_via=agent 检测项创建失败：$PV_RESP"
+  fi
+else
+  fail "缺少 agent 服务器，跳过 agent 代检断言"
+fi
+
+# 同一目标在 SSH 服务器上用 agent 代检：必须明确报错，且不能静默回落到控制端直连。
+# （该目标从控制端可达，若回落就会返回 ok=true，因此这条断言能证明路由真实生效。）
+PV_SSH_BODY="$(jq -n --arg t "$TCP_TARGET" --arg sid "$SRV_SSH" \
+  '{name:"m2-probe-ssh-reject",kind:"tcp",target:$t,interval_s:30,timeout_s:10,params:{probe_via:"agent"},server_ids:[$sid]}')"
+PV_SSH_RESP="$(api POST /api/v1/checks "$PV_SSH_BODY" "$TOKEN")"
+PV_SSH_ID="$(jget "$PV_SSH_RESP" '.data.id')"
+if [ -n "$PV_SSH_ID" ]; then
+  PV_SSH_OK="$(run_field "$PV_SSH_ID" "$TOKEN" ok)"
+  PV_SSH_MSG="$(run_field "$PV_SSH_ID" "$TOKEN" message)"
+  if [ "$PV_SSH_OK" = "false" ] && printf '%s' "$PV_SSH_MSG" | grep -q "SSH"; then
+    pass "SSH 服务器 + probe_via=agent 明确失败（未静默回落控制端）：${PV_SSH_MSG}"
+  else
+    fail "SSH 服务器应拒绝 agent 代检，实际 ok=${PV_SSH_OK:-空} message=${PV_SSH_MSG:-空}"
+  fi
+  # 对照：同一目标、默认控制端直连必须成功 —— 证明上面的失败确实来自通道判定
+  PV_CTL_OK="$(run_field "$PV_ID" "$TOKEN" ok)"
+  [ "$PV_CTL_OK" = "true" ] && pass "对照：目标从控制端可达（说明上面的失败来自通道校验）" \
+    || fail "对照组异常：目标从控制端不可达，无法证明通道判定生效"
+fi
+
+# process/script 本身就在目标机执行，带 probe_via 必须 400（前端已主动清理，后端也要兜住）。
+PV_BAD_BODY="$(jq -n --arg sid "$SRV_SSH" \
+  '{name:"m2-probe-bad",kind:"process",target:"leadstack",interval_s:30,timeout_s:10,params:{probe_via:"agent"},server_ids:[$sid]}')"
+PV_BAD_CODE="$(status_of -X POST "${BASE}/api/v1/checks" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${TOKEN}" -d "$PV_BAD_BODY")"
+[ "$PV_BAD_CODE" = "400" ] && pass "process 携带 probe_via 被拒绝（400）" \
+  || fail "process 携带 probe_via 应 400，实际 ${PV_BAD_CODE}"
+
+# ---------------------------------------------------------------- 9. 查询接口
+step "9. 结果时间线与服务器维度视图"
 TL="$(api GET "/api/v1/checks/${DOWN_ID}/results?limit=10" "" "$TOKEN")"
 TL_N="$(printf '%s' "$TL" | jq -r '.data | length' 2>/dev/null)"
 TS_FIELD="$(printf '%s' "$TL" | jq -r '.data[0].ts // empty' 2>/dev/null)"
@@ -231,8 +284,8 @@ else
   fail "检测概览异常：$SUMMARY"
 fi
 
-# ---------------------------------------------------------------- 9. 指标大范围降级
-step "9. 指标查询降级（step=raw 且跨度 > 6h → 1m）"
+# ---------------------------------------------------------------- 10. 指标大范围降级
+step "10. 指标查询降级（step=raw 且跨度 > 6h → 1m）"
 TO="$(now_ms)"; FROM=$((TO - 86400000))
 BIG="$(api GET "/api/v1/servers/${SRV_SSH}/metrics?from=${FROM}&to=${TO}&step=raw" "" "$TOKEN")"
 STEP_BACK="$(printf '%s' "$BIG" | jq -r '.data.step // empty' 2>/dev/null)"

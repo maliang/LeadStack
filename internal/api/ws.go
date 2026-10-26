@@ -185,10 +185,10 @@ func (a *API) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrExpired):
-			a.logger.Warn("agent 接入被拒：令牌已过期", "remote", remoteHost(r))
+			a.logger.Warn("agent 接入被拒：令牌已过期", "remote", clientIP(r))
 			writeError(w, http.StatusUnauthorized, codeUnauthorized, "接入令牌已过期")
 		case errors.Is(err, store.ErrNotFound):
-			a.logger.Warn("agent 接入被拒：令牌无效", "remote", remoteHost(r))
+			a.logger.Warn("agent 接入被拒：令牌无效", "remote", clientIP(r))
 			writeError(w, http.StatusUnauthorized, codeUnauthorized, "接入令牌无效")
 		default:
 			a.internalError(w, r, err)
@@ -199,13 +199,13 @@ func (a *API) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := agentUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		// Upgrade 内部已通过 agentUpgrader.Error 写过响应，这里只记日志。
-		a.logger.Warn("agent WebSocket 升级失败", "remote", remoteHost(r), "err", err)
+		a.logger.Warn("agent WebSocket 升级失败", "remote", clientIP(r), "err", err)
 		return
 	}
 
-	ac := &agentConn{ws: conn, remoteAddr: remoteHost(r)}
+	ac := &agentConn{ws: conn, remoteAddr: clientIP(r)}
 	a.logger.Info("agent 连接建立", "remote", ac.remoteAddr, "token_id", tok.ID)
-	a.runAgentSession(r.Context(), ac, tok, remoteHost(r))
+	a.runAgentSession(r.Context(), ac, tok, clientIP(r))
 }
 
 // runAgentSession 是单条 agent 连接的主循环。

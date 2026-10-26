@@ -2147,3 +2147,70 @@ agent 常驻后是**推送**：心跳 20s、指标 15s、45s 无心跳判离线�
 - 端点要求 `enroll.manage`（内置 admin 独占；自定义角色含该权限会被 400 拒绝，见 §52）；
 - 执行安装命令需要目标机器 root（安装 systemd/launchd 服务），控制端不代跑安装；
 - 本机 agent 与控制端同机时，注意控制端端口变更后要重新生成命令（地址是生成时快照）。
+
+---
+
+## 63. 受限网络：agent 代检、可信代理、自签证书
+
+目标机常常「只允许出向、不给开端口、只有 IP、没有公网证书」。本节定义为此新增的三处能力。
+
+### 63.1 为什么 agent 模式不需要目标机开端口
+
+agent 是**出向客户端**：它主动拨控制端的 `/agent/ws`（`internal/api/router.go`），携带 Bearer 令牌完成握手，之后心跳/指标/任务全部复用这条长连接；部署任务、网页终端也走这条连接下发（`internal/api/deploy_runner.go` 的 `deployRoutingRunner`、`internal/api/handlers_terminal.go` 的 `term.open`）；制品由目标机自己按 `ARTIFACT_URL` 拉取（`internal/deploy/build.go` 的 `VarArtifactURL`）。因此目标机侧**没有任何监听端口**——`cmd/leadstack-agent` 的参数只有 `-server/-token/-once/-verbose/-version/-ca/-insecure`。
+
+真正需要可达性的是反方向：**目标机要能连到控制端**。控制端地址可以用 IP、可以走 nginx 反代、可以走 `ssh -L` 隧道。
+
+硬边界（模式无法绕过）：
+
+- 检测项 `tcp/http/ping` 默认由**控制端直连**目标，目标在 NAT 后探不到 → 用 63.2 的 agent 代检；
+- `process/script` 本来就在目标机执行，不受影响；
+- 部署健康检查由控制端发 HTTP（`healthcheck_port` 留空则跳过）；
+- 目标机完全不能出网：agent 与 SSH 都不可用。
+
+### 63.2 agent 代检（`probe_via=agent`）
+
+检测项 `params.probe_via` 取 `control`（默认）或 `agent`：
+
+```json
+{"name":"内网端口","kind":"tcp","target":"10.0.0.9:3306",
+ "params":{"probe_via":"agent"},"server_ids":["…"]}
+```
+
+- 只适用于 `tcp`/`http`/`ping`；`process`/`script` 传该参数返回 400（`params.probe_via 只适用于 tcp/http/ping（process/script 本身就在目标机执行）`）；
+- 非法值返回 400（`params.probe_via 只能是 control 或 agent`）；空串视为未设置并删除键；
+- 参数存在 `checks.params_json`，**无需迁移**（`internal/store/checks.go` 的 `checkColumns` 已含该列）。
+
+执行链路：`checker.Probe` 发现 `probe_via=agent` 且 kind 属于 tcp/http/ping 时，走可选接口 `checker.AgentProber.ProbeOnTarget`（`internal/api/checks_wiring.go` 的 `RoutingExecutor` 实现）→ `jobs.Dispatcher.Probe` 打包成 `job.exec{kind:"probe", command:"<ProbeRequest JSON>"}` → agent 的 `jobManager.runProbe` 用 `checker.ProbeLocally` 本地执行 → 单帧 `job.log{stream:"stdout"}` 回传 `ProbeResult` JSON → 控制端解析后写结果。
+
+契约要点：
+
+- **不静默降级**：SSH 接入的服务器、agent 未启用、执行通道不支持时都返回 `ok=false` 加明确中文原因（例如「该服务器以 SSH 方式接入，无法由 agent 代检…」），绝不退回控制端直连；
+- 结果必须经 `job.log` 回传，而不是 `job.done`（控制端 pending 是按 `job.log` 聚合 stdout 的，`job.done` 只带 exit_code/error）；
+- `ProbeLocally` 会复制 params 并删掉 `probe_via`，避免 agent 侧再次路由（自我递归）。
+
+### 63.3 可信代理与 `X-Forwarded-For`
+
+默认**不信任任何代理头**（`remoteHost` 只取 TCP 对端，防伪造）。配置白名单后才会解析：
+
+```bash
+LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
+```
+
+- 取值：逗号分隔的 CIDR 或单个 IP（单个 IP 归一为 `/32` 或 `/128`）；非法值在启动时报 `配置错误: trusted-proxies 中的 "…" 不是合法 CIDR`；
+- 解析规则（`clientIPWith`）：对端不在白名单 → 直接用对端；在白名单 → 合并所有 `X-Forwarded-For`（多个头按序拼接）后按逗号拆分、去空白、去端口/方括号、忽略 `unknown`，**从右往左取第一个不在白名单里的地址**（左侧都可被客户端伪造）；无 `X-Forwarded-For` 时退化为 `X-Real-IP`；都不可用时回落对端；
+- 影响范围：登录 IP 限流的分桶、审计日志的 `ip` 字段、WebSocket 连接日志。
+
+它解决的是「反代之后所有请求看起来都来自 nginx」：审计失真 + 登录限流退化成全站共用一个桶。
+
+### 63.4 agent 侧 TLS（`--ca` / `--insecure`）
+
+- `--ca <pem>`：`x509.SystemCertPool()` 之后追加该文件的证书（**追加而非替换**），仍校验证书链与主机名；文件读不到或没有可用 PEM 时**启动即失败**（`读取 CA 文件 … 失败` / `CA 文件 … 中没有可用的 PEM 证书`），不会退化成反复重连；
+- `--insecure`：`InsecureSkipVerify=true`，启动时打 Warn；仅用于无法安装 CA 的受控链路；
+- 两者可同时出现（先跳过校验，CA 无关）；
+- 自签证书必须带目标机访问时使用的 IP/域名 SAN，否则报 `x509: cannot validate certificate for … because it doesn't contain any IP SANs`；
+- `deploy/install.sh` 同步支持 `--ca PATH`（要求绝对路径且可读）与 `--insecure`，并写进 systemd `ExecStart` / launchd `ProgramArguments`。
+
+### 63.5 验收
+
+- 单元：`internal/checker/probe_via_test.go`、`internal/jobs/probe_test.go`、`internal/agent/probe_job_test.go`（含探测任务与 TLS 配置/自定义 CA 用例）、`internal/api/probe_via_test.go`、`internal/api/client_ip_test.go`、`internal/config/trusted_proxies_test.go`；
+- 端到端：`scripts/verify_checks.sh` 第 8 节（agent 代检成功、SSH 服务器明确拒绝且不回落、`process` 带 `probe_via` → 400、`params` 原样回显）；`scripts/verify_authz.sh` 第 8 节（按转发 IP 分桶、审计记录真实客户端 IP、未配白名单时忽略 XFF）。

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/maliang/leadstack/internal/checker"
 	"github.com/maliang/leadstack/internal/store"
+	"github.com/maliang/leadstack/pkg/protocol"
 )
 
 // CheckerStore 把 store 适配成 checker.Store（契约第 14.1 节）。
@@ -134,8 +136,16 @@ type RoutingExecutor struct {
 	logger *slog.Logger
 }
 
-// 编译期确认接口实现。
-var _ checker.Executor = (*RoutingExecutor)(nil)
+// 编译期确认接口实现（Executor = 执行命令，AgentProber = 目标机代检）。
+var (
+	_ checker.Executor    = (*RoutingExecutor)(nil)
+	_ checker.AgentProber = (*RoutingExecutor)(nil)
+)
+
+// dispatcherProber 是 jobs.Dispatcher 的探测能力（避免 api 直接依赖具体类型）。
+type dispatcherProber interface {
+	Probe(ctx context.Context, serverID string, req protocol.ProbeRequest) (protocol.ProbeResult, error)
+}
 
 // NewRoutingExecutor 创建按模式路由的执行器。
 func NewRoutingExecutor(st *store.Store, agentExec, sshExec checker.Executor, logger *slog.Logger) *RoutingExecutor {
@@ -161,4 +171,51 @@ func (e *RoutingExecutor) Exec(ctx context.Context, serverID, command string, ti
 		return "", "", -1, errors.New("agent 任务下发通道未启用")
 	}
 	return e.agent.Exec(ctx, serverID, command, timeoutS)
+}
+
+// ProbeOnTarget 把一次探测下发到目标机上的 agent 原生执行（checker.AgentProber）。
+//
+// 用途：目标机没有入向端口（控制端连不进去）时，tcp/http/ping 仍要能检测。
+// SSH 接入的服务器没有 agent 通道，这里明确失败而不是静默改走控制端直连
+// ——后者在受限网络下必然失败，但错误信息会指向「目标不可达」，很容易误导排查。
+func (e *RoutingExecutor) ProbeOnTarget(ctx context.Context, serverID string, spec checker.Spec) checker.Result {
+	now := time.Now().UnixMilli()
+
+	srv, err := e.st.GetServer(ctx, serverID)
+	if err != nil {
+		return checker.Result{Message: fmt.Sprintf("查询服务器 %s 失败: %v", serverID, err), TS: now}
+	}
+	if srv.Mode == store.ModeSSH {
+		return checker.Result{TS: now, Message: "该服务器以 SSH 方式接入，无法由 agent 代检：请改用控制端直连，或把该服务器改为 agent 接入"}
+	}
+	if e.agent == nil {
+		return checker.Result{TS: now, Message: "agent 任务下发通道未启用，无法代检"}
+	}
+	prober, ok := e.agent.(dispatcherProber)
+	if !ok {
+		return checker.Result{TS: now, Message: "当前执行通道不支持目标机代检"}
+	}
+
+	res, err := prober.Probe(ctx, serverID, protocol.ProbeRequest{
+		Kind:     string(spec.Kind),
+		Target:   spec.Target,
+		TimeoutS: spec.TimeoutS,
+		Params:   spec.Params,
+	})
+	if err != nil {
+		return checker.Result{TS: now, Message: fmt.Sprintf("agent 代检失败: %v", err)}
+	}
+
+	out := checker.Result{
+		OK:         res.OK,
+		LatencyMS:  res.LatencyMS,
+		StatusCode: res.StatusCode,
+		Message:    res.Message,
+		TS:         res.TS,
+	}
+	if out.TS == 0 {
+		out.TS = now
+	}
+	e.logger.Debug("目标机代检完成", "server_id", serverID, "kind", spec.Kind, "ok", out.OK, "latency_ms", out.LatencyMS)
+	return out
 }

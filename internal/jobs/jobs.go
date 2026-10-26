@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,23 +135,70 @@ func NewDispatcher(s Sender, opts Options) *Dispatcher {
 //
 // 该签名与 checker.Executor 一致，可直接注入 checker.Deps.Exec。
 func (d *Dispatcher) Exec(ctx context.Context, serverID, command string, timeoutS int) (stdout, stderr string, exitCode int, err error) {
+	res, err := d.dispatch(ctx, serverID, timeoutS, func(runID string, timeout time.Duration) ([]byte, error) {
+		return buildJobEnvelope(runID, protocol.JobKindCommand, command, timeout)
+	})
+	if res == nil {
+		return "", "", -1, err
+	}
+	return res.Stdout, res.Stderr, res.ExitCode, err
+}
+
+// Probe 请目标机上的 agent **原生执行**一次探测（tcp/http/ping），返回探测结果。
+//
+// 为什么需要它：tcp/http/ping 默认由控制端直连目标机，目标机若没有入向端口
+// （只允许出向访问控制端）就必然失败。走 agent 代检时，探测在目标机内部执行，
+// 只依赖那条已经建立的长连接。
+//
+// 协议：Kind=probe 的 job.exec，Command 为 protocol.ProbeRequest 的 JSON；
+// agent 把 protocol.ProbeResult 的 JSON 写到 stdout，exit code 恒为 0
+// （探测失败属于结果，不属于任务失败）。
+func (d *Dispatcher) Probe(ctx context.Context, serverID string, req protocol.ProbeRequest) (protocol.ProbeResult, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return protocol.ProbeResult{}, fmt.Errorf("编码探测请求失败: %w", err)
+	}
+	res, err := d.dispatch(ctx, serverID, req.TimeoutS, func(runID string, timeout time.Duration) ([]byte, error) {
+		return buildJobEnvelope(runID, protocol.JobKindProbe, string(body), timeout)
+	})
+	if res == nil {
+		return protocol.ProbeResult{}, err
+	}
+	if err != nil {
+		return protocol.ProbeResult{}, err
+	}
+	raw := strings.TrimSpace(res.Stdout)
+	if raw == "" {
+		return protocol.ProbeResult{}, fmt.Errorf("agent 未返回探测结果（run 输出为空）")
+	}
+	var out protocol.ProbeResult
+	if e := json.Unmarshal([]byte(raw), &out); e != nil {
+		return protocol.ProbeResult{}, fmt.Errorf("解析探测结果失败: %w（原始输出：%s）", e, truncateForLog(raw))
+	}
+	return out, nil
+}
+
+// dispatch 是所有任务下发的公共路径：限流 → 登记等待者 → 发送 → 等待 job.done。
+// 返回的 *Result 在「没有拿到任何结果」时为 nil（此时 err 一定非 nil）。
+func (d *Dispatcher) dispatch(ctx context.Context, serverID string, timeoutS int,
+	build func(runID string, timeout time.Duration) ([]byte, error)) (*Result, error) {
 	if serverID == "" {
-		return "", "", -1, fmt.Errorf("%w: serverID 为空", ErrInvalidArgument)
+		return nil, fmt.Errorf("%w: serverID 为空", ErrInvalidArgument)
 	}
 	if !d.isOnline(serverID) {
-		return "", "", -1, fmt.Errorf("%w: %s", ErrServerOffline, serverID)
+		return nil, fmt.Errorf("%w: %s", ErrServerOffline, serverID)
 	}
 
 	// 同机并发限流：拿不到槽位就排队，直到 ctx 取消。
 	release, err := d.acquire(ctx, serverID)
 	if err != nil {
-		return "", "", -1, err
+		return nil, err
 	}
 	defer release()
 
 	// 排队期间连接可能已经断开，发送前再确认一次。
 	if !d.isOnline(serverID) {
-		return "", "", -1, fmt.Errorf("%w: %s", ErrServerOffline, serverID)
+		return nil, fmt.Errorf("%w: %s", ErrServerOffline, serverID)
 	}
 
 	timeout := d.effectiveTimeout(timeoutS)
@@ -160,14 +208,14 @@ func (d *Dispatcher) Exec(ctx context.Context, serverID, command string, timeout
 	// 必须先登记等待者再发送，避免 job.done 先于登记到达而丢失结果。
 	d.register(p)
 
-	envelope, err := buildJobEnvelope(runID, command, agentTimeout(ctx, timeout))
+	envelope, err := build(runID, agentTimeout(ctx, timeout))
 	if err != nil {
 		d.removeWaiter(serverID, runID)
-		return "", "", -1, fmt.Errorf("构造 job.exec 失败: %w", err)
+		return nil, fmt.Errorf("构造 job.exec 失败: %w", err)
 	}
 	if err := d.sender.SendJob(serverID, envelope); err != nil {
 		d.removeWaiter(serverID, runID)
-		return "", "", -1, fmt.Errorf("%w: %v", ErrSendFailed, err)
+		return nil, fmt.Errorf("%w: %v", ErrSendFailed, err)
 	}
 	d.log.Debug("已下发任务", "server_id", serverID, "run_id", runID, "timeout", timeout)
 
@@ -176,21 +224,27 @@ func (d *Dispatcher) Exec(ctx context.Context, serverID, command string, timeout
 
 	select {
 	case o := <-p.done:
-		if o.err != nil {
-			return o.stdout, o.stderr, o.exitCode, o.err
-		}
-		return o.stdout, o.stderr, o.exitCode, nil
+		return &Result{ExitCode: o.exitCode, Stdout: o.stdout, Stderr: o.stderr}, o.err
 	case <-ctx.Done():
 		d.removeWaiter(serverID, runID)
-		return "", "", -1, ctx.Err()
+		return nil, ctx.Err()
 	case <-timer.C:
 		d.removeWaiter(serverID, runID)
 		// ctx 与 timer 可能几乎同时到点，此时以 ctx 的错误为准，避免取消被误报成超时。
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", "", -1, ctxErr
+			return nil, ctxErr
 		}
-		return "", "", -1, fmt.Errorf("%w: run_id=%s 在 %s 内未收到 job.done", ErrTimeout, runID, timeout)
+		return nil, fmt.Errorf("%w: run_id=%s 在 %s 内未收到 job.done", ErrTimeout, runID, timeout)
 	}
+}
+
+// truncateForLog 截断过长的原始输出，避免错误信息里塞进整段日志。
+func truncateForLog(s string) string {
+	const max = 512
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + truncatedMarker
 }
 
 // HandleAck 处理 agent 的 job.ack；未知 runID 静默忽略。
@@ -350,14 +404,18 @@ func (d *Dispatcher) pendingCount() int {
 }
 
 // buildJobEnvelope 构造 job.exec 信封：type=job.exec，payload=protocol.JobExec。
-func buildJobEnvelope(runID, command string, timeout time.Duration) ([]byte, error) {
+// kind 为空时按 command 处理，保证与旧版 agent 的行为一致。
+func buildJobEnvelope(runID, kind, command string, timeout time.Duration) ([]byte, error) {
+	if kind == "" {
+		kind = protocol.JobKindCommand
+	}
 	timeoutS := int(timeout / time.Second)
 	if timeoutS < 1 {
 		timeoutS = 1
 	}
 	payload, err := json.Marshal(protocol.JobExec{
 		RunID:    runID,
-		Kind:     "command",
+		Kind:     kind,
 		Command:  command,
 		TimeoutS: timeoutS,
 	})

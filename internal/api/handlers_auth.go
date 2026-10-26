@@ -63,7 +63,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	remote := remoteHost(r)
+	remote := clientIP(r)
 
 	// 1) IP 维度限流（进程内滑动窗口）。
 	if ok, retry := a.login.allowIP(remote); !ok {
@@ -282,7 +282,7 @@ func (a *API) auditLoginSecurity(r *http.Request, username, action, detail strin
 	if path := r.URL.Path; path != "" {
 		entry.Path = &path
 	}
-	if ip := remoteHost(r); ip != "" {
+	if ip := clientIP(r); ip != "" {
 		entry.IP = &ip
 	}
 	if ua := r.UserAgent(); ua != "" {

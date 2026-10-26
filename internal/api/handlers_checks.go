@@ -991,6 +991,30 @@ func normalizeCheckParams(kind string, in map[string]any) (map[string]any, error
 		out["fail_threshold"] = n
 	}
 
+	// probe_via：探测通道（control=控制端直连，agent=目标机代检）。
+	// 只有 tcp/http/ping 有意义——process/script 本来就在目标机执行。
+	if raw, ok := out["probe_via"]; ok {
+		via, isStr := raw.(string)
+		if !isStr {
+			return nil, errors.New("params.probe_via 只能是 control 或 agent")
+		}
+		via = strings.ToLower(strings.TrimSpace(via))
+		switch via {
+		case "control", "agent":
+		case "":
+			delete(out, "probe_via")
+			via = ""
+		default:
+			return nil, errors.New("params.probe_via 只能是 control 或 agent")
+		}
+		if via != "" {
+			if kind != "tcp" && kind != "http" && kind != "ping" {
+				return nil, errors.New("params.probe_via 只适用于 tcp/http/ping（process/script 本身就在目标机执行）")
+			}
+			out["probe_via"] = via
+		}
+	}
+
 	switch kind {
 	case "tcp":
 		if raw, ok := out["timeout_ms"]; ok {

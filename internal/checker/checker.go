@@ -54,6 +54,24 @@ type Executor interface {
 	Exec(ctx context.Context, serverID, command string, timeoutS int) (stdout, stderr string, exitCode int, err error)
 }
 
+// 探测通道（Spec.Params["probe_via"]）。
+const (
+	// ProbeViaControl 由控制端直连目标（默认）：要求控制端能访问目标。
+	ProbeViaControl = "control"
+	// ProbeViaAgent 把探测下发到目标机上的 agent 原生执行：
+	// 目标机无需开放任何入向端口，只要它能连上控制端。
+	ProbeViaAgent = "agent"
+)
+
+// AgentProber 是 Executor 的可选扩展：把探测下发到目标机上执行。
+//
+// backend 的 RoutingExecutor 实现它（agent 接入 → 任务下发；ssh 接入 → 明确失败）。
+// 未实现时，probe_via=agent 的检测项会直接判失败并给出原因，而不是静默退回控制端直连
+// ——静默降级会让「检测失败」看起来像目标故障，实际却是配置不生效。
+type AgentProber interface {
+	ProbeOnTarget(ctx context.Context, serverID string, spec Spec) Result
+}
+
 // Store 是调度器对持久化的最小依赖，由 backend 实现（避免 checker import store）。
 type Store interface {
 	ListEnabledTargets(ctx context.Context) ([]Target, error)

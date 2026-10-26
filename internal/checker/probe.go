@@ -14,6 +14,16 @@ var nowMS = func() int64 { return time.Now().UnixMilli() }
 // Probe 执行一次探测。exec 仅在 Kind 为 process/script 时被使用，其余可为 nil。
 // 任何失败都要转成 Result{OK:false, Message:...}，不要返回 error（除 ctx 取消）。
 func Probe(ctx context.Context, spec Spec, exec Executor, serverID string) Result {
+	// 目标机代检：只对「默认由控制端直连」的三类探测有意义
+	// （process/script 本来就在目标机执行，无需代检）。
+	if probeViaOf(spec.Params) == ProbeViaAgent && kindRunsOnControlPlane(spec.Kind) {
+		prober, ok := exec.(AgentProber)
+		if !ok {
+			return failResult(0, "检测项要求由 agent 代检（probe_via=agent），但当前执行通道不支持：请把服务器改为 agent 接入，或把探测通道改回控制端直连")
+		}
+		return prober.ProbeOnTarget(ctx, serverID, spec)
+	}
+
 	timeout := timeoutOf(spec)
 	switch spec.Kind {
 	case KindTCP:
@@ -28,6 +38,34 @@ func Probe(ctx context.Context, spec Spec, exec Executor, serverID string) Resul
 		return probeScript(ctx, spec, exec, serverID, timeout)
 	default:
 		return failResult(0, "未知检测类型: %q", string(spec.Kind))
+	}
+}
+
+// ProbeLocally 在「当前位置」执行一次探测：剥掉 probe_via 后再走 Probe。
+//
+// 供 agent 本机执行 Kind=probe 任务时调用 —— 此时「本地」就是目标机，
+// 若不清除标记会再次判定为代检，形成自我递归。
+func ProbeLocally(ctx context.Context, spec Spec, exec Executor, serverID string) Result {
+	if _, ok := spec.Params["probe_via"]; ok {
+		params := make(map[string]any, len(spec.Params))
+		for k, v := range spec.Params {
+			if k == "probe_via" {
+				continue
+			}
+			params[k] = v
+		}
+		spec.Params = params
+	}
+	return Probe(ctx, spec, exec, serverID)
+}
+
+// kindRunsOnControlPlane 判断该类型是否默认由控制端发起（因而支持改由 agent 代检）。
+func kindRunsOnControlPlane(k Kind) bool {
+	switch k {
+	case KindTCP, KindHTTP, KindPing:
+		return true
+	default:
+		return false
 	}
 }
 

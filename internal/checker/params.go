@@ -32,6 +32,15 @@ func paramString(p map[string]any, key string) string {
 	}
 }
 
+// probeViaOf 返回 params.probe_via：只有显式 "agent" 才走目标机代检，
+// 缺省与非法值都按控制端直连处理（非法值由 API 层拒绝，这里只做兜底）。
+func probeViaOf(p map[string]any) string {
+	if strings.EqualFold(strings.TrimSpace(paramString(p, "probe_via")), ProbeViaAgent) {
+		return ProbeViaAgent
+	}
+	return ProbeViaControl
+}
+
 // paramBool 取布尔参数；缺省或类型非法时返回 false。
 func paramBool(p map[string]any, key string) bool {
 	if p == nil {
