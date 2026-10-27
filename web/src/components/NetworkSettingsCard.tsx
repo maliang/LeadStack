@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type NetworkConfig, type NetworkSource } from '../lib/api'
+import { useAuth } from '../lib/auth'
 import { usePolling } from '../lib/hooks'
 import { useI18n } from '../i18n'
 import { errorMessage } from '../lib/errors'
@@ -62,7 +63,13 @@ function SourceBadge({ source }: { source: NetworkSource }) {
 export function NetworkSettingsCard() {
   const { t } = useI18n()
   const { toast } = useToast()
-  const query = usePolling(api.network, 15_000)
+  // GET /system/network（以及 PUT 与 reset）都要求 system.manage + 全局范围
+  // （internal/api/router.go:233-235）——网络配置是控制端全局设置，分组/服务器范围的角色
+  // 既读不到也不该改。门控放在卡片自身而不是依赖调用页面的包裹：这样卡片被挪到别处也不会
+  // 重新开始每 15 秒吃一次静默 403。判定表达式与 NetworkFallbackBanner 保持一致。
+  const { can, scope } = useAuth()
+  const canManageNetwork = can('system.manage') && scope.mode === 'all'
+  const query = usePolling(api.network, 15_000, canManageNetwork)
   const syncedRef = useRef(false)
   const [form, setForm] = useState<FormState>({ listen: '', publicUrl: '', defaultSshPort: '22' })
   const [errors, setErrors] = useState<FieldErrors>({})
@@ -163,6 +170,21 @@ export function NetworkSettingsCard() {
     { key: 'network.restart.docker', command: 'docker restart leadstack' },
     { key: 'network.restart.direct', command: 'sudo ./leadstack' },
   ]
+
+  // 没有全局范围就不渲染表单：保存/重置同样会被后端拒绝，给出空表单只会让人白填一遍。
+  if (!canManageNetwork) {
+    return (
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
+          <GlobeIcon className="h-4 w-4 text-indigo-500" />
+          {t('network.needsGlobalScopeTitle')}
+        </h2>
+        <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+          {t('network.needsGlobalScope')}
+        </p>
+      </section>
+    )
+  }
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">

@@ -154,21 +154,28 @@ type checkRunItem struct {
 
 // handleListChecks 处理 GET /api/v1/checks。
 func (a *API) handleListChecks(w http.ResponseWriter, r *http.Request) {
+	params, perr := parsePage(r)
+	if perr != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, perr.Error())
+		return
+	}
+	// 范围为空（角色范围内一台服务器都没有）：200 + 空数组，不查库、不出现 IN ()，
+	// 也不 403（契约 §53.3：读接口统一按「看不到」处理）。
+	scope := a.allowedServerIDList(r)
+	if scope != nil && len(scope) == 0 {
+		_, _, meta := params.window(0)
+		writePagedList(w, params, []checkPayload{}, meta)
+		return
+	}
 	checks, err := a.st.ListChecks(r.Context())
 	if err != nil {
 		a.internalError(w, r, err)
 		return
 	}
-	payloads, err := a.buildCheckPayloads(r.Context(), checks)
+	// 资源范围在 buildCheckPayloads 内部收敛（先过滤后分页，契约 §53.3/§53.4）。
+	payloads, err := a.buildCheckPayloads(r.Context(), checks, scope)
 	if err != nil {
 		a.internalError(w, r, err)
-		return
-	}
-	// 资源范围过滤（先过滤后分页，契约 §53.3/§53.4）。
-	payloads = a.filterCheckPayloadsByScope(r, payloads)
-	params, perr := parsePage(r)
-	if perr != nil {
-		writeError(w, http.StatusBadRequest, codeInvalidArgument, perr.Error())
 		return
 	}
 	start, end, meta := params.window(len(payloads))
@@ -184,12 +191,14 @@ func (a *API) handleGetCheck(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return // loadCheck 已写响应
 	}
-	payloads, err := a.buildCheckPayloads(r.Context(), []store.Check{*c})
+	// 与 GET /checks 走同一个组装入口：可见性与字段裁剪同一口径，不另写一份判定。
+	payloads, err := a.buildCheckPayloads(r.Context(), []store.Check{*c}, a.allowedServerIDList(r))
 	if err != nil {
 		a.internalError(w, r, err)
 		return
 	}
-	if !writeNotFoundIfInvisible(w, a.canAccessAnyServer(r, payloads[0].ServerIDs)) {
+	// 无可区内目标 → 404（越界对象一律当不存在，与 requireServerInScope 同口径）。
+	if !writeNotFoundIfInvisible(w, len(payloads) > 0) {
 		return
 	}
 	writeData(w, http.StatusOK, payloads[0])
@@ -285,9 +294,13 @@ func (a *API) handleCreateCheck(w http.ResponseWriter, r *http.Request) {
 	a.logger.Info("创建检测项",
 		"check_id", check.ID, "name", check.Name, "kind", check.Kind,
 		"target", check.Target, "interval_s", check.IntervalS, "targets", len(serverIDs))
-	payloads, err := a.buildCheckPayloads(ctx, []store.Check{*check})
+	// 响应用与列表同一套范围裁剪（创建者可能只持有部分服务器）。
+	payloads, err := a.buildCheckPayloads(ctx, []store.Check{*check}, a.allowedServerIDList(r))
 	if err != nil {
 		a.internalError(w, r, err)
+		return
+	}
+	if !writeNotFoundIfInvisible(w, len(payloads) > 0) {
 		return
 	}
 	writeData(w, http.StatusCreated, payloads[0])
@@ -379,9 +392,13 @@ func (a *API) handlePatchCheck(w http.ResponseWriter, r *http.Request) {
 	a.wakeChecks()
 
 	a.logger.Info("更新检测项", "check_id", updated.ID, "interval_s", updated.IntervalS, "enabled", updated.Enabled)
-	payloads, err := a.buildCheckPayloads(r.Context(), []store.Check{*updated})
+	// 与列表/详情同一套范围裁剪，避免 PATCH 响应成为「看组外服务器」的旁路。
+	payloads, err := a.buildCheckPayloads(r.Context(), []store.Check{*updated}, a.allowedServerIDList(r))
 	if err != nil {
 		a.internalError(w, r, err)
+		return
+	}
+	if !writeNotFoundIfInvisible(w, len(payloads) > 0) {
 		return
 	}
 	writeData(w, http.StatusOK, payloads[0])
@@ -500,6 +517,16 @@ func (a *API) handleRunCheck(w http.ResponseWriter, r *http.Request) {
 
 // handleListCheckResults 处理 GET /api/v1/checks/{id}/results。
 func (a *API) handleListCheckResults(w http.ResponseWriter, r *http.Request) {
+	// 资源范围为空（角色范围内没有任何服务器）：返回 200 + 空数组，不查库。
+	//
+	// 这条判断刻意放在 loadCheck 之前：零范围角色看不到任何检测项，若先 loadCheck 再按
+	// checkVisible 判 404，「检测项是否存在」就能靠 404/200 的差异被探测出来。统一回空
+	// 集合既符合契约（范围为空 → 200 + 空数组），也不会产生 IN ()。
+	if allowed := a.allowedServers(r); allowed != nil && len(allowed) == 0 {
+		writeData(w, http.StatusOK, []checkResultPayload{})
+		return
+	}
+
 	c, err := a.loadCheck(w, r)
 	if err != nil {
 		return
@@ -536,11 +563,27 @@ func (a *API) handleListCheckResults(w http.ResponseWriter, r *http.Request) {
 			a.writeStoreError(w, r, err)
 			return
 		}
+		// 读越界与「不存在」同口径：一律 404，不泄露组外服务器是否存在
+		// （与 requireServerInScope 中间件一致，契约 §53.3）。
+		if !writeNotFoundIfInvisible(w, a.canAccessServer(r, serverID)) {
+			return
+		}
 	}
 
-	rows, err := a.st.ListCheckResults(r.Context(), store.CheckResultFilter{
+	// 资源范围：检测项是「一台机器可达即可见」的对象，但它的结果分属不同服务器。
+	// 之前只过了 checkVisible（目标集合有无交集）就把整条时间线返回，组范围用户能读到
+	// 组外服务器的结果（还带 server_name）——真实越权读。范围因此下沉到 store SQL，
+	// 与 LIMIT 一起生效（否则会出现「范围内结果不在全局最新 N 条」的假空列表）。
+	filter := store.CheckResultFilter{
 		CheckID: c.ID, ServerID: serverID, From: from, To: to, Limit: limit,
-	})
+	}
+	// 范围非全局时把可见服务器集合交给 store 的 SQL（nil = 全局可见）。空集合已在函数
+	// 开头提前返回，因此这里 ids 非空，SQL 不会出现 IN ()。
+	if ids := a.allowedServerIDList(r); ids != nil {
+		filter.ServerIDs = ids
+	}
+
+	rows, err := a.st.ListCheckResults(r.Context(), filter)
 	if err != nil {
 		a.internalError(w, r, err)
 		return
@@ -566,7 +609,10 @@ func (a *API) handleCheckSummary(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	payloads, err := a.buildCheckPayloads(r.Context(), checks)
+	// 与 GET /checks 传同一个 scope：summary 的元素就是列表元素，若一处裁字段一处不裁，
+	// 受限用户从 summary 仍能读到组外服务器的 server_ids/last_result（A12 的另一种漏法）。
+	// 可见性也由同一 helper 决定（范围内无目标的检测项直接不进来），不再叠一层内存过滤。
+	payloads, err := a.buildCheckPayloads(r.Context(), checks, a.allowedServerIDList(r))
 	if err != nil {
 		a.internalError(w, r, err)
 		return
@@ -623,7 +669,7 @@ func (a *API) handleServerChecks(w http.ResponseWriter, r *http.Request) {
 		checks = append(checks, *c)
 	}
 
-	payloads, err := a.buildCheckPayloads(ctx, checks)
+	payloads, err := a.buildCheckPayloads(ctx, checks, a.allowedServerIDList(r))
 	if err != nil {
 		a.internalError(w, r, err)
 		return
@@ -672,8 +718,17 @@ func (a *API) handleServerChecks(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildCheckPayloads 组装检测项列表/详情的聚合信息。
-func (a *API) buildCheckPayloads(ctx context.Context, checks []store.Check) ([]checkPayload, error) {
-	if len(checks) == 0 {
+//
+// scope 是调用者可见的服务器集合（allowedServerIDList：nil = 全局不限，非 nil 空切片 =
+// 范围内一台都没有）。所有跨服务器的字段——目标列表、target_count/server_count、
+// last_result、availability_24h/results_24h、状态与连续失败次数——都在这里按 scope 收敛，
+// 且收敛发生在 SQL 与同一份（已按范围过滤的）targetIndex 上，不是「先把全量取回来再在
+// 内存里裁」：后者会把「全局最新一条」「全局统计」这类越权面重新引入（t30/t32/t35 的教训）。
+//
+// 可见性与裁剪共用同一份数据：范围内没有任何目标的检测项直接不出现在结果里，因此不会
+// 出现「列表说可见、server_ids 却带范围外服务器」的裂缝。
+func (a *API) buildCheckPayloads(ctx context.Context, checks []store.Check, scope []string) ([]checkPayload, error) {
+	if len(checks) == 0 || (scope != nil && len(scope) == 0) {
 		return []checkPayload{}, nil
 	}
 	ids := make([]string, 0, len(checks))
@@ -681,19 +736,19 @@ func (a *API) buildCheckPayloads(ctx context.Context, checks []store.Check) ([]c
 		ids = append(ids, c.ID)
 	}
 
-	targetIndex, err := a.st.ListAllCheckTargets(ctx)
+	targetIndex, err := a.st.ListAllCheckTargets(ctx, scope)
 	if err != nil {
 		return nil, err
 	}
-	states, err := a.st.ListCheckStates(ctx, ids)
+	states, err := a.st.ListCheckStates(ctx, ids, scope)
 	if err != nil {
 		return nil, err
 	}
-	latest, err := a.st.ListLatestCheckResults(ctx, ids)
+	latest, err := a.st.ListLatestCheckResults(ctx, ids, scope)
 	if err != nil {
 		return nil, err
 	}
-	availability, err := a.st.ListAvailability(ctx, a.nowMS()-int64(availabilityWindowHrs)*3600*1000)
+	availability, err := a.st.ListAvailability(ctx, a.nowMS()-int64(availabilityWindowHrs)*3600*1000, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -704,6 +759,10 @@ func (a *API) buildCheckPayloads(ctx context.Context, checks []store.Check) ([]c
 		targetServerIDs := targetIndex[c.ID]
 		if targetServerIDs == nil {
 			targetServerIDs = []string{}
+		}
+		if scope != nil && len(targetServerIDs) == 0 {
+			// 范围内没有该检测项的任何目标 → 对调用者不可见（全局角色仍可见，保持既有行为）。
+			continue
 		}
 		threshold := failThresholdOf(c.ParamsJSON)
 		avail := availability[c.ID]
@@ -1102,22 +1161,4 @@ func toIntParam(v any) (int, error) {
 // round2 四舍五入保留两位小数。
 func round2(v float64) float64 {
 	return float64(int64(v*100+0.5)) / 100
-}
-
-// filterCheckPayloadsByScope 按资源范围过滤检测项：只要有任一目标服务器在范围内即可见。
-func (a *API) filterCheckPayloadsByScope(r *http.Request, in []checkPayload) []checkPayload {
-	allowed := a.allowedServers(r)
-	if allowed == nil {
-		return in
-	}
-	out := make([]checkPayload, 0, len(in))
-	for _, p := range in {
-		for _, sid := range p.ServerIDs {
-			if _, ok := allowed[sid]; ok {
-				out = append(out, p)
-				break
-			}
-		}
-	}
-	return out
 }

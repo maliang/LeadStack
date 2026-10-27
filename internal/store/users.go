@@ -18,7 +18,7 @@ func (s *Store) CreateUser(ctx context.Context, u *User) error {
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return fmt.Errorf("创建用户 %s: %w", u.Username, ErrConflict)
+			return fmt.Errorf("用户 %s 已存在: %w", u.Username, ErrConflict)
 		}
 		return fmt.Errorf("创建用户 %s: %w", u.Username, err)
 	}

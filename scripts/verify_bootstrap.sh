@@ -157,11 +157,22 @@ sh deploy/install.sh --dry-run --server http://127.0.0.1:1 --token verify-token 
 	--install-dir "$DATA_DIR/agentbin" > "$AGENT_DRY" 2>&1
 AGENT_RC=$?
 [ "$AGENT_RC" -eq 0 ] && pass "dry-run 退出码 0" || fail "dry-run 失败：$(tail -3 "$AGENT_DRY")"
-[ "$(grep -cE '\([1-4]/4\)' "$AGENT_DRY" 2>/dev/null || echo 0)" -eq 4 ] \
-	&& pass "输出 4 个阶段标题（1/4 … 4/4）" || fail "阶段标题缺失"
-[ "$(grep -cE '✓|– 跳过' "$AGENT_DRY" 2>/dev/null || echo 0)" -ge 4 ] \
-	&& pass "每个阶段都有 ✓/跳过 结论" || fail "结论行缺失"
+[ "$(grep -cE '\([1-5]/5\)' "$AGENT_DRY" 2>/dev/null || echo 0)" -eq 5 ] \
+	&& pass "输出 5 个阶段标题（1/5 … 5/5）" || fail "阶段标题缺失"
+# 每个阶段都必须有可见结论：成功 ✓ / 跳过 – / 失败或告警 ⚠。
+# 控制端不可达时第 5 阶段的结论是 ⚠（不是 ✓），断言必须把这个分支算进去。
+CONCL_N="$(grep -cE '(✓|– 跳过|⚠)' "$AGENT_DRY" 2>/dev/null || true)"
+[ "${CONCL_N:-0}" -ge 5 ] \
+	&& pass "每个阶段都有结论行（✓/跳过/⚠ 共 ${CONCL_N} 行）" \
+	|| fail "结论行缺失（✓/跳过/⚠ 仅 ${CONCL_N:-0} 行，期望 ≥5）"
 grep -q "未指定 --version" "$AGENT_DRY" && pass "latest 版本解析步骤可见" || fail "未提示版本解析"
+# 控制端可达性自检（A28）：dry-run 也必须真实发请求，且不可达不得让安装失败
+grep -q "确认控制端可达" "$AGENT_DRY" && pass "存在「确认控制端可达」阶段" || fail "缺少可达性自检阶段"
+grep -q "控制端不可达" "$AGENT_DRY" && pass "不可达时明确告知（控制端不可达）" || fail "未提示控制端不可达"
+grep -q -- "--ca" "$AGENT_DRY" && grep -q -- "--insecure" "$AGENT_DRY" \
+	&& pass "不可达时给出自签证书处置建议" || fail "缺少 --ca/--insecure 建议"
+grep -q "http://127.0.0.1:1/healthz" "$AGENT_DRY" && pass "自检请求的是 /healthz（不是 /api/v1/health）" \
+	|| fail "自检地址不符（应为 <server>/healthz）"
 
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"

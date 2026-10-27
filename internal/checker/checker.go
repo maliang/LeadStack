@@ -74,7 +74,15 @@ type AgentProber interface {
 
 // Store 是调度器对持久化的最小依赖，由 backend 实现（避免 checker import store）。
 type Store interface {
+	// ListEnabledTargets 只返回启用中的检测项目标，定时调度用它。
 	ListEnabledTargets(ctx context.Context) ([]Target, error)
+	// GetCheckTarget 按 (检测项, 服务器) 精确查一个目标，忽略检测项的 enabled 标志。
+	//
+	// 手动「立即执行」依赖它：停用检测项只应停掉定时探测，用户点「立即执行」仍要真正
+	// 跑一次并落库。只查 ListEnabledTargets 会命中不到停用项，结果是一条都不写、用户
+	// 只看到「未找到检测目标」这种像内部报错的提示。
+	// 未找到返回 found=false、err=nil；只有查询本身失败才返回 err。
+	GetCheckTarget(ctx context.Context, checkID, serverID string) (Target, bool, error)
 	SaveResult(ctx context.Context, checkID, serverID string, r Result) error
 	UpdateState(ctx context.Context, checkID, serverID string, ok bool, ts int64) error
 }

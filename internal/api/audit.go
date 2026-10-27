@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -25,8 +26,21 @@ const (
 	paginationDefault  = 100
 	// pageCursorPrefix 是 offset 游标的前缀（不透明字符串，客户端不应解析）。
 	pageCursorPrefix = "off:"
-	// auditBodyCaptureLimit 是审计记录请求体的最大抓取字节数。
-	auditBodyCaptureLimit = 4096
+	// auditBodyCaptureLimit 是审计记录请求体时抓取的字节上限。
+	//
+	// 必须 ≥ decodeJSON 的上限（maxRequestBodyBytes）：审计中间件在 handler 之前把请求体读成
+	// 字节再还回去，超过上限的请求体会被切成**残缺 JSON**，脱敏时解析失败只能落占位符
+	// （{"_redacted":...}），模板正文这类「需要写入 detail 的内容」就彻底丢失（A16）。
+	// 与 maxRequestBodyBytes 对齐后，「handler 能接受的请求体，审计都能解析」。
+	auditBodyCaptureLimit = maxRequestBodyBytes
+	// auditContentMaxBytes 是 detail 中 content 保留的最大字节数（超出按字节截断）。
+	auditContentMaxBytes = 2048
+	// auditContentTruncatedSuffix 是 content 被截断后补在末尾的标记。
+	auditContentTruncatedSuffix = "…(已截断)"
+	// auditMaskedPlaceholder 是被脱敏字段值的占位符（绝不落明文）。
+	auditMaskedPlaceholder = "__masked"
+	// auditMaskedListKey 是 detail 里登记「被脱敏键名」的固定字段（与占位符同字面量，语义不同）。
+	auditMaskedListKey = auditMaskedPlaceholder
 )
 
 // pageMeta 是分页元信息。
@@ -381,12 +395,22 @@ func (a *API) captureAuditDetail(r *http.Request) *string {
 }
 
 // auditSecretKeys 是必须在审计 detail 中脱敏的字段（小写匹配，包含即视为敏感）。
+//
+// **content 不在此表**：模板正文是「谁改成什么」的可追溯证据（A16），按
+// auditContentMaxBytes 截断后原样保留，见 truncateAuditContent。
 var auditSecretKeys = []string{
 	"password", "passphrase", "private_key", "secret", "token", "bot_token",
-	"api_key", "apikey", "access_token", "old_password", "new_password", "content",
+	"api_key", "apikey", "access_token", "old_password", "new_password", "env_json",
 }
 
-// isAuditSecretKey 判断字段名是否属于敏感字段。
+// auditEnvValueKeys 是环境变量容器（精确键名匹配，不做子串匹配以免误伤 environment 之类）。
+//
+// 它们是「值敏感、键名可留」的字段：对象形态（有的客户端直接把 env 当对象提交）要掩码到
+// **值一级**、键名保留；字符串形态（API 契约：env_json 是一段 JSON 文本）整段不可落明文，
+// 直接替换为 auditMaskedPlaceholder。
+var auditEnvValueKeys = []string{"env_json", "env"}
+
+// isAuditSecretKey 判断字段名是否属于「整个值都不得落入审计」的敏感字段。
 func isAuditSecretKey(key string) bool {
 	lower := strings.ToLower(key)
 	for _, part := range auditSecretKeys {
@@ -395,6 +419,80 @@ func isAuditSecretKey(key string) bool {
 		}
 	}
 	return false
+}
+
+// isAuditEnvValueKey 判断字段名是否是环境变量容器（精确匹配，忽略大小写与空白）。
+func isAuditEnvValueKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	for _, name := range auditEnvValueKeys {
+		if k == name {
+			return true
+		}
+	}
+	return false
+}
+
+// isAuditContentKey 判断字段名是否是「正文可追溯」字段（精确匹配 content）。
+//
+// 用精确匹配而不是子串匹配：content_type 之类的字段没有追溯需求，也不该被截断。
+func isAuditContentKey(key string) bool {
+	return strings.EqualFold(strings.TrimSpace(key), "content")
+}
+
+// maskAuditEnvValue 把环境变量容器的值掩码到值一级（对象/数组保留键名，叶子一律占位符）。
+//
+// 字符串（API 契约形态：setenv 的那段 JSON 文本）与其它标量整体替换为占位符——字符串里
+// 可能就是一整段明文 JSON，无法安全地局部保留。
+func maskAuditEnvValue(value any) any {
+	switch value.(type) {
+	case map[string]any, []any:
+		return maskAuditLeaves(value)
+	default:
+		return auditMaskedPlaceholder
+	}
+}
+
+// maskAuditLeaves 递归把叶子值替换为占位符，保留对象键名与数组长度。
+func maskAuditLeaves(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for key, value := range t {
+			out[key] = maskAuditLeaves(value)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(t))
+		for _, item := range t {
+			out = append(out, maskAuditLeaves(item))
+		}
+		return out
+	default:
+		return auditMaskedPlaceholder
+	}
+}
+
+// truncateAuditContent 按字节截断正文并补截断标记（只截 content 的值，不动别的字段）。
+//
+// 截断点回退到 UTF-8 字符边界：直接切 2048 字节会把中文/emoji 劈成半个字符，json.Marshal
+// 之后变成 U+FFFD，detail 里读出来是乱码。最终长度因此可能略小于 auditContentMaxBytes+标记。
+func truncateAuditContent(s string) string {
+	if len(s) <= auditContentMaxBytes {
+		return s
+	}
+	cut := auditContentMaxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + auditContentTruncatedSuffix
+}
+
+// redactAuditContent 处理 content 字段：字符串截断保留；其它形态照常递归脱敏。
+func redactAuditContent(value any) any {
+	if s, ok := value.(string); ok {
+		return truncateAuditContent(s)
+	}
+	return redactValue(value)
 }
 
 // redactJSONBody 对 JSON 请求体做递归脱敏；解析失败时直接返回占位符（绝不落原文）。
@@ -412,21 +510,31 @@ func redactJSONBody(raw []byte) []byte {
 }
 
 // redactValue 递归脱敏。
+//
+// 分支顺序有语义：环境变量容器先于敏感键判断（它既要登记键名，又要按值一级掩码）；
+// content 只截断不掩码（A16 要求模板正文可追溯）。
 func redactValue(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t)+1)
 		masked := make([]string, 0, 2)
 		for key, value := range t {
-			if isAuditSecretKey(key) {
+			switch {
+			case isAuditEnvValueKey(key):
+				// 只登记键名；对象形态掩码到值一级，字符串形态整体替换为占位符。
+				masked = append(masked, key)
+				out[key] = maskAuditEnvValue(value)
+			case isAuditSecretKey(key):
 				// 只登记被脱敏的键名，不保留任何可能被误判为明文的内容。
 				masked = append(masked, key)
-				continue
+			case isAuditContentKey(key):
+				out[key] = redactAuditContent(value)
+			default:
+				out[key] = redactValue(value)
 			}
-			out[key] = redactValue(value)
 		}
 		if len(masked) > 0 {
-			out["__masked"] = masked
+			out[auditMaskedListKey] = masked
 		}
 		return out
 	case []any:

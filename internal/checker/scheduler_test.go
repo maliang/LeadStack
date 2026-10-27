@@ -336,6 +336,45 @@ func TestSchedulerRunOnce(t *testing.T) {
 	}
 }
 
+// TestSchedulerRunOnceRunsDisabledTarget 停用的检测项也必须能手动「立即执行」。
+//
+// 停用只应停掉定时探测：它不在 ListEnabledTargets 里（定时循环据此跳过），但用户点
+// 「立即执行」时 RunOnce 要按 (检测项, 服务器) 精确查到目标、真正跑一次并落库。
+// 修复前这条路径直接返回「未找到检测目标」，没有任何结果写入——页面于是显示空统计。
+func TestSchedulerRunOnceRunsDisabledTarget(t *testing.T) {
+	withFastInterval(t, time.Hour) // RunOnce 不依赖 ticker
+
+	target := scriptTarget("c1", "s1", "echo disabled-once", nil)
+	store := &fakeStore{}
+	// 停用：只能被精确查找命中，启用列表里没有它。
+	store.setLookupTargets(target)
+	exec := &fakeExecutor{}
+	s := NewScheduler(Deps{Store: store, Exec: exec})
+
+	r := s.RunOnce(context.Background(), "c1", "s1")
+	if !r.OK {
+		t.Fatalf("停用检测项手动执行应真正执行: %+v", r)
+	}
+	if containsAll(r.Message, "未找到检测目标") {
+		t.Fatalf("停用检测项不应报「未找到检测目标」: %+v", r)
+	}
+	if len(exec.calls) != 1 {
+		t.Fatalf("停用检测项手动执行应真正探测一次，实际 %d 次", len(exec.calls))
+	}
+	if store.resultCount() != 1 || store.stateCount() != 1 {
+		t.Fatalf("停用检测项手动执行必须落库：results=%d states=%d", store.resultCount(), store.stateCount())
+	}
+
+	// 精查也查不到（例如该服务器已从目标列表移除）时仍要明确失败、零落库。
+	other := s.RunOnce(context.Background(), "c1", "s2")
+	if other.OK || !containsAll(other.Message, "未找到检测目标") {
+		t.Fatalf("非目标的服务器应明确失败: %+v", other)
+	}
+	if store.resultCount() != 1 {
+		t.Fatalf("失败路径不应落库: results=%d", store.resultCount())
+	}
+}
+
 func TestSchedulerNilStoreAndDoubleStart(t *testing.T) {
 	s := NewScheduler(Deps{})
 	ctx, cancel := context.WithCancel(context.Background())

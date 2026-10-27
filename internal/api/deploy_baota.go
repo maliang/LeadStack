@@ -175,10 +175,15 @@ func (o *deployOrchestrator) runOneBaota(ctx context.Context, release *store.Rel
 	}
 
 	// 6) 健康检查（可选）：端口上取站点根/指定路径。
-	if hp := strings.TrimSpace(derefStr(app.HealthcheckPath)); hp != "" {
-		logf("system", "--- [6/6] 健康检查 "+hp+" ---\n")
-		if err := waitHTTPHealthy(ctx, fmt.Sprintf("http://%s:%d%s", srv.Host, port, normalizeHealthPath(hp))); err != nil {
-			logf("system", "健康检查失败: "+err.Error()+"\n")
+	if hp := strings.TrimSpace(derefStr(app.HealthcheckPath)); hp == "" {
+		// 与 builtin 通道一致：跳过必须留痕（A4）。
+		logf("system", "跳过健康检查：未配置 healthcheck_path\n")
+	} else {
+		healthURL := fmt.Sprintf("http://%s:%d%s", srv.Host, port, normalizeHealthPath(hp))
+		logf("system", "--- [6/6] 健康检查 "+healthURL+" ---\n")
+		if err := waitHTTPHealthy(ctx, healthURL); err != nil {
+			reason := healthCheckReason(err)
+			logf("system", "健康检查失败: "+reason+"\n")
 			if backupOK {
 				if rbErr := client.Unzip(ctx, backupPath, sitePath); rbErr != nil {
 					logf("system", "回滚失败: "+rbErr.Error()+"\n")
@@ -186,7 +191,12 @@ func (o *deployOrchestrator) runOneBaota(ctx context.Context, release *store.Rel
 					logf("system", "已回滚到备份版本\n")
 				}
 			}
-			o.finishRun(ctx, run, store.ReleaseStatusFailed, -1, "部署后健康检查失败: "+err.Error(), strPtrOrNil("healthcheck"), logf)
+			var hce *healthCheckError
+			if errors.As(err, &hce) && hce.isConnectionFailure() {
+				reason += healthCheckHint
+			}
+			// failed_step 统一用 deploy.StepHealthCheck（不用字面量 "healthcheck"）。
+			o.finishRun(ctx, run, store.ReleaseStatusFailed, -1, "部署后健康检查失败: "+reason, strPtrOrNil(deploy.StepHealthCheck), logf)
 			return
 		}
 		logf("system", "健康检查通过\n")
@@ -285,7 +295,70 @@ func normalizeHealthPath(p string) string {
 	return p
 }
 
-// waitHTTPHealthy 轮询目标地址直到 2xx/3xx 或超时。
+// maxHealthcheckPathLen 是 healthcheck_path 的长度上限（SPEC §5 B-09）。
+const maxHealthcheckPathLen = 200
+
+// validateHealthcheckPath 校验并规整健康检查路径（B-09 / A9a）。
+//
+// 空串表示不配置健康检查；非空时必须以 / 开头、不含空白字符、不含查询串/锚点、
+// 长度 ≤ maxHealthcheckPathLen。返回 trim 后的值。
+func validateHealthcheckPath(raw string) (string, error) {
+	hp := strings.TrimSpace(raw)
+	if hp == "" {
+		return "", nil
+	}
+	if len(hp) > maxHealthcheckPathLen {
+		return "", fmt.Errorf("healthcheck_path 过长（≤%d 字符）", maxHealthcheckPathLen)
+	}
+	if !strings.HasPrefix(hp, "/") {
+		return "", errors.New("healthcheck_path 必须以 / 开头")
+	}
+	if strings.ContainsAny(hp, " \t\r\n") {
+		return "", errors.New("healthcheck_path 不能包含空白字符")
+	}
+	if strings.ContainsAny(hp, "?#") {
+		return "", errors.New("healthcheck_path 不能包含 ? 或 #（只接受路径部分）")
+	}
+	return hp, nil
+}
+
+// healthCheckError 区分健康检查失败的两种原因，供失败文案与 hint 使用（R4）。
+type healthCheckError struct {
+	// StatusCode 非 0 表示拿到了 HTTP 响应（非 2xx）。
+	StatusCode int
+	// Err 是连接失败/超时的底层错误。
+	Err error
+}
+
+func (e *healthCheckError) Error() string {
+	if e.StatusCode != 0 {
+		return fmt.Sprintf("健康检查返回 HTTP %d（期望 2xx）", e.StatusCode)
+	}
+	if e.Err != nil {
+		return "健康检查连接失败: " + e.Err.Error()
+	}
+	return "健康检查失败"
+}
+
+// isConnectionFailure 判断是否属于「连不上」类失败（用于附带 hint）。
+func (e *healthCheckError) isConnectionFailure() bool { return e.StatusCode == 0 }
+
+// healthCheckHint 是连接失败时附带的排查提示（R4）。
+const healthCheckHint = "（若目标机是 agent 接入的内网地址，控制端可能直连不通：把 healthcheck_port 指向可达端口，或留空 healthcheck_path 跳过探测）"
+
+// healthCheckReason 把健康检查错误规整成 R4 文案（HTTP 码 / 连接失败）。
+func healthCheckReason(err error) string {
+	var hce *healthCheckError
+	if errors.As(err, &hce) {
+		return hce.Error()
+	}
+	return "健康检查连接失败: " + err.Error()
+}
+
+// waitHTTPHealthy 轮询目标地址直到拿到 2xx 或超时。
+//
+// 判定口径（R4）：**仅 2xx 视为健康**；3xx/4xx 立即判不健康（重定向/鉴权页不是健康），
+// 5xx、连接失败、超时按 1s 间隔重试至总预算（baotaHealthTimeout）。
 func waitHTTPHealthy(ctx context.Context, url string) error {
 	deadline := time.Now().Add(baotaHealthTimeout)
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -296,19 +369,24 @@ func waitHTTPHealthy(ctx context.Context, url string) error {
 			resp, err := client.Do(req)
 			if err == nil {
 				_ = resp.Body.Close()
-				if resp.StatusCode < 400 {
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 					return nil
 				}
-				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+				statusErr := &healthCheckError{StatusCode: resp.StatusCode}
+				// 3xx/4xx 是确定性结果（重定向到登录页、路径写错），重试没有意义。
+				if resp.StatusCode < 500 {
+					return statusErr
+				}
+				lastErr = statusErr
 			} else {
-				lastErr = err
+				lastErr = &healthCheckError{Err: err}
 			}
 		} else {
-			lastErr = err
+			lastErr = &healthCheckError{Err: err}
 		}
 		if time.Now().After(deadline) {
 			if lastErr == nil {
-				lastErr = errors.New("超时")
+				lastErr = &healthCheckError{Err: errors.New("超时")}
 			}
 			return lastErr
 		}
@@ -350,11 +428,11 @@ func (a *API) normalizeAppSite(provider, siteName string, sitePort *int, siteTyp
 	switch p {
 	case store.AppProviderBuiltin:
 		// builtin 通道不用面板站点字段，但 healthcheck_path 是两条通道共用的（部署后 HTTP 探测）。
-		hp := strings.TrimSpace(healthcheckPath)
+		hp, herr := validateHealthcheckPath(healthcheckPath)
+		if herr != nil {
+			return cfg, herr
+		}
 		if hp != "" {
-			if !strings.HasPrefix(hp, "/") || strings.ContainsAny(hp, " \t\r\n") {
-				return cfg, fmt.Errorf("healthcheck_path 必须以 / 开头且不能包含空白字符")
-			}
 			cfg.HealthcheckPath = &hp
 		}
 		return cfg, nil
@@ -384,14 +462,11 @@ func (a *API) normalizeAppSite(provider, siteName string, sitePort *int, siteTyp
 		return cfg, fmt.Errorf("site_type 目前只支持 static 或 php（node 站点的进程管理不在 v1 范围）")
 	}
 	cfg.SiteType = &st
-	hp := strings.TrimSpace(healthcheckPath)
+	hp, herr := validateHealthcheckPath(healthcheckPath)
+	if herr != nil {
+		return cfg, herr
+	}
 	if hp != "" {
-		if !strings.HasPrefix(hp, "/") {
-			return cfg, fmt.Errorf("healthcheck_path 必须以 / 开头")
-		}
-		if strings.ContainsAny(hp, " \t\r\n") {
-			return cfg, fmt.Errorf("healthcheck_path 不能包含空白字符")
-		}
 		cfg.HealthcheckPath = &hp
 	}
 	return cfg, nil
@@ -429,9 +504,9 @@ func (a *API) normalizeAppSitePatch(provider *string, siteName *string, sitePort
 		cfg.SiteType = &st
 	}
 	if healthcheckPath != nil {
-		hp := strings.TrimSpace(*healthcheckPath)
-		if hp != "" && (!strings.HasPrefix(hp, "/") || strings.ContainsAny(hp, " \t\r\n")) {
-			return cfg, fmt.Errorf("healthcheck_path 必须以 / 开头且不能包含空白字符")
+		hp, herr := validateHealthcheckPath(*healthcheckPath)
+		if herr != nil {
+			return cfg, herr
 		}
 		cfg.HealthcheckPath = &hp
 	}
@@ -627,8 +702,12 @@ func normalizeAppDeployV2(deployMode, targetDir, restartCmd, initScript, envJSON
 	if keepPaths != nil {
 		v := strings.TrimSpace(*keepPaths)
 		for _, p := range splitKeepPaths(v) {
-			clean := strings.TrimPrefix(p, "/")
-			if strings.Contains(clean, "..") {
+			// keep_paths 是 rsync 的 --exclude 参数，语义上相对于目标目录：
+			// 绝对路径会被 rsync 当成另一个路径源（静默失效），必须拒绝（A9b）。
+			if strings.HasPrefix(p, "/") {
+				return out, fmt.Errorf("keep_paths 必须是相对目标目录的路径，不能是绝对路径：%s", p)
+			}
+			if strings.Contains(p, "..") {
 				return out, fmt.Errorf("keep_paths 不允许包含 ..：%s", p)
 			}
 			if strings.ContainsAny(p, " \t\r\n") {
@@ -645,8 +724,9 @@ func normalizeAppDeployV2(deployMode, targetDir, restartCmd, initScript, envJSON
 		out.RollbackScript = &v
 	}
 	if healthPort != nil {
-		if *healthPort < 0 || *healthPort > 65535 {
-			return out, fmt.Errorf("healthcheck_port 必须在 0-65535 之间（0 表示清除）")
+		// 0 是有语义的（表示清除），其余必须是合法的 TCP 端口（B-09）。
+		if *healthPort != 0 && (*healthPort < 1 || *healthPort > 65535) {
+			return out, fmt.Errorf("healthcheck_port 必须在 1-65535 之间（0 表示清除）")
 		}
 		p := *healthPort
 		out.HealthcheckPort = &p

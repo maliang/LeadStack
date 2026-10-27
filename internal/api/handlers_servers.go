@@ -665,12 +665,19 @@ func (a *API) handleDiscoverServer(w http.ResponseWriter, r *http.Request) {
 		Discover(context.Context, string) (*DiscoveryReport, error)
 	})
 	if !ok {
-		writeError(w, http.StatusNotImplemented, codeInternal, "发布编排器未启用，无法探测目标机")
+		// 控制端本地没装配执行器：503 unavailable，不是目标机的 502。
+		writeUnavailable(w, "发布执行器未启用，无法探测目标机")
 		return
 	}
 	report, err := prober.Discover(r.Context(), serverID)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, codeInternal, "探测失败: "+err.Error())
+		if errors.Is(err, errOrchestratorDisabled) {
+			// 本地装配缺陷（执行器存在但执行端为空），同样不能算远端失败。
+			writeUnavailable(w, "发布执行器未启用，无法探测目标机")
+			return
+		}
+		// 目标机不可达/拒绝连接属于远端失败，统一 502 + remote_failure（A19）。
+		a.writeRemoteError(w, r, err, "探测")
 		return
 	}
 	writeData(w, http.StatusOK, report)

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type UpdatePhase, type UpdateStatus } from '../lib/api'
+import { useAuth } from '../lib/auth'
 import { usePolling } from '../lib/hooks'
 import { useI18n } from '../i18n'
 import { errorMessage } from '../lib/errors'
@@ -22,9 +23,25 @@ export function isUpdateFinished(phase: UpdatePhase | undefined): boolean {
   return phase === 'success' || phase === 'failed' || phase === 'rolled_back'
 }
 
-/** 顶部/设置页共用的更新检查（缓存结果，5 分钟轮询）。 */
+/**
+ * 能否读控制端自升级信息（顶栏「版本与升级」入口 + 设置页卡片 + 升级弹窗共用）。
+ *
+ * GET /system/update 与 /system/update/check|apply|status 全部是 permSystemManage + RequireGlobalScope
+ * （internal/api/router.go:229-232），非全局范围或没有 system.manage 的角色请求必定 403。顶栏是每个
+ * 页面都在的常驻组件，所以这里把「权限 + 范围」一起判，不发起请求（与 BackupsPage 的 isGlobalScope
+ * 同范式：走 usePolling 的 enabled，既不请求也不挂定时器），而不是拿到 403 之后再吞掉。
+ *
+ * 注意权限点叫 system.manage（internal/auth/perm.go:36），没有 system.read。
+ */
+export function useUpdateAccess(): boolean {
+  const { can, scope } = useAuth()
+  return can('system.manage') && scope.mode === 'all'
+}
+
+/** 顶部/设置页共用的更新检查（缓存结果，5 分钟轮询；无权限/非全局范围时不请求）。 */
 export function useUpdateNotice() {
-  const query = usePolling(api.checkForUpdate, 300_000)
+  const allowed = useUpdateAccess()
+  const query = usePolling(api.checkForUpdate, 300_000, allowed)
   return {
     info: query.data,
     loading: query.loading,
@@ -77,7 +94,10 @@ function PhaseStepper({ status }: { status: UpdateStatus | null }) {
 export function UpdatePanel({ compact = false }: { compact?: boolean }) {
   const { t } = useI18n()
   const { toast } = useToast()
-  const query = usePolling(api.checkForUpdate, 600_000)
+  // 升级面板的所有接口同样是 permSystemManage + RequireGlobalScope（router.go:229-232），
+  // 无权限/非全局范围时连轮询和「恢复进行中升级」的状态请求都不发，避免打开弹窗就刷 403。
+  const allowed = useUpdateAccess()
+  const query = usePolling(api.checkForUpdate, 600_000, allowed)
   const info = query.data
   const [checking, setChecking] = useState(false)
   const [checkError, setCheckError] = useState<string | null>(null)
@@ -94,6 +114,7 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
 
   // 面板打开时恢复进行中的升级（例如刷新页面后）
   useEffect(() => {
+    if (!allowed) return
     if (startedRef.current) return
     startedRef.current = true
     api
@@ -107,7 +128,7 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
         /* 升级接口未就绪时忽略 */
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [allowed])
 
   // 2s 轮询升级状态
   useEffect(() => {

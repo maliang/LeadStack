@@ -325,12 +325,15 @@ func (a *API) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"ok": true, "path": remotePath})
 }
 
-// writeRemoteError 把远端执行错误映射成 502（远端问题）或原有存储错误。
+// writeRemoteError 把远端执行错误映射成 502 + remote_failure（远端问题，可重试/需排查对端）。
+//
+// 与「本机程序内部错误（500 internal）」区分开：message 保留「<动作>失败: <原因>」模板，
+// 原因里是底层错误串，不含任何凭据/密钥。
 func (a *API) writeRemoteError(w http.ResponseWriter, r *http.Request, err error, action string) {
 	if err == nil {
 		return
 	}
 	// 运维操作默认按依赖不可用处理；真正的程序内部错误极少见。
 	a.logger.Warn("远程操作失败", "action", action, "path", r.URL.Path, "err", err)
-	writeError(w, http.StatusBadGateway, codeInternal, fmt.Sprintf("%s失败: %v", action, err))
+	writeError(w, http.StatusBadGateway, codeRemoteFailure, fmt.Sprintf("%s失败: %v", action, err))
 }

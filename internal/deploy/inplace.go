@@ -17,7 +17,9 @@ import (
 //	备份目标目录 → 解包到临时目录 → rsync 覆盖（保留 keep_paths）→ 写环境文件 →
 //	（首版）执行初始化脚本 → 执行重启命令
 //
-// 回滚＝把备份 tar 解回目标目录并再次执行重启命令。
+// 回滚＝把备份归档解到临时目录后再 `rsync -a -I --delete` 回目标目录（与前进同步对称：
+// 新版本多出来的文件会被删除、被删的文件会回来），归档里包含 `.leadstack.env`，
+// 因此环境变量也一并回到发布前状态；还原后再次执行重启命令。
 type InplaceParams struct {
 	AppSlug       string
 	ReleaseID     string
@@ -44,6 +46,9 @@ const (
 	inplaceBackupDir    = ".leadstack-backups"
 	inplaceEnvFileName  = ".leadstack.env"
 	inplaceBackupSuffix = ".tar.gz"
+	// inplaceMetaAliasDir 是元数据目录在 SPEC/文档里的写法（代码里实际是 inplaceMetaDir），
+	// 两个名字一并纳入回滚的删除保护名单，避免文档与实现措辞差异留下破坏面。
+	inplaceMetaAliasDir = ".leadstack-meta"
 )
 
 // BuildInplace 编排一次「接管既有目录」的部署计划（纯函数）。
@@ -89,7 +94,7 @@ func BuildInplace(p InplaceParams) (Plan, error) {
 		steps = append(steps, Step{Name: StepUnpack, Command: unpackCommand(staging, tmpArtifact, p.Artifact.Location), TimeoutS: timeoutUnpack})
 	}
 
-	// 3) 备份当前目录（不含 LeadStack 自己的目录）
+	// 3) 备份当前目录（不含 LeadStack 自己的目录，但**包含 .leadstack.env**：回滚要连环境变量一起还原）
 	steps = append(steps, Step{
 		Name:     StepBackup,
 		Command:  inplaceBackupCommand(target, backup, p.KeepPaths),
@@ -140,7 +145,12 @@ func BuildInplace(p InplaceParams) (Plan, error) {
 
 	plan.Steps = steps
 	// 注意：执行器按 RollbackSteps 的**逆序**执行（见 deploy.Executor），
-	// 所以这里按「期望顺序的倒序」书写：先声明重启、再声明恢复，实际执行即 恢复 → 重启。
+	// 所以这里按「期望顺序的倒序」书写：先声明重启、再声明还原，实际执行即 还原 → 重启。
+	//
+	// 还原 = 解包到系统临时目录后 rsync -a -I --delete 回目标目录，
+	// 与前进同步共用 inplaceProtectedExcludes：.leadstack / .leadstack 备份目录 / keep_paths
+	// 自身不参与删除；归档里含 .leadstack.env，环境变量一并回到发布前（A5/A6）。
+	// 还原不产生新备份（归档只读），A7 的「回滚不额外堆备份」由此保证。
 	plan.RollbackSteps = make([]Step, 0, 2)
 	if cmd := strings.TrimSpace(p.RestartCmd); cmd != "" {
 		plan.RollbackSteps = append(plan.RollbackSteps, Step{
@@ -153,7 +163,7 @@ func BuildInplace(p InplaceParams) (Plan, error) {
 	}
 	plan.RollbackSteps = append(plan.RollbackSteps, Step{
 		Name:           StepRollbackRestore,
-		Command:        "tar -xzf " + shQuote(backup) + " -C " + shQuote(target),
+		Command:        inplaceRestoreCommand(target, backup, p.KeepPaths, false),
 		TimeoutS:       timeoutRollbackRestore,
 		RollbackMarker: true,
 	})
@@ -190,8 +200,11 @@ func envFileContent(raw string) (string, error) {
 }
 
 // inplaceBackupCommand 生成「打包目标目录」的命令（排除 LeadStack 目录与保留路径）。
+//
+// **必须包含 `.leadstack.env`**：备份是回滚的唯一依据，若把环境文件排除在外，
+// 回滚后就只能得到「旧代码 + 新配置」，A6 永远不可能通过。
 func inplaceBackupCommand(target, backup string, keep []string) string {
-	excludes := []string{"--exclude=./" + inplaceMetaDir, "--exclude=./" + inplaceBackupDir, "--exclude=./" + inplaceEnvFileName}
+	excludes := []string{"--exclude=./" + inplaceMetaDir, "--exclude=./" + inplaceBackupDir}
 	for _, k := range keep {
 		k = strings.TrimSpace(k)
 		if k == "" {
@@ -202,17 +215,86 @@ func inplaceBackupCommand(target, backup string, keep []string) string {
 	return "tar -czf " + shQuote(backup) + " -C " + shQuote(target) + " " + strings.Join(excludes, " ") + " ."
 }
 
-// inplaceSyncCommand 生成「用 staging 覆盖目标目录」的命令。
-func inplaceSyncCommand(staging, target string, keep []string) string {
-	args := []string{"-a", "--delete", "--exclude=" + inplaceMetaDir, "--exclude=" + inplaceBackupDir, "--exclude=" + inplaceEnvFileName}
+// inplaceProtectedExcludes 返回「前进同步」与「回滚还原」必须共用的保护名单。
+//
+// 两处都排除同一组路径，回滚才不会把 LeadStack 自己的目录与 keep_paths（上传、日志、
+// 数据目录）删掉：rsync 的 --exclude 对接收端同样生效，被排除的路径不会被 --delete 删除。
+// 由同一个函数生成，而不是两处手写，避免「改了一处忘了另一处」导致的不对称。
+func inplaceProtectedExcludes(keep []string) []string {
+	// inplaceMetaAliasDir：SPEC/文档里把元数据目录写作 .leadstack-meta，而代码常量
+	// inplaceMetaDir 是 .leadstack。两个名字都保护——存在哪个都不会被 --delete 抹掉。
+	excludes := []string{"--exclude=" + inplaceMetaDir, "--exclude=" + inplaceMetaAliasDir, "--exclude=" + inplaceBackupDir}
 	for _, k := range keep {
 		k = strings.TrimSpace(k)
 		if k == "" {
 			continue
 		}
-		args = append(args, "--exclude="+strings.TrimPrefix(k, "/"))
+		excludes = append(excludes, "--exclude="+strings.TrimPrefix(k, "/"))
 	}
+	return excludes
+}
+
+// inplaceSyncCommand 生成「用 staging 覆盖目标目录」的命令。
+func inplaceSyncCommand(staging, target string, keep []string) string {
+	args := append([]string{"-a", "--delete"}, inplaceProtectedExcludes(keep)...)
+	// 环境文件只在 StepWriteEnv 里按 EnvJSON 写入；同步阶段不得用制品里的同名文件覆盖它。
+	args = append(args, "--exclude="+inplaceEnvFileName)
 	return "rsync " + strings.Join(args, " ") + " " + shQuote(staging+"/") + " " + shQuote(target+"/")
+}
+
+// inplaceRestoreScript 是「用备份归档还原目标目录」的 POSIX sh 脚本正文。
+//
+// 位置参数由 inplaceRestoreCommand 传入：$1=备份归档 $2=目标目录，
+// $3.. = rsync 的 --exclude 列表（与前进同步同一组）。
+//
+// 为什么不再直接 `tar -xzf <backup> -C <target>`：tar 只覆盖、不删除，
+// 失败版本新加的文件会留在目录里，回滚后与发布前不一致（A5）。
+// 改为「先解到临时目录，再 rsync -a -I --delete」——与前进方向完全同一组 exclude。
+//
+// 必须带 -I（--ignore-times）：rsync 默认的 quick check 只比「大小 + 秒级 mtime」，
+// 回滚时备份里的文件与新版本同名同大小且 mtime 落在同一秒是常态（.leadstack.env 的
+// ENV_MARK=v1/v2 就是等长），不带 -I 会出现「rsync 退出 0、文件却还是新版本」的假成功。
+//
+// 临时目录为什么放在系统临时目录而不是 <target>/.leadstack 下：把 rsync 的源目录
+// 放在目标目录之内属于病态用法，不同实现行为不一致（macOS 自带 openrsync 实测会
+// 静默一个文件都不拷、还把源目录删掉），回滚就变成「假成功」。大站点可用
+// LEADSTACK_RESTORE_TMPDIR 指定到空间充足的盘。
+const inplaceRestoreScript = `set -e
+backup="$1"
+target="$2"
+shift 2
+staging=$(mktemp -d "${LEADSTACK_RESTORE_TMPDIR:-${TMPDIR:-/tmp}}/leadstack-restore.XXXXXX")
+trap 'rm -rf "$staging"' EXIT
+tar -xzf "$backup" -C "$staging"
+if [ -f "$staging/` + inplaceEnvFileName + `" ]; then
+    rsync -a -I --delete "$@" "$staging"/ "$target"/
+    echo "已回滚到发布前状态（含环境变量）"
+else
+    echo "归档内无 ` + inplaceEnvFileName + `，保留当前环境变量"
+    rsync -a -I --delete "$@" --exclude=` + inplaceEnvFileName + ` "$staging"/ "$target"/
+    echo "已回滚到发布前状态（环境变量保留当前值）"
+fi
+`
+
+// inplaceRestoreCommand 生成「用备份归档还原目标目录」的完整命令。
+//
+// 还原失败时向 stderr 写「回滚不完整，请人工核对：<目标目录>」并以非 0 退出，
+// 这样执行器会把它计入回滚失败（RunOutcome.Message 带「回滚 n 步中有 m 步失败」），
+// 命令日志里也留下可直接照做的提示。
+//
+// requireArchive 为 true 时先 `test -f` 校验归档存在（手动回滚到指定版本用），
+// 缺失时同样走「回滚不完整」的提示，而不是 rsync 的原生报错。
+func inplaceRestoreCommand(targetDir, backup string, keep []string, requireArchive bool) string {
+	args := []string{shQuote(backup), shQuote(targetDir)}
+	for _, e := range inplaceProtectedExcludes(keep) {
+		args = append(args, shQuote(e))
+	}
+	cmd := "sh -c " + shQuote(inplaceRestoreScript) + " leadstack-inplace-restore " + strings.Join(args, " ")
+	if requireArchive {
+		cmd = "test -f " + shQuote(backup) + " && " + cmd
+	}
+	fail := "echo " + shQuote("回滚不完整，请人工核对："+targetDir) + " >&2; exit 1"
+	return cmd + " || { " + fail + "; }"
 }
 
 var errNoTarget = errors.New("deploy: 接管模式必须提供目标目录")
@@ -232,7 +314,12 @@ func ValidateInplaceParams(targetDir string) error {
 //
 // 用于回滚到指定历史版本（inplace 模式）：每次发布的备份文件名里带 releaseID，
 // 因此可以精确恢复任意一版；恢复后执行 restart_cmd。
-func BuildRestoreInplace(targetDir, releaseID, restartCmd string) (Plan, error) {
+//
+// 恢复与自动回滚走**同一个生成器**（inplaceRestoreCommand）：rsync -a -I --delete 还原、
+// 归档含 .leadstack.env 时一并还原，避免两条回滚路径的行为漂移。
+// keepPaths 为可变参数只是为了不破坏既有三参数调用方；调用方应传入 app.KeepPaths，
+// 否则默认只保护 .leadstack / .leadstack-backups。
+func BuildRestoreInplace(targetDir, releaseID, restartCmd string, keepPaths ...string) (Plan, error) {
 	if err := validateAbsPath(targetDir); err != nil {
 		return Plan{}, fmt.Errorf("deploy: 接管目录非法: %w", err)
 	}
@@ -244,7 +331,7 @@ func BuildRestoreInplace(targetDir, releaseID, restartCmd string) (Plan, error) 
 	plan.Steps = []Step{
 		{
 			Name:     StepRollbackRestore,
-			Command:  "test -f " + shQuote(backup) + " && tar -xzf " + shQuote(backup) + " -C " + shQuote(targetDir),
+			Command:  inplaceRestoreCommand(targetDir, backup, keepPaths, true),
 			TimeoutS: timeoutRollbackRestore,
 		},
 	}

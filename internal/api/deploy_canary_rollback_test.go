@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -154,9 +156,9 @@ func TestRollbackToSpecificRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := orch.RollbackTo(cur.ID, old.ID, nil)
-	if err != nil || n != 1 {
-		t.Fatalf("RollbackTo 失败: n=%d err=%v", n, err)
+	res, err := orch.RollbackTo(cur.ID, old.ID, nil)
+	if err != nil || res.RolledBack != 1 {
+		t.Fatalf("RollbackTo 失败: res=%+v err=%v", res, err)
 	}
 	// 计划里应包含切 current
 	if len(runner.plans) == 0 {
@@ -190,8 +192,16 @@ func TestRollbackToRejectsScriptMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	cur := createTestRelease(t, env, app.ID, servers, store.ReleaseStrategyAll, 0, 0)
-	if _, err := orch.RollbackTo(cur.ID, old.ID, nil); err == nil || !strings.Contains(err.Error(), "脚本模式") {
-		t.Fatalf("应明确拒绝脚本模式回滚，实际 %v", err)
+	_, rerr := orch.RollbackTo(cur.ID, old.ID, nil)
+	if rerr == nil || !strings.Contains(rerr.Error(), "不支持回滚到指定版本") {
+		t.Fatalf("应明确拒绝脚本模式回滚，实际 %v", rerr)
+	}
+	if !strings.Contains(rerr.Error(), "rollback_script") {
+		t.Fatalf("拒绝文案应指向 rollback_script，实际 %q", rerr.Error())
+	}
+	var typed *rollbackToError
+	if !errors.As(rerr, &typed) || typed.Status != http.StatusBadRequest || typed.Code != codeInvalidArgument {
+		t.Fatalf("script 模式应为 400 invalid_argument，实际 %+v", typed)
 	}
 }
 
@@ -269,9 +279,9 @@ func TestRollbackToInplaceUsesSuccessorBackup(t *testing.T) {
 	}
 	// 时间顺序：old 先、newer 后（ListReleases 倒序时 newer 在前）
 	cur := newer
-	n, err := orch.RollbackTo(cur.ID, old.ID, nil)
-	if err != nil || n != 1 {
-		t.Fatalf("RollbackTo 失败: n=%d err=%v", n, err)
+	res, err := orch.RollbackTo(cur.ID, old.ID, nil)
+	if err != nil || res.RolledBack != 1 {
+		t.Fatalf("RollbackTo 失败: res=%+v err=%v", res, err)
 	}
 	if len(runner.plans) == 0 {
 		t.Fatal("没有执行回滚计划")
@@ -288,5 +298,238 @@ func TestRollbackToInplaceUsesSuccessorBackup(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("回滚计划未使用后继版本的备份: %+v", runner.plans[len(runner.plans)-1].Steps)
+	}
+}
+
+// markReleaseSuccess 把发布整体与该次发布在指定服务器上的 run 置为成功。
+func markReleaseSuccess(t *testing.T, env *testEnv, rel *store.Release, servers []string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := env.st.UpdateReleaseStatus(ctx, rel.ID, store.ReleaseStatusSuccess, &rel.CreatedAt, &rel.CreatedAt); err != nil {
+		t.Fatalf("更新发布状态失败: %v", err)
+	}
+	for _, id := range servers {
+		run, err := env.st.GetReleaseRun(ctx, rel.ID, id)
+		if err != nil {
+			t.Fatalf("读取发布任务失败: %v", err)
+		}
+		run.Status = store.ReleaseStatusSuccess
+		if err := env.st.UpdateReleaseRun(ctx, *run); err != nil {
+			t.Fatalf("更新发布任务失败: %v", err)
+		}
+	}
+}
+
+// TestRollbackToAllSkippedIsDiagnosable 覆盖 A10/R7：全部跳过 → 请求级 400，message 逐台列出原因。
+func TestRollbackToAllSkippedIsDiagnosable(t *testing.T) {
+	env, orch, _, app, servers := canaryFixture(t, 1)
+	ctx := context.Background()
+	target := "/srv/inplace-app"
+	if err := env.st.UpdateAppDeploy(ctx, app.ID, strPtrOrNil(store.DeployModeInplace), &target, nil, nil, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	old := createTestReleaseVersion(t, env, app.ID, servers, store.ReleaseStrategyAll, 0, 0, "1.0.0")
+	markReleaseSuccess(t, env, old, servers)
+	newer := createTestReleaseVersion(t, env, app.ID, servers, store.ReleaseStrategyAll, 0, 0, "1.1.0")
+	markReleaseSuccess(t, env, newer, servers)
+
+	// 目标版本已是该服务器上的最新成功版本 ⇒ 全部 already-current。
+	res, err := orch.RollbackTo(old.ID, newer.ID, nil)
+	if err == nil {
+		t.Fatalf("全部跳过应返回请求级错误，实际 res=%+v", res)
+	}
+	var typed *rollbackToError
+	if !errors.As(err, &typed) || typed.Status != http.StatusBadRequest || typed.Code != codeInvalidArgument {
+		t.Fatalf("全跳过应为 400 invalid_argument，实际 %+v（err=%v）", typed, err)
+	}
+	if !strings.Contains(err.Error(), "没有任何服务器可回滚到 1.1.0") {
+		t.Fatalf("message 应说明「没有任何服务器可回滚到 <version>」: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), servers[0]+":"+rollbackSkipAlreadyCurrent) {
+		t.Fatalf("message 应逐台列出 server_id:reason: %q", err.Error())
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].ServerID != servers[0] ||
+		res.Skipped[0].Reason != rollbackSkipAlreadyCurrent {
+		t.Fatalf("skipped 应带逐台原因: %+v", res.Skipped)
+	}
+}
+
+// TestRollbackToPartialSkippedReportsPerServer 覆盖 A10：部分跳过 → 200 且 skipped 非空（不静默）。
+func TestRollbackToPartialSkippedReportsPerServer(t *testing.T) {
+	env, orch, runner, app, servers := canaryFixture(t, 2)
+
+	// 目标版本只在第一台上有成功记录。
+	target := createTestReleaseVersion(t, env, app.ID, servers, store.ReleaseStrategyAll, 0, 0, "0.9.0")
+	markReleaseSuccess(t, env, target, servers[:1])
+	cur := createTestRelease(t, env, app.ID, servers, store.ReleaseStrategyAll, 0, 0)
+	markReleaseSuccess(t, env, cur, servers)
+
+	res, err := orch.RollbackTo(cur.ID, target.ID, nil)
+	if err != nil {
+		t.Fatalf("部分跳过应返回 200（err=nil），实际 %v", err)
+	}
+	if res.RolledBack != 1 {
+		t.Fatalf("应回滚 1 台，实际 %d", res.RolledBack)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].ServerID != servers[1] ||
+		res.Skipped[0].Reason != rollbackSkipNoSuccessfulRun {
+		t.Fatalf("第二台应跳过并给出 no-successful-run: %+v", res.Skipped)
+	}
+	if len(res.Failed) != 0 {
+		t.Fatalf("跳过的服务器不应记为失败: %+v", res.Failed)
+	}
+	if len(runner.plans) == 0 {
+		t.Fatal("应真的执行了第一台的切换计划")
+	}
+	if res.TargetReleaseID != target.ID {
+		t.Fatalf("结果应带目标发布 id: %+v", res)
+	}
+}
+
+// TestRollbackToMissingBackupIsSkipped 覆盖 R6：inplace 备份缺失应归为 missing-backup，而不是静默 continue。
+func TestRollbackToMissingBackupIsSkipped(t *testing.T) {
+	env, orch, runner, app, servers := canaryFixture(t, 1)
+	ctx := context.Background()
+	target := "/srv/inplace-app"
+	if err := env.st.UpdateAppDeploy(ctx, app.ID, strPtrOrNil(store.DeployModeInplace), &target, nil, nil, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	old := createTestReleaseVersion(t, env, app.ID, servers, store.ReleaseStrategyAll, 0, 0, "1.0.0")
+	markReleaseSuccess(t, env, old, servers)
+	newer := createTestReleaseVersion(t, env, app.ID, servers, store.ReleaseStrategyAll, 0, 0, "1.1.0")
+	markReleaseSuccess(t, env, newer, servers)
+
+	// 只让「探测备份是否存在」的那条单步计划失败，模拟备份文件被清理。
+	runner.failPlan = func(p deploy.Plan) bool {
+		return len(p.Steps) == 1 && p.Steps[0].Name == "check-backup"
+	}
+
+	res, err := orch.RollbackTo(newer.ID, old.ID, nil)
+	if err == nil {
+		t.Fatalf("备份缺失且无其它可回滚服务器时应为请求级错误，实际 res=%+v", res)
+	}
+	var typed *rollbackToError
+	if !errors.As(err, &typed) || typed.Status != http.StatusBadRequest || typed.Code != codeInvalidArgument {
+		t.Fatalf("应为 400 invalid_argument，实际 %+v（err=%v）", typed, err)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Reason != rollbackSkipMissingBackup {
+		t.Fatalf("应归为 missing-backup: %+v", res.Skipped)
+	}
+	if !strings.Contains(err.Error(), servers[0]+":"+rollbackSkipMissingBackup) {
+		t.Fatalf("message 应带 missing-backup 原因: %q", err.Error())
+	}
+	// 备份缺失时不应真的执行恢复计划（那是注定失败的破坏性操作）。
+	for _, plan := range runner.plans {
+		for _, step := range plan.Steps {
+			if step.Name == deploy.StepRollbackRestore {
+				t.Fatalf("备份缺失时不应执行恢复步骤: %+v", runner.plans)
+			}
+		}
+	}
+}
+
+// TestRollbackToMissingTargetReturns404 覆盖 R6：目标版本不存在 → 404 not_found（不是 400/500）。
+func TestRollbackToMissingTargetReturns404(t *testing.T) {
+	env, orch, _, app, servers := canaryFixture(t, 1)
+	cur := createTestRelease(t, env, app.ID, servers, store.ReleaseStrategyAll, 0, 0)
+	markReleaseSuccess(t, env, cur, servers)
+
+	_, err := orch.RollbackTo(cur.ID, "rel-does-not-exist", nil)
+	var typed *rollbackToError
+	if !errors.As(err, &typed) || typed.Status != http.StatusNotFound || typed.Code != codeNotFound {
+		t.Fatalf("目标版本不存在应为 404 not_found，实际 %+v（err=%v）", typed, err)
+	}
+	if !strings.Contains(err.Error(), "target-not-found") {
+		t.Fatalf("message 应带唯一机器码 target-not-found: %q", err.Error())
+	}
+}
+
+// fakeRollbackToOrchestrator 在 fakeDeployOrchestrator 之上补 RollbackTo，用于断言 REST 层语义。
+type fakeRollbackToOrchestrator struct {
+	*fakeDeployOrchestrator
+	res   rollbackToResult
+	err   error
+	calls []string
+}
+
+func (f *fakeRollbackToOrchestrator) RollbackTo(releaseID, targetReleaseID string, serverIDs []string) (rollbackToResult, error) {
+	f.calls = append(f.calls, releaseID+">"+targetReleaseID)
+	return f.res, f.err
+}
+
+// TestRollbackReleaseHTTPReportsSkipped 覆盖 A10 的 HTTP 语义：200 带 skipped[]，全跳过 400，目标不存在 404。
+func TestRollbackReleaseHTTPReportsSkipped(t *testing.T) {
+	env, _, _, app, servers := canaryFixture(t, 2)
+	jwt := env.login()
+
+	target := createTestReleaseVersion(t, env, app.ID, servers, store.ReleaseStrategyAll, 0, 0, "0.9.0")
+	markReleaseSuccess(t, env, target, servers[:1])
+	cur := createTestRelease(t, env, app.ID, servers, store.ReleaseStrategyAll, 0, 0)
+	markReleaseSuccess(t, env, cur, servers)
+
+	stub := &fakeRollbackToOrchestrator{
+		fakeDeployOrchestrator: env.deploy,
+		res: rollbackToResult{
+			RolledBack: 1, TargetReleaseID: target.ID, TargetVersion: "0.9.0",
+			Skipped: []rollbackSkip{{ServerID: servers[1], Reason: rollbackSkipNoSuccessfulRun}},
+			Failed:  []rollbackFailure{},
+		},
+	}
+	env.api.deploy = stub
+
+	// ① 部分跳过：200 + skipped 非空。
+	status, raw := env.request(http.MethodPost, "/api/v1/releases/"+cur.ID+"/rollback", jwt,
+		map[string]any{"target_release_id": target.ID})
+	if status != http.StatusOK {
+		t.Fatalf("部分跳过应 200，实际 %d body=%s", status, raw)
+	}
+	var got struct {
+		RolledBack int               `json:"rolled_back"`
+		Target     string            `json:"target_release_id"`
+		Skipped    []rollbackSkip    `json:"skipped"`
+		Failed     []rollbackFailure `json:"failed"`
+	}
+	decodeData(t, raw, &got)
+	if got.RolledBack != 1 || got.Target != target.ID {
+		t.Fatalf("响应应带 rolled_back/target_release_id: %+v body=%s", got, raw)
+	}
+	if len(got.Skipped) != 1 || got.Skipped[0].ServerID != servers[1] ||
+		got.Skipped[0].Reason != rollbackSkipNoSuccessfulRun {
+		t.Fatalf("响应应带逐台 skipped: %+v body=%s", got.Skipped, raw)
+	}
+	if got.Failed == nil {
+		t.Fatalf("failed 应始终出现（可为空数组），body=%s", raw)
+	}
+
+	// ② 全部跳过：400 + invalid_argument，message 逐台列原因。
+	stub.res = rollbackToResult{TargetReleaseID: target.ID, TargetVersion: "0.9.0",
+		Skipped: []rollbackSkip{{ServerID: servers[0], Reason: rollbackSkipAlreadyCurrent}},
+		Failed:  []rollbackFailure{}}
+	stub.err = newRollbackRequestError(http.StatusBadRequest, codeInvalidArgument,
+		"没有任何服务器可回滚到 0.9.0："+servers[0]+":"+rollbackSkipAlreadyCurrent)
+	status, raw = env.request(http.MethodPost, "/api/v1/releases/"+cur.ID+"/rollback", jwt,
+		map[string]any{"target_release_id": target.ID})
+	if status != http.StatusBadRequest {
+		t.Fatalf("全跳过应 400，实际 %d body=%s", status, raw)
+	}
+	code, message, _ := decodeErrorBody(t, raw)
+	if code != codeInvalidArgument {
+		t.Fatalf("全跳过 code 应为 %s，实际 %s", codeInvalidArgument, code)
+	}
+	if !strings.Contains(message, servers[0]+":"+rollbackSkipAlreadyCurrent) {
+		t.Fatalf("400 文案应逐台列原因: %q", message)
+	}
+
+	// ③ 目标版本不存在：404 not_found。
+	stub.err = newRollbackRequestError(http.StatusNotFound, codeNotFound, "目标版本不存在（target-not-found）")
+	status, raw = env.request(http.MethodPost, "/api/v1/releases/"+cur.ID+"/rollback", jwt,
+		map[string]any{"target_release_id": target.ID})
+	if status != http.StatusNotFound {
+		t.Fatalf("目标版本不存在应 404，实际 %d body=%s", status, raw)
+	}
+	if code, message, _ := decodeErrorBody(t, raw); code != codeNotFound || !strings.Contains(message, "target-not-found") {
+		t.Fatalf("404 应带 not_found + target-not-found: code=%s message=%s", code, message)
 	}
 }

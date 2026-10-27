@@ -32,6 +32,13 @@ function summarize(release: Release) {
   return { success, failed, active, canceled, total: release.runs.length }
 }
 
+/** 中止接口返回 { release, runs, canceled }；取服务端实际中止的台数，字段缺失时回退到点击前的进行中台数。 */
+function canceledCountOf(result: unknown): number | null {
+  if (!result || typeof result !== 'object' || !('canceled' in result)) return null
+  const value = (result as { canceled?: unknown }).canceled
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
 export default function ReleaseDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { toast } = useToast()
@@ -108,6 +115,7 @@ export default function ReleaseDetailPage() {
     if (!release || !actionKind) return
     setActionLoading(true)
     setActionError(null)
+    const activeBefore = stats?.active ?? 0
     try {
       if (actionKind === 'retry') {
         await api.retryRelease(release.id)
@@ -116,8 +124,8 @@ export default function ReleaseDetailPage() {
         await api.rollbackRelease(release.id)
         toast(t('s.0767'), 'success')
       } else {
-        await api.cancelRelease(release.id)
-        toast(t('s.0768'), 'success')
+        const result = await api.cancelRelease(release.id)
+        toast(t('release.abortDone', { count: canceledCountOf(result) ?? activeBefore }), 'success')
       }
       setActionKind(null)
       await releaseQuery.refresh()
@@ -239,9 +247,8 @@ export default function ReleaseDetailPage() {
                   setActionError(null)
                   setActionKind('cancel')
                 }}
-
               >
-                {t('s.0024')}
+                {t('release.abort')}
               </Button>
             ) : null}
           </div>
@@ -459,10 +466,10 @@ export default function ReleaseDetailPage() {
             ? t('s.0794')
             : actionKind === 'rollback'
               ? t('s.0795')
-              : t('s.0796')
+              : t('release.abortConfirmTitle')
         }
         description={t('s.0797', { '0': release.version })}
-        confirmLabel={actionKind === 'cancel' ? t('s.0798') : t('s.0799')}
+        confirmLabel={actionKind === 'cancel' ? t('release.abort') : t('s.0799')}
         tone={actionKind === 'cancel' ? 'danger' : 'primary'}
         loading={actionLoading}
         error={actionError}
@@ -476,9 +483,9 @@ export default function ReleaseDetailPage() {
           <p>{t('s.1068')} {stats?.failed ?? 0} {t('s.1069')}</p>
         ) : actionKind === 'rollback' ? (
           <p>{t('s.1070')}</p>
-        ) : (
-          <p>{t('s.1071')} {stats?.active ?? 0} {t('s.1072')}</p>
-        )}
+        ) : actionKind === 'cancel' ? (
+          <p>{t('release.abortConfirmBody', { count: stats?.success ?? 0 })}</p>
+        ) : null}
       </ConfirmDialog>
       <Modal
         open={targetOpen}

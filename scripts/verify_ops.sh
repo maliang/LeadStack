@@ -44,6 +44,19 @@ status_of() { curl -sS -o /dev/null -w '%{http_code}' "$@" 2>/dev/null; }
 jget() { printf '%s' "$1" | jq -r "$2" 2>/dev/null; }
 sget() { local v; v="$(jget "$1" "$2")"; [ "$v" = "null" ] && v=""; printf '%s' "$v"; }
 login() { api POST /api/v1/auth/login "{\"username\":\"$1\",\"password\":\"$2\"}" | jq -r '.data.token // empty' 2>/dev/null; }
+# 前端产物断言：make build 会把 web/dist 拷进 internal/webui/dist，缺特征串即视为契约回归。
+dist_has() { # <label> <needle...>
+  local label="$1"; shift
+  local js missing="" needle
+  js="$(ls -t internal/webui/dist/assets/index-*.js 2>/dev/null | head -1)"
+  if [ -z "$js" ]; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
+  for needle in "$@"; do grep -qF -- "$needle" "$js" || missing="${missing}[${needle}] "; done
+  if [ -z "$missing" ]; then
+    pass "${label}（${js##*/} 命中 $# 个特征串）"
+  else
+    fail "${label}：产物缺少 ${missing}"
+  fi
+}
 
 start_lead() { # start_lead [extra-env...]
   mkdir -p "$DATA_DIR" "$UP_DIR"
@@ -495,6 +508,34 @@ else
   pass "离线 CLI --reset 清空设置"
 fi
 kill "$OCC_PID" 2>/dev/null; wait "$OCC_PID" 2>/dev/null
+
+# ---------------------------------------------------------------- 16. 错误提示契约
+step "16. 错误提示契约：请求编号与非自动消失（A27）"
+# 上一节验证「不可自锁」时停掉了控制端，这里按默认端口重新拉起后再断言错误契约。
+if start_lead; then pass "重新启动控制端（默认端口）"; else fail "重新启动控制端失败"; tail -12 "$BASE_DIR/lead.log" | sed 's/^/      /'; fi
+TOKEN="$(login admin "$ADMIN_PASS")"
+NOPE_ID="00000000-0000-0000-0000-000000000000"
+ERR_BODY_FILE="$BASE_DIR/err-body.json"
+ERR_HDR_FILE="$BASE_DIR/err-headers.txt"
+ERR_CODE="$(curl -sS -o "$ERR_BODY_FILE" -D "$ERR_HDR_FILE" -w '%{http_code}' \
+  -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/servers/${NOPE_ID}" 2>/dev/null)"
+ERR_REQ_ID="$(jq -r '.error.request_id // empty' "$ERR_BODY_FILE" 2>/dev/null)"
+ERR_HDR_ID="$(grep -i '^X-Request-Id:' "$ERR_HDR_FILE" 2>/dev/null | head -1 | tr -d '\r' | cut -d' ' -f2)"
+if [ "${#ERR_REQ_ID}" -ge 8 ] && [ "$ERR_REQ_ID" = "$ERR_HDR_ID" ]; then
+  pass "错误体带 request_id 且与响应头一致（${ERR_REQ_ID}）"
+else
+  fail "错误体 request_id 缺失或与响应头不一致：body=${ERR_REQ_ID:-空}、header=${ERR_HDR_ID:-空}（HTTP ${ERR_CODE}）"
+fi
+if [ "$ERR_CODE" = "404" ] && [ -n "$(jq -r '.error.message // empty' "$ERR_BODY_FILE" 2>/dev/null)" ]; then
+  pass "错误体带可直接展示的 message（HTTP ${ERR_CODE}）"
+else
+  fail "错误体缺少 message（HTTP ${ERR_CODE}）：$(head -c 160 "$ERR_BODY_FILE")"
+fi
+# 前端错误 toast 契约：错误必须常驻（不自动消失）、可关闭、可复制、可无障碍播报，并附请求编号。
+dist_has "错误 toast 常驻/可关闭/可复制（A27）" \
+  '!==`error`&&window.setTimeout' 'toast.close' 'toast.copy' 'navigator.clipboard'
+dist_has "错误 toast 无障碍播报与请求编号（A27）" \
+  'role:`alert`' 'aria-live' 'assertive' 'errors.requestId' '请求编号 {id}'
 
 # ---------------------------------------------------------------- 汇总
 step "验收结果"

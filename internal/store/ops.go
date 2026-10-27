@@ -337,7 +337,7 @@ func (s *Store) CreateAPIToken(ctx context.Context, t *APIToken) error {
 		nullableInt(t.LastUsedAt), nullableInt(t.ExpiresAt), nullableInt(t.RevokedAt))
 	if err != nil {
 		if isUniqueViolation(err) {
-			return fmt.Errorf("创建 API Token %s: %w", t.Name, ErrConflict)
+			return fmt.Errorf("API Token %s 已存在: %w", t.Name, ErrConflict)
 		}
 		return fmt.Errorf("创建 API Token %s: %w", t.Name, err)
 	}

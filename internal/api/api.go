@@ -11,9 +11,11 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -260,12 +262,53 @@ func (a *API) internalError(w http.ResponseWriter, r *http.Request, err error) {
 	writeError(w, http.StatusInternalServerError, codeInternal, "服务器内部错误")
 }
 
+// conflictReasonMarkers 是 store 冲突文案里的「精确原因」标志词。
+//
+// store 层已把哨兵包装成用户可读的原因（「分组 X 已存在」「应用 Y 仍有 2 条发布记录，
+// 禁止删除」）；带这些标志词就说明原因本身有信息量，哪怕名字很短（如「分组 a 已存在」）
+// 也应透出。没有标志词时才退回长度判断，避免把「创建凭证 foo」这类过程描述甩给用户。
+var conflictReasonMarkers = []string{
+	"已存在", "已被占用", "禁止删除", "不能确认", "仍被", "仍有",
+}
+
+// conflictDetail 从 store 的冲突错误里提取可读原因。
+//
+// store 层用 %w 包装哨兵值并带上细节（例如「凭证 xxx 仍被 3 台服务器引用: 记录冲突」），
+// 这里去掉结尾的哨兵文案，再按「标志词 / 长度 ≥10」判断是否足够具体；
+// 不满足时返回空串，由调用方回退通用文案。
+func conflictDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(err.Error())
+	// 哨兵文案可能是英文 conflict，也可能是 ErrConflict 的本地化文案（记录冲突）。
+	for _, suffix := range []string{": conflict", ": " + store.ErrConflict.Error()} {
+		msg = strings.TrimSpace(strings.TrimSuffix(msg, suffix))
+	}
+	if msg == "" {
+		return ""
+	}
+	for _, marker := range conflictReasonMarkers {
+		if strings.Contains(msg, marker) {
+			return msg
+		}
+	}
+	if utf8.RuneCountInString(msg) >= 10 {
+		return msg
+	}
+	return ""
+}
+
 // mapStoreError 把 store 层错误映射为 HTTP 状态码与错误码。
 func mapStoreError(err error) (status int, code, message string) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return http.StatusNotFound, codeNotFound, "资源不存在"
 	case errors.Is(err, store.ErrConflict):
+		// 409 透出精确原因（含被引用数量等数字），拿不到细节时回退通用文案。
+		if detail := conflictDetail(err); detail != "" {
+			return http.StatusConflict, codeConflict, detail
+		}
 		return http.StatusConflict, codeConflict, "资源已存在或冲突"
 	case errors.Is(err, store.ErrExpired):
 		return http.StatusUnauthorized, codeUnauthorized, "接入令牌已过期"

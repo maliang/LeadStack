@@ -262,8 +262,15 @@ func writeRateLimited(w http.ResponseWriter, code, message string, retry time.Du
 }
 
 // writeErrorDetails 输出带 details 的错误体（契约 §54 需要剩余次数/重试秒数）。
+//
+// request_id 与 writeError 同源（响应头 X-Request-Id）。登录失败/限流是用户最常撞到的
+// 错误路径，没有请求号等于断掉「用户报障 → 日志」这条排查链。
 func writeErrorDetails(w http.ResponseWriter, status int, code, message string, details map[string]any) {
-	errBody := map[string]any{"code": code, "message": message}
+	errBody := map[string]any{
+		"code":       code,
+		"message":    message,
+		"request_id": errorRequestID(w),
+	}
 	if len(details) > 0 {
 		errBody["details"] = details
 	}

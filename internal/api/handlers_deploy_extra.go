@@ -163,7 +163,8 @@ func (a *API) handleDiagnoseServer(w http.ResponseWriter, r *http.Request) {
 		RunDiagnose(ctx context.Context, serverID, script string) (string, error)
 	})
 	if !ok {
-		writeError(w, http.StatusNotImplemented, codeInternal, "发布编排器未启用，无法体检")
+		// 控制端本地没装配执行器：503 unavailable，不是目标机的 502。
+		writeUnavailable(w, "发布执行器未启用，无法体检")
 		return
 	}
 	unit := name
@@ -172,7 +173,13 @@ func (a *API) handleDiagnoseServer(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := diag.RunDiagnose(r.Context(), serverID, diagnoseScript(dir, unit))
 	if err != nil {
-		writeError(w, http.StatusBadGateway, codeInternal, "体检失败: "+err.Error())
+		if errors.Is(err, errOrchestratorDisabled) {
+			// 本地装配缺陷（执行器存在但执行端为空），同样不能算远端失败。
+			writeUnavailable(w, "发布执行器未启用，无法体检")
+			return
+		}
+		// 目标机不可达/脚本执行失败属于远端失败，统一 502 + remote_failure（A19）。
+		a.writeRemoteError(w, r, err, "体检")
 		return
 	}
 	writeData(w, http.StatusOK, buildDiagnoseReport(serverID, kind, name, dir, out))
@@ -181,7 +188,7 @@ func (a *API) handleDiagnoseServer(w http.ResponseWriter, r *http.Request) {
 // RunDiagnose 执行只读体检脚本并返回原始输出。
 func (o *deployOrchestrator) RunDiagnose(ctx context.Context, serverID, script string) (string, error) {
 	if o == nil || o.exec == nil {
-		return "", errors.New("发布执行器未启用")
+		return "", errOrchestratorDisabled
 	}
 	plan := deploy.Plan{
 		AppSlug: "diagnose", ReleaseID: "diagnose", Version: "0", Root: "/tmp",

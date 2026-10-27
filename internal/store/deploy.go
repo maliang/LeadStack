@@ -27,7 +27,7 @@ func (s *Store) CreateApp(ctx context.Context, app *App) error {
 		nullableIntFromPtr(app.HealthcheckPort), nullableStr(app.RollbackScript))
 	if err != nil {
 		if isUniqueViolation(err) {
-			return fmt.Errorf("创建应用 %s: %w", app.Slug, ErrConflict)
+			return fmt.Errorf("应用 %s 已存在（slug 必须唯一）: %w", app.Slug, ErrConflict)
 		}
 		return fmt.Errorf("创建应用 %s: %w", app.Slug, err)
 	}
@@ -550,6 +550,14 @@ type ReleaseFilter struct {
 	AppID  string
 	Status string
 	Limit  int
+	// ServerIDs 只保留「目标服务器（release_runs）与本集合有交集」的发布；nil 表示不限。
+	//
+	// 关键：范围过滤必须与 LIMIT 在同一条 SQL 里、且排在 LIMIT 之前。先在 Go 里取
+	// 全局最新 N 条再按范围筛，会把范围用户自己那条早于窗口的发布截掉，前端于是
+	// 显示「你所授权分组与服务器范围内暂无发布记录」——发布明明存在，用户只能去
+	// 怀疑权限配置（F2 的事实性误报）。nil = 不限；非 nil 空切片 = 范围为空，
+	// ListReleases 直接返回空列表（不再依赖调用方先判空）。
+	ServerIDs []string
 }
 
 // ListReleases 返回发布列表（按创建时间倒序）。
@@ -557,8 +565,13 @@ func (s *Store) ListReleases(ctx context.Context, f ReleaseFilter) ([]Release, e
 	if f.Limit <= 0 {
 		f.Limit = 100
 	}
+	if f.ServerIDs != nil && len(f.ServerIDs) == 0 {
+		// 非 nil 空切片 = 范围为空：没有任何服务器可见，直接返回空列表（语义与结构体
+		// 注释一致；历史上「len>0 才拼条件」让空切片变成不限，属于潜伏越权）。
+		return []Release{}, nil
+	}
 	query := `SELECT ` + releaseColumns + ` FROM releases WHERE 1 = 1`
-	args := make([]any, 0, 3)
+	args := make([]any, 0, 3+len(f.ServerIDs))
 	if f.AppID != "" {
 		query += ` AND app_id = ?`
 		args = append(args, f.AppID)
@@ -566,6 +579,15 @@ func (s *Store) ListReleases(ctx context.Context, f ReleaseFilter) ([]Release, e
 	if f.Status != "" {
 		query += ` AND status = ?`
 		args = append(args, f.Status)
+	}
+	if len(f.ServerIDs) > 0 {
+		// EXISTS 子查询写在 WHERE 里，因此与 LIMIT 一起由 SQLite 执行：先筛范围、再截断，
+		// 范围用户不会因为「范围内发布不在全局最新 N 条」而看到空列表（F2）。
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(f.ServerIDs)), ",")
+		query += ` AND EXISTS (SELECT 1 FROM release_runs rr WHERE rr.release_id = releases.id AND rr.server_id IN (` + placeholders + `))`
+		for _, id := range f.ServerIDs {
+			args = append(args, id)
+		}
 	}
 	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
 	args = append(args, f.Limit)
@@ -637,7 +659,9 @@ func (s *Store) SummarizeReleaseStatus(ctx context.Context, releaseID string) (s
 		return ReleaseStatusPending, nil
 	case counts[ReleaseStatusFailed] > 0:
 		return ReleaseStatusFailed, nil
-	case counts[ReleaseStatusCanceled] > 0 && counts[ReleaseStatusSuccess] == 0:
+	// 只要没有失败，存在取消即视为取消：用户主动中止的发布（已成功的机器保持 success、
+	// 未开始的标记 canceled）不应被汇总成 failed，否则页面上「自己点的中止」会显示「失败」。
+	case counts[ReleaseStatusCanceled] > 0:
 		return ReleaseStatusCanceled, nil
 	case counts[ReleaseStatusSuccess] == total:
 		return ReleaseStatusSuccess, nil

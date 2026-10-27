@@ -67,10 +67,16 @@ done
 echo "###END"
 `
 
+// errOrchestratorDisabled 表示控制端本地没装配发布执行器（配置/装配问题）。
+//
+// 调用方必须翻成 503 unavailable，绝不能当远端失败（502）——「发布执行器未启用」
+// 是控制端自己的问题，套上「探测失败: 」会让用户去目标机查日志，一条都查不到。
+var errOrchestratorDisabled = errors.New("发布执行器未启用")
+
 // Discover 在目标机上做一次只读探测，返回可接管的候选列表。
 func (o *deployOrchestrator) Discover(ctx context.Context, serverID string) (*DiscoveryReport, error) {
 	if o == nil || o.exec == nil {
-		return nil, errors.New("发布执行器未启用")
+		return nil, errOrchestratorDisabled
 	}
 	plan := deploy.Plan{
 		AppSlug:   "discover",

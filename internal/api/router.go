@@ -182,6 +182,8 @@ func (a *API) Router() http.Handler {
 			r.With(a.RequirePerm(auth.PermBackupDelete), a.RequireGlobalScope).Delete("/backups/{name}", a.handleDeleteBackup)
 			r.With(a.RequirePerm(auth.PermBackupRestore), a.RequireGlobalScope).Post("/backups/{name}/verify", a.handleVerifyBackup)
 			r.With(a.RequirePerm(auth.PermBackupRestore), a.RequireGlobalScope).Post("/backups/restore", a.handleRestoreUpload)
+			// 恢复状态只读查询：前端轮询「重启后是否已应用」，无暂存时返回 200 + pending=false。
+			r.With(a.RequirePerm(auth.PermBackupRestore), a.RequireGlobalScope).Get("/system/backup/restore-status", a.handleRestoreStatus)
 
 			// ---------------- 定时任务（写） ----------------
 			permTaskWrite := a.RequirePerm(auth.PermTaskWrite)

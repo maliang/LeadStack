@@ -1,10 +1,12 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -36,6 +38,14 @@ var appSlugPattern = regexp.MustCompile(`^[a-z0-9-]{1,` + strconv.Itoa(maxAppSlu
 // versionPattern 是版本号白名单（契约第 26 节）：拒绝 `; rm -rf /` 之类的注入。
 var versionPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,` + strconv.Itoa(maxVersionLen) + `}$`)
 
+// rollbackToRunner 是「回滚到指定版本」的可选能力（编排器实现了才有）。
+//
+// 单独定义接口而不塞进 DeployOrchestrator：回滚到指定版本是本轮新增的能力，
+// nil/未实现的编排器仍应正常工作（POST /releases/{id}/rollback 不带 target_release_id 走 Rollback）。
+type rollbackToRunner interface {
+	RollbackTo(releaseID, targetReleaseID string, serverIDs []string) (rollbackToResult, error)
+}
+
 // DeployOrchestrator 是发布异步执行的端口（由 internal/deploy 的 Executor + Runner 组合实现）。
 //
 // 为 nil 时创建发布仍会落库，但不会执行（run 保持 pending），便于分阶段联调。
@@ -50,10 +60,115 @@ type DeployOrchestrator interface {
 	Cancel(releaseID string, serverIDs []string) (int, error)
 }
 
-// appPayload 是应用的对外表示。
+// maxAppEnvKeys 是 env_keys 的披露上限（PLAN R1）：超过时截断并置 env_keys_truncated。
+const maxAppEnvKeys = 64
+
+// appPayload 是应用的对外表示（显式字段清单）。
+//
+// 这里刻意不再内嵌 store.App：内嵌会让任何新增列自动外泄（A8 的根因），
+// 显式清单 + visibleApp 收敛函数才能保证「列表收敛了、详情忘了」不再发生（PLAN 选型 5）。
+// 字段名与顺序沿用 store.App，前端与 e2e 看到的形状不变（旧字段一个都不删，R1）。
 type appPayload struct {
-	store.App
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Slug        string  `json:"slug"`
+	Root        *string `json:"root"`
+	Description *string `json:"description"`
+	CreatedAt   int64   `json:"created_at"`
+
+	Provider        string  `json:"provider"`
+	SiteName        *string `json:"site_name"`
+	SitePort        *int    `json:"site_port"`
+	SiteType        *string `json:"site_type"`
+	HealthcheckPath *string `json:"healthcheck_path"`
+
+	DeployMode      string  `json:"deploy_mode"`
+	TargetDir       *string `json:"target_dir"`
+	RestartCmd      *string `json:"restart_cmd"`
+	InitScript      *string `json:"init_script"`
+	EnvJSON         *string `json:"env_json"`
+	KeepPaths       *string `json:"keep_paths"`
+	HealthcheckPort *int    `json:"healthcheck_port"`
+	RollbackScript  *string `json:"rollback_script"`
+
 	ReleaseCount int `json:"release_count"`
+	// EnvKeys 是 env_json 的键名（字母序，最多 maxAppEnvKeys 个；**始终出现**）。
+	EnvKeys []string `json:"env_keys"`
+	// EnvKeysTruncated 仅在键名超过 maxAppEnvKeys 个时出现。
+	EnvKeysTruncated bool `json:"env_keys_truncated,omitempty"`
+	// Redacted 表示敏感字段已被收敛（调用者看不到环境变量值/脚本）。
+	Redacted bool `json:"redacted"`
+}
+
+// appSensitiveVisible 判断调用者能否看到应用的敏感字段（R1：scope=all 且持 deploy.write）。
+func (a *API) appSensitiveVisible(r *http.Request) bool {
+	return a.scopeIsAll(r) && a.hasPerm(r, auth.PermDeployWrite)
+}
+
+// envKeysOf 从 env_json 现算键名（字母序、最多 maxAppEnvKeys 个，第二个返回值表示是否截断）。
+//
+// env_json 为 NULL/空/非法 JSON/空对象时返回空切片而不是报错（PLAN：不得因脏数据 500）。
+func envKeysOf(raw *string) ([]string, bool) {
+	keys := make([]string, 0, 8)
+	if raw == nil {
+		return keys, false
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(*raw)), &m); err != nil || len(m) == 0 {
+		return keys, false
+	}
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if len(keys) > maxAppEnvKeys {
+		return keys[:maxAppEnvKeys], true
+	}
+	return keys, false
+}
+
+// visibleApp 把 store.App 收敛成对外表示（列表与详情共用同一收敛函数）。
+//
+// full=true 才带敏感字段原值（env_json / init_script / restart_cmd）；否则三者一律 null，
+// 但字段保留（R1：只置 null，不删字段、不改鉴权结论）。env_keys 无论是否 full 都只给键名。
+func visibleApp(app store.App, full bool, releaseCount int) appPayload {
+	keys, truncated := envKeysOf(app.EnvJSON)
+	payload := appPayload{
+		ID:               app.ID,
+		Name:             app.Name,
+		Slug:             app.Slug,
+		Root:             app.Root,
+		Description:      app.Description,
+		CreatedAt:        app.CreatedAt,
+		Provider:         app.Provider,
+		SiteName:         app.SiteName,
+		SitePort:         app.SitePort,
+		SiteType:         app.SiteType,
+		HealthcheckPath:  app.HealthcheckPath,
+		DeployMode:       app.DeployMode,
+		TargetDir:        app.TargetDir,
+		RestartCmd:       app.RestartCmd,
+		InitScript:       app.InitScript,
+		EnvJSON:          app.EnvJSON,
+		KeepPaths:        app.KeepPaths,
+		HealthcheckPort:  app.HealthcheckPort,
+		RollbackScript:   app.RollbackScript,
+		ReleaseCount:     releaseCount,
+		EnvKeys:          keys,
+		EnvKeysTruncated: truncated,
+	}
+	if !full {
+		payload.EnvJSON = nil
+		payload.InitScript = nil
+		payload.RestartCmd = nil
+		payload.Redacted = true
+	}
+	return payload
+}
+
+// newAppPayload 按调用者可见性构造应用表示（四个应用端点共用）。
+func (a *API) newAppPayload(r *http.Request, app store.App, releaseCount int) appPayload {
+	return visibleApp(app, a.appSensitiveVisible(r), releaseCount)
 }
 
 // releaseDetailPayload 是发布详情的对外表示。
@@ -103,7 +218,7 @@ func (a *API) handleListApps(w http.ResponseWriter, r *http.Request) {
 			a.internalError(w, r, err)
 			return
 		}
-		out = append(out, appPayload{App: app, ReleaseCount: count})
+		out = append(out, a.newAppPayload(r, app, count))
 	}
 	writeData(w, http.StatusOK, out)
 }
@@ -203,7 +318,7 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.logger.Info("创建应用", "app_id", app.ID, "slug", app.Slug)
-	writeData(w, http.StatusCreated, appPayload{App: *app})
+	writeData(w, http.StatusCreated, a.newAppPayload(r, *app, 0))
 }
 
 // handleGetApp 处理 GET /api/v1/apps/{id}。
@@ -217,7 +332,7 @@ func (a *API) handleGetApp(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	writeData(w, http.StatusOK, appPayload{App: *app, ReleaseCount: count})
+	writeData(w, http.StatusOK, a.newAppPayload(r, *app, count))
 }
 
 // handlePatchApp 处理 PATCH /api/v1/apps/{id}。
@@ -308,7 +423,7 @@ func (a *API) handlePatchApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	count, _ := a.st.CountAppReleases(r.Context(), updated.ID)
-	writeData(w, http.StatusOK, appPayload{App: *updated, ReleaseCount: count})
+	writeData(w, http.StatusOK, a.newAppPayload(r, *updated, count))
 }
 
 // handleDeleteApp 处理 DELETE /api/v1/apps/{id}（有发布记录时 409）。
@@ -747,11 +862,25 @@ func (a *API) handleListReleases(w http.ResponseWriter, r *http.Request) {
 			limit = releaseListMax
 		}
 	}
-	releases, err := a.st.ListReleases(r.Context(), store.ReleaseFilter{
+	filter := store.ReleaseFilter{
 		AppID:  strings.TrimSpace(r.URL.Query().Get("app_id")),
 		Status: strings.TrimSpace(r.URL.Query().Get("status")),
 		Limit:  limit,
-	})
+	}
+	// 范围过滤下沉到 SQL：必须让 LIMIT 作用在「目标服务器 ∩ 调用者范围」之后。
+	// 否则范围用户只看得到全局最新 N 条，自己那条更早的发布被截掉，前端会误报
+	// 「你所授权分组与服务器范围内暂无发布记录」（F2）。allowedServerIDList 返回
+	// nil 表示全局范围（不加限制），与告警概览用的是同一可见性来源。
+	if ids := a.allowedServerIDList(r); ids != nil {
+		if len(ids) == 0 {
+			// 范围内没有任何服务器：直接回空页，不查库（也避免 SQL 出现 IN ()）。
+			_, _, meta := params.window(0)
+			writePagedList(w, params, []store.Release{}, meta)
+			return
+		}
+		filter.ServerIDs = ids
+	}
+	releases, err := a.st.ListReleases(r.Context(), filter)
 	if err != nil {
 		a.internalError(w, r, err)
 		return
@@ -759,7 +888,9 @@ func (a *API) handleListReleases(w http.ResponseWriter, r *http.Request) {
 	if releases == nil {
 		releases = []store.Release{}
 	}
-	// 资源范围：只保留目标服务器与调用者范围有交集的发布（契约 §53.3）。
+	// 兜底：SQL 已按范围过滤，这里再按 release_runs 交集复核一次（契约 §53.3）。
+	// 保留它不是冗余——它同时覆盖「SQL 过滤被误删/改坏」与「范围在请求中途变化」两种
+	// 情况，代价只是一次按需查询，只在非全局范围且结果非空时才发生。
 	if !a.scopeIsAll(r) && len(releases) > 0 {
 		ids := make([]string, 0, len(releases))
 		for _, rel := range releases {
@@ -1129,22 +1260,32 @@ func (a *API) handleRollbackRelease(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if target := strings.TrimSpace(req.TargetReleaseID); target != "" {
-		roller, ok := a.deploy.(interface {
-			RollbackTo(releaseID, targetReleaseID string, serverIDs []string) (int, error)
-		})
+		roller, ok := a.deploy.(rollbackToRunner)
 		if !ok {
 			writeError(w, http.StatusNotImplemented, codeInternal, "发布编排器不支持回滚到指定版本")
 			return
 		}
-		n, rerr := roller.RollbackTo(release.ID, target, rollbackIDs)
+		res, rerr := roller.RollbackTo(release.ID, target, rollbackIDs)
 		if rerr != nil {
-			// 回滚到指定版本的失败都是「请求/状态不满足」（目标版本不存在/未成功/模式不支持）
-			// 或执行失败；前者 400，执行失败 502，避免一律 500 掩盖原因。
+			// 请求级错误（目标版本不存在 404 / 不属于本应用 / 未成功 / script 模式 / 全跳过）带状态码；
+			// 其余是存储或编排器故障，沿用「业务拒绝一律 400」的既有约定，避免把原因藏进 500。
+			var typed *rollbackToError
+			if errors.As(rerr, &typed) {
+				writeError(w, typed.Status, typed.Code, typed.Message)
+				return
+			}
 			writeError(w, http.StatusBadRequest, codeInvalidArgument, rerr.Error())
 			return
 		}
-		a.logger.Info("回滚到指定版本", "release_id", release.ID, "target_release_id", target, "rolled_back", n)
-		a.writeReleaseActionResult(w, r, release.ID, map[string]any{"rolled_back": n, "target_release_id": target})
+		a.logger.Info("回滚到指定版本", "release_id", release.ID, "target_release_id", target,
+			"rolled_back", res.RolledBack, "skipped", len(res.Skipped), "failed", len(res.Failed))
+		a.writeReleaseActionResult(w, r, release.ID, map[string]any{
+			"rolled_back":       res.RolledBack,
+			"target_release_id": target,
+			// skipped/failed 始终出现（空数组也行）：前端据此解释「为什么有的服务器没回滚」（A10）。
+			"skipped": res.Skipped,
+			"failed":  res.Failed,
+		})
 		return
 	}
 	n, err := a.deploy.Rollback(release.ID, rollbackIDs)

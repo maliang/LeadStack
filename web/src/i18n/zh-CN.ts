@@ -349,6 +349,15 @@ const zhCN: Record<string, string> = {
   'network.fallback.reason': '回退原因：{reason}',
   'network.fallback.hint': '请修正监听端口，或检查 LEADSTACK_LISTEN 环境变量；修好后重启控制端生效。',
   'network.fallback.goSettings': '去设置页修正',
+  // 仪表盘「最近发布」的事实口径（注释曾经写反过，这里按后端实现重写）：
+  // GET /releases 只校验 deploy.read（internal/api/router.go:96），范围过滤在**后端 SQL 里**做——
+  // internal/api/handlers_deploy.go:865-916 把 allowedServerIDList 塞进 store.ReleaseFilter.ServerIDs，
+  // internal/store/deploy.go:578-586 用 EXISTS ... release_runs 过滤，LIMIT 作用在过滤之后，
+  // 所以组范围角色能看到自己范围内的发布；只有「没有 deploy.read」时才真的没有数据。
+  // 三句话必须分开：没有权限 ≠ 范围内没有记录 ≠ 请求失败（契约 §53.3）。
+  'dashboard.recentReleasesFailed': '发布记录加载失败',
+  'dashboard.recentReleasesNoPermission': '当前角色没有发布查看权限（缺少 deploy.read），因此看不到最近发布。',
+  'dashboard.recentReleasesScopedEmpty': '你所授权分组与服务器范围内暂无发布记录。',
 
   'network.error.publicUrlCannotClear': '如需清空对外地址，请使用「恢复默认」',
   'network.title': '网络与端口',
@@ -377,6 +386,9 @@ const zhCN: Record<string, string> = {
   'network.resetDescription': '清空控制台里的网络配置，回落到环境变量或内置默认值。',
   'network.resetImpact': '恢复后监听地址可能变化，通常仍需重启控制端；现有服务器端口不受影响。',
   'network.loadFailed': '加载网络设置失败',
+  // 门控下沉到卡片自身（快照：NetworkSettingsCard.tsx 的 canManageNetwork），说明为什么整块不可见。
+  'network.needsGlobalScopeTitle': '网络与端口需要全局范围',
+  'network.needsGlobalScope': '监听地址、对外地址与默认 SSH 端口属于控制端全局配置，需要「系统管理」权限与全局资源范围。当前角色被限制在分组/服务器范围，因此这里不读取也不提交任何网络配置——页面不会向后端发起 /system/network 请求（保存与重置同样会被拒绝）。',
   'network.error.listenRequired': '请填写监听地址（host:port）',
   'network.error.listenFormat': '格式应为 host:port，例如 0.0.0.0:8080',
   'network.error.listenPort': '端口需为 1–65535 的整数',
@@ -1899,5 +1911,58 @@ const zhCN: Record<string, string> = {
   'users.title': '用户管理',
   'users.username': '用户名',
   'users.you': '当前账号',
+
+  /* ------------------------------------------------------------------
+   * 前端共享契约层（任务 T-08，本文件由该任务独占写入）。
+   * 下面这组键供 T-09–T-14 的页面/组件直接引用，后续任务不再改本文件；
+   * 新增文案一律回来这里补，不要在 .tsx 里硬编码中文。
+   * ------------------------------------------------------------------ */
+
+  // T-11：发布详情页「取消」→「中止发布」+ 二次确认（s.0024 仍是「取消」，不得改）
+  // 标题与正文按 SPEC R16 单源口径：「中止进行中的发布」/「已完成的 N 台不会回滚，剩余 pending 的将被取消」
+  'release.abort': '中止发布',
+  'release.abortConfirmTitle': '中止进行中的发布',
+  'release.abortConfirmBody': '已完成的 {count} 台不会回滚，剩余排队与执行中的批次将被取消，线上继续保持已发布的版本。',
+  'release.abortDone': '已中止 {count} 台',
+
+  // T-09：应用弹窗健康检查路径与受限角色的环境变量展示
+  'apps.healthcheckPathHint': '留空 = 不检查；填写后控制端会在部署完成后请求该路径，失败自动回滚',
+  'apps.envKeysOnly': '仅显示键名（当前角色无权限读取值，保存时不会覆盖原有值）',
+
+  // T-12：备份页恢复闭环（三种重启命令 + 轮询结果）
+  'backups.restorePending': '恢复已暂存，重启控制端后自动应用',
+  'backups.restoreDone': '恢复已完成（归档 {sha}）',
+  // 备份与恢复要求全局范围（后端 RequireGlobalScope）：组/服务器范围角色整页不可用，只显示说明
+  'backups.needsGlobalScopeTitle': '备份与恢复需要全局范围',
+  'backups.needsGlobalScope':
+    '备份、备份设置与整库恢复都要求全局范围：当前角色的范围是分组或服务器，看不到备份列表，也不能执行备份或恢复（页面不会向后端发起这些请求）。请让管理员（全局范围角色）在控制台操作。',
+  'backups.restartCmdLinux': 'sudo systemctl restart leadstack',
+  'backups.restartCmdDarwin': 'sudo launchctl kickstart -k system/com.leadstack.control',
+  'backups.restartCmdDocker': 'docker restart leadstack',
+  'backups.restartCmdHint': '按你的安装方式选择对应命令，重启控制端后生效',
+  'backups.restartLabelLinux': 'Linux（systemd）',
+  'backups.restartLabelDarwin': 'macOS（launchd）',
+  'backups.restartLabelDocker': 'Docker',
+  'backups.copyCmd': '复制命令',
+
+  // T-14：服务器详情页「升级 Agent」入口与弹窗
+  'server.agentUpgrade': '升级 Agent',
+  'server.agentUpgradeTitle': '升级 Agent',
+  'server.agentUpgradeHint': '控制端会下发升级指令：agent 下载新二进制、校验 sha256 后重启自身；版本号 / 下载地址 / sha256 可从「版本与升级」页的 agent 产物自动预填，取不到时手动填写。',
+  'server.agentUpgradeSubmit': '下发升级',
+  'server.agentUpgradeNoPerm': '当前角色没有 agent.upgrade 权限，无法升级 Agent',
+  'server.agentUpgradeDone': '已向 agent 下发升级到 {version}',
+  'server.agentUpgradeManualHint': '当前角色读不到控制端的升级信息（需要全局范围的 system.manage 权限），已跳过自动预填——请手动填写版本号、下载地址与 sha256。',
+
+  // T-10：发布/检测向导的「授权分组」选择器（group_ids 口径）与实时计数
+  'picker.selectedCount': '已选 {n} 台',
+  'picker.groupTotal': '该分组共 {m} 台',
+  'picker.authorizedGroup': '授权分组',
+  'picker.authorizedGroupHint': '按角色授权的分组（group_ids）筛选；与服务器自报分组同名时以授权分组为准',
+
+  // T-13：错误 toast 的关闭/复制按钮与请求编号
+  'toast.copy': '复制',
+  'toast.close': '关闭',
+  'errors.requestId': '请求编号 {id}',
 }
 export default zhCN

@@ -50,6 +50,19 @@ api() {
 status_of() { curl -sS -o /dev/null -w '%{http_code}' "$@" 2>/dev/null; }
 jget() { printf '%s' "$1" | jq -r "$2" 2>/dev/null; }
 sget() { local v; v="$(jget "$1" "$2")"; [ "$v" = "null" ] && v=""; printf '%s' "$v"; }
+# 前端产物断言：make build 会把 web/dist 拷进 internal/webui/dist，缺特征串即视为契约回归。
+dist_has() { # <label> <needle...>
+  local label="$1"; shift
+  local js missing="" needle
+  js="$(ls -t internal/webui/dist/assets/index-*.js 2>/dev/null | head -1)"
+  if [ -z "$js" ]; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
+  for needle in "$@"; do grep -qF -- "$needle" "$js" || missing="${missing}[${needle}] "; done
+  if [ -z "$missing" ]; then
+    pass "${label}（${js##*/} 命中 $# 个特征串）"
+  else
+    fail "${label}：产物缺少 ${missing}"
+  fi
+}
 
 start_lead() {
   mkdir -p "$DATA_DIR" "$BACKUP_DIR"
@@ -243,6 +256,24 @@ else
 fi
 [ -f "$DATA_DIR/.restore-pending/meta.json" ] && pass "暂存标记已写入 .restore-pending/" || fail "暂存标记缺失"
 
+# 恢复状态只读接口（A21）：暂存期间必须 pending=true，且给出可核对的摘要
+RST="$(api GET /api/v1/system/backup/restore-status "" "$TOKEN")"
+printf '%s' "$RST" | jq -e '.data.pending == true' >/dev/null 2>&1 \
+  && pass "恢复状态接口 pending=true" || fail "恢复状态应为 pending=true：$RST"
+RST_SHA="$(printf '%s' "$RST" | jq -r '.data.archive_sha256_prefix // empty')"
+[ "${#RST_SHA}" = "8" ] && pass "归档指纹前缀 8 位（${RST_SHA}）" || fail "指纹前缀长度不符：${RST_SHA}"
+printf '%s' "$RST" | jq -e '.data.schema_version | type == "number"' >/dev/null 2>&1 \
+  && pass "恢复状态带 schema_version" || fail "缺少 schema_version：$RST"
+printf '%s' "$RST" | jq -e '.data.staged_at | type == "number"' >/dev/null 2>&1 \
+  && pass "恢复状态带阶段时间" || fail "缺少 staged_at：$RST"
+
+# 暂存互斥（A23）：已有待应用恢复时再上传必须 409，且不得覆盖原暂存
+DUP2_CODE="$(curl -sS -o "$BASE_DIR/stage2.json" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer ${TOKEN}" -F "file=@${BK_FILE}" "${BASE}/api/v1/backups/restore")"
+[ "$DUP2_CODE" = "409" ] && pass "重复上传恢复被拒（409）" || fail "重复上传应 409，实际 HTTP ${DUP2_CODE}"
+DUP2_MSG="$(jq -r '.error.message // empty' "$BASE_DIR/stage2.json" 2>/dev/null)"
+printf '%s' "$DUP2_MSG" | grep -q "已有待应用的恢复" && pass "409 说明原因：${DUP2_MSG}" || fail "409 文案不符：${DUP2_MSG}"
+
 stop_lead
 if start_lead; then pass "重启后控制端启动成功（已应用暂存恢复）"; else fail "重启失败"; tail -25 "$BASE_DIR/lead.log" | sed 's/^/      /'; fi
 LOGIN_RESP="$(api POST /api/v1/auth/login "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASS}\"}")"
@@ -250,6 +281,16 @@ TOKEN="$(sget "$LOGIN_RESP" '.data.token')"
 BACK2="$(api GET /api/v1/servers "" "$TOKEN" | jq -r '[.data[] | select(.name=="bk-server")] | length' 2>/dev/null)"
 [ "${BACK2:-0}" -ge 1 ] && pass "暂存恢复生效（服务器已回来）" || fail "暂存恢复未生效"
 [ ! -d "$DATA_DIR/.restore-pending" ] && pass "暂存目录已清理" || fail "暂存目录未清理（应已应用）"
+
+# 重启应用后恢复状态必须回落（A22）：前端靠这个接口轮询「重启是否已生效」，
+# 若一直 pending=true，界面会永久停在「等待重启」——比 404 更糟。
+RST2="$(api GET /api/v1/system/backup/restore-status "" "$TOKEN")"
+printf '%s' "$RST2" | jq -e '.data.pending == false' >/dev/null 2>&1 \
+  && pass "应用恢复后 restore-status 回落 pending=false（实际 $(printf '%s' "$RST2" | jq -c '.data' 2>/dev/null)）" \
+  || fail "应用恢复后 pending 仍为 true：$RST2"
+printf '%s' "$RST2" | jq -e '.data.archive_sha256_prefix == null' >/dev/null 2>&1 \
+  && pass "应用后不再报告待应用归档指纹" \
+  || fail "应用后仍返回归档指纹：$(printf '%s' "$RST2" | jq -c '.data' 2>/dev/null)"
 
 # ---------------------------------------------------------------- 9. 定时备份与保留
 step "9. 定时备份与保留策略"
@@ -272,6 +313,17 @@ NEWEST="$(ls -t "$BACKUP_DIR"/*.lsbak 2>/dev/null | head -1)"
 
 # 关掉定时，避免影响退出
 api PATCH /api/v1/backup-settings '{"enabled":false}' "$TOKEN" >/dev/null
+
+# ---------------------------------------------------------------- 10. 恢复引导
+step "10. 恢复完成后的跨平台引导（A24）"
+# 前端要能在「暂存 → 重启生效」后自己收尾：5s 轮询恢复状态、按 sha 前 8 位提示完成、
+# 给出 linux/darwin/docker 三条重启命令并可复制。这里直接对着构建产物核对契约。
+dist_has "恢复状态轮询与完成提示（A24）" \
+  'systemRestoreStatus,5e3' 'backups.restoreDone' 'archive_sha256_prefix'
+dist_has "三条重启命令与可复制引导（A24）" \
+  'backups.restartCmdLinux' 'backups.restartCmdDarwin' 'backups.restartCmdDocker' \
+  'sudo systemctl restart leadstack' 'sudo launchctl kickstart -k system/com.leadstack.control' \
+  'backups.copyCmd'
 
 # ---------------------------------------------------------------- 汇总
 step "验收结果"

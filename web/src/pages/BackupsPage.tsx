@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   api,
+  ApiError,
   type BackupInfo,
   type BackupSettings,
   type BackupVerifyResult,
   type RestoreStagedResult,
+  type SystemRestoreStatus,
 } from '../lib/api'
 import { usePolling } from '../lib/hooks'
 import { errorMessage } from '../lib/errors'
@@ -21,6 +23,7 @@ import { BackupErrorCard } from '../components/BackupErrorCard'
 import { BackupVerifyDialog } from '../components/BackupVerifyDialog'
 import { Button, IconButton } from '../components/Button'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { CopyButton } from '../components/CopyButton'
 import { EmptyState } from '../components/EmptyState'
 import { EnableSwitch } from '../components/EnableSwitch'
 import {
@@ -57,6 +60,16 @@ const DEFAULT_SETTINGS: BackupSettings = {
   include_artifacts: false,
 }
 
+/**
+ * 重启控制端的三种安装方式（T-12）：并列展示、各带复制按钮，
+ * 由用户按自己的安装方式选择，不用 navigator.platform 猜平台（契约 S-18）。
+ */
+const RESTART_COMMANDS = [
+  { labelKey: 'backups.restartLabelLinux', commandKey: 'backups.restartCmdLinux' },
+  { labelKey: 'backups.restartLabelDarwin', commandKey: 'backups.restartCmdDarwin' },
+  { labelKey: 'backups.restartLabelDocker', commandKey: 'backups.restartCmdDocker' },
+]
+
 interface VerifyState {
   info: BackupInfo
   loading: boolean
@@ -66,12 +79,23 @@ interface VerifyState {
 
 export default function BackupsPage() {
   const { toast } = useToast()
-  const { can } = useAuth()
+  const { can, scope } = useAuth()
   const canWrite = can('backup.write')
   const canDelete = can('backup.delete')
   const canRestore = can('backup.restore')
-  const backupsQuery = usePolling(api.backups, 10_000)
-  const settingsQuery = usePolling(api.backupSettings, 30_000)
+  /**
+   * 备份与恢复整页都是全局操作：后端 /backups、/backup-settings、/system/backup/restore-status
+   * 与恢复上传全部挂了 RequireGlobalScope（internal/api/router.go:107/109/180/181/186）。
+   * 分组/服务器范围的角色即便有 backup.read / backup.restore 也只会拿到 403，所以这里把范围
+   * 一起判：非全局范围不轮询、不渲染上传区，只给一条明确说明。否则页面会每 5s/10s/30s 静默
+   * 打一次 403（用户看不到，只有网络面板一直红），而「已暂存」卡片也不会自动转成「已完成」。
+   */
+  const isGlobalScope = scope.mode === 'all'
+  const canRestoreGlobal = canRestore && isGlobalScope
+  // 备份列表 / 备份设置同样挂了 RequireGlobalScope（internal/api/router.go:107/109），
+  // 非全局范围角色一进页面就会连续 403（列表 10s、设置 30s），所以一并停掉轮询。
+  const backupsQuery = usePolling(api.backups, 10_000, isGlobalScope)
+  const settingsQuery = usePolling(api.backupSettings, 30_000, isGlobalScope)
 
   const backups = backupsQuery.data ?? []
 
@@ -95,6 +119,66 @@ export default function BackupsPage() {
   const [restoreStaged, setRestoreStaged] = useState<RestoreStagedResult | null>(null)
   const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false)
   const [riskAcknowledged, setRiskAcknowledged] = useState(false)
+
+  // ---------- 恢复状态回查（T-12 恢复闭环） ----------
+  // 挂载后每 5s 轮询 GET /system/backup/restore-status（需 backup.restore 且全局范围）：
+  // usePolling 在卸载时 clearInterval、页面不可见时跳过，pending=true→false 即「重启后已应用」。
+  // 非全局范围角色后端必定 403，这里直接不启用，避免每 5 秒一次静默失败。
+  const restoreStatusQuery = usePolling(api.systemRestoreStatus, 5_000, canRestoreGlobal)
+  const restoreStatus = restoreStatusQuery.data
+  // 归档 sha256 前 8 位（pending 时接口才返回，完成后需用暂存时的值回显）
+  const [restoreDoneSha, setRestoreDoneSha] = useState<string | null>(null)
+  const lastPendingRef = useRef<SystemRestoreStatus | null>(null)
+  const wasPendingRef = useRef(false)
+
+  useEffect(() => {
+    if (!restoreStatus) return
+    if (restoreStatus.pending) lastPendingRef.current = restoreStatus
+    const wasPending = wasPendingRef.current
+    wasPendingRef.current = restoreStatus.pending
+    if (!wasPending || restoreStatus.pending) return
+
+    // pending 由 true→false：控制端重启后已应用恢复，用归档 sha 前 8 位做完成提示
+    const sha = (
+      lastPendingRef.current?.archive_sha256_prefix ??
+      restoreStaged?.sha256 ??
+      ''
+    ).slice(0, 8)
+    lastPendingRef.current = null
+    setRestoreDoneSha(sha)
+    setRestoreStaged(null)
+    setRestoreStage('idle')
+    setRestoreFile(null)
+    setRestoreInsight(null)
+    toast(t('backups.restoreDone', { sha: sha || '—' }), 'success')
+  }, [restoreStatus, restoreStaged, toast])
+
+  // 待应用的恢复：以轮询结果为准，本地刚上传时先按本地状态出卡片，不必等下一次轮询
+  const restorePending = restoreStage === 'staged' || restoreStatus?.pending === true
+
+  const stagedSummary = useMemo(() => {
+    if (restoreStaged) {
+      return [
+        restoreStaged.archive_name
+          ? t('s.0897', { '0': restoreStaged.archive_name })
+          : t('s.0898'),
+        restoreStaged.size_bytes ? `（${formatBytes(restoreStaged.size_bytes)}）` : '',
+        restoreStaged.schema_version !== null ? ` · schema ${restoreStaged.schema_version}` : '',
+        restoreStaged.sha256 ? ` · sha256 ${truncateMiddle(restoreStaged.sha256, 14, 6)}` : '',
+        restoreStaged.uploaded_at
+          ? t('s.0899', { '0': formatDateTime(restoreStaged.uploaded_at) })
+          : '',
+        restoreStaged.staged_path ? t('s.0900', { '0': restoreStaged.staged_path }) : '',
+      ].join('')
+    }
+    if (!restoreStatus) return ''
+    return [
+      t('s.0898'),
+      restoreStatus.schema_version !== undefined ? ` · schema ${restoreStatus.schema_version}` : '',
+      restoreStatus.archive_sha256_prefix ? ` · sha256 ${restoreStatus.archive_sha256_prefix}` : '',
+      restoreStatus.staged_at ? t('s.0899', { '0': formatDateTime(restoreStatus.staged_at) }) : '',
+    ].join('')
+  }, [restoreStaged, restoreStatus])
 
   // ---------- 设置 ----------
   const [settingsForm, setSettingsForm] = useState<BackupSettings>(DEFAULT_SETTINGS)
@@ -210,6 +294,7 @@ export default function BackupsPage() {
     setRestoreFile(file)
     setRestoreInsight(null)
     setRestoreStaged(null)
+    setRestoreDoneSha(null)
     setRestoreStage(file ? 'risk' : 'idle')
     setRiskAcknowledged(false)
   }
@@ -223,11 +308,24 @@ export default function BackupsPage() {
       setRestoreStaged(staged)
       setRestoreStage('staged')
       setRestoreConfirmOpen(false)
+      setRestoreDoneSha(null)
       toast(t('s.0847'), 'success')
+      // 立刻回查一次状态，让「待应用 + 重启命令」卡片马上出现
+      void restoreStatusQuery.refresh()
     } catch (caught) {
-      setRestoreInsight(classifyBackupError(caught))
-      setRestoreStage('risk')
-      setRestoreConfirmOpen(false)
+      if (caught instanceof ApiError && caught.status === 409) {
+        // 409 = 已有待应用的恢复（后端 message 已说明原因），按错误 toast 展示
+        toast(errorMessage(caught, t('s.0847')), 'error')
+        // 清掉本次选择，页面回到「待应用」单卡片状态，避免半截风险提示与待应用提示并存
+        setRestoreStage('idle')
+        setRestoreFile(null)
+        setRestoreConfirmOpen(false)
+        void restoreStatusQuery.refresh()
+      } else {
+        setRestoreInsight(classifyBackupError(caught))
+        setRestoreStage('risk')
+        setRestoreConfirmOpen(false)
+      }
     } finally {
       setRestoreLoading(false)
     }
@@ -260,6 +358,30 @@ export default function BackupsPage() {
     } finally {
       setSavingSettings(false)
     }
+  }
+
+  // 非全局范围：整页的备份/恢复接口都不可用（见 isGlobalScope 注释），只给一条明确说明，
+  // 不渲染备份列表/设置/上传区，也完全不发请求 —— 避免一串静默 403。
+  if (!isGlobalScope) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+            {t('s.0858')}
+          </h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{t('s.0859')}</p>
+        </div>
+        <section className="rounded-xl border border-amber-300 bg-amber-50/70 p-4 shadow-sm dark:border-amber-500/40 dark:bg-amber-500/10">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-amber-900 dark:text-amber-200">
+            <ShieldCheckIcon className="h-4 w-4 text-amber-600 dark:text-amber-300" />
+            {t('backups.needsGlobalScopeTitle')}
+          </h2>
+          <p className="mt-1.5 text-xs leading-relaxed text-amber-800 dark:text-amber-200/90">
+            {t('backups.needsGlobalScope')}
+          </p>
+        </section>
+      </div>
+    )
   }
 
   return (
@@ -472,8 +594,8 @@ export default function BackupsPage() {
         )}
       </section>
 
-      {/* 从备份恢复 */}
-      {canRestore ? (
+      {/* 从备份恢复：整库恢复要求全局范围（后端 RequireGlobalScope），见 isGlobalScope 注释 */}
+      {canRestoreGlobal ? (
       <section className="rounded-xl border border-rose-200 bg-white p-4 shadow-sm dark:border-rose-500/30 dark:bg-slate-900">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
@@ -562,28 +684,50 @@ export default function BackupsPage() {
           </div>
         ) : null}
 
-        {restoreStage === 'staged' && restoreStaged ? (
+        {restorePending ? (
           <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5 dark:border-emerald-500/30 dark:bg-emerald-500/10">
             <p className="flex items-center gap-2 text-sm font-semibold text-emerald-800 dark:text-emerald-200">
               <CheckCircleIcon className="h-4 w-4" />
-              {t('s.0894')}
+              {t('backups.restorePending')}
             </p>
             <p className="mt-1 text-xs leading-relaxed text-emerald-800/90 dark:text-emerald-200/90">
-              {t('s.0895')}{' '}
-              <code className="font-mono">systemctl restart leadstack</code> {t('s.0896')}
+              {t('backups.restartCmdHint')}
             </p>
-            <p className="mt-1 text-[11px] text-emerald-700/80 dark:text-emerald-300/80">
-              {restoreStaged.archive_name
-                ? t('s.0897', { '0': restoreStaged.archive_name })
-                : t('s.0898')}
-              {restoreStaged.size_bytes ? `（${formatBytes(restoreStaged.size_bytes)}）` : ''}
-              {restoreStaged.schema_version !== null ? ` · schema ${restoreStaged.schema_version}` : ''}
-              {restoreStaged.uploaded_at ? t('s.0899', { '0': formatDateTime(restoreStaged.uploaded_at) }) : ''}
-              {restoreStaged.sha256 ? ` · sha256 ${truncateMiddle(restoreStaged.sha256, 14, 6)}` : ''}
-              {restoreStaged.staged_path ? t('s.0900', { '0': restoreStaged.staged_path }) : ''}
-            </p>
+            <div className="mt-2 grid gap-1.5 sm:grid-cols-3">
+              {RESTART_COMMANDS.map((item) => (
+                <div
+                  key={item.labelKey}
+                  className="rounded-md border border-emerald-200 bg-white/70 p-2 dark:border-emerald-500/30 dark:bg-slate-950/40"
+                >
+                  <p className="text-[11px] font-medium text-emerald-900/80 dark:text-emerald-200/80">
+                    {t(item.labelKey)}
+                  </p>
+                  <div className="mt-1 flex items-center gap-1">
+                    <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-700 dark:text-slate-200">
+                      {t(item.commandKey)}
+                    </code>
+                    <CopyButton value={t(item.commandKey)} label={t('backups.copyCmd')} />
+                  </div>
+                </div>
+              ))}
+            </div>
+            {stagedSummary ? (
+              <p className="mt-2 text-[11px] text-emerald-700/80 dark:text-emerald-300/80">
+                {stagedSummary}
+              </p>
+            ) : null}
             <p className="mt-2 text-[11px] text-emerald-700/70 dark:text-emerald-300/70">
               {t('s.0901')}
+            </p>
+          </div>
+        ) : null}
+
+        {/* pending 由 true→false（重启后已应用）时的完成回执 */}
+        {!restorePending && restoreDoneSha !== null ? (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5 dark:border-emerald-500/30 dark:bg-emerald-500/10">
+            <CheckCircleIcon className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-300" />
+            <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">
+              {t('backups.restoreDone', { sha: restoreDoneSha || '—' })}
             </p>
           </div>
         ) : null}

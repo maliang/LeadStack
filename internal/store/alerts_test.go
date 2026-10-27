@@ -324,3 +324,101 @@ func TestAlertLifecycle(t *testing.T) {
 		t.Fatalf("清理告警应连带清理事件: %v / %v", events, err)
 	}
 }
+
+// TestAlertSummaryForServers 校验按服务器范围统计：口径与 AlertSummary 一致，
+// 只多一个 server_id IN (...) 条件；规则级告警（server_id IS NULL）不计入（A13/A14）。
+func TestAlertSummaryForServers(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	const now = int64(1_700_000_000_000)
+	const inA, outB = "srv-in", "srv-out"
+
+	mk := func(id, serverID, status, severity string, resolvedAt *int64) {
+		t.Helper()
+		a := Alert{
+			ID: id, RuleID: "rule-1", DedupKey: "k-" + id,
+			Status: status, Severity: severity, Title: id,
+			StartedAt: now - 10_000, UpdatedAt: now - 10_000, ResolvedAt: resolvedAt,
+		}
+		if serverID != "" {
+			sid := serverID
+			a.ServerID = &sid
+		}
+		if err := st.CreateAlert(ctx, a); err != nil {
+			t.Fatalf("创建告警 %s: %v", id, err)
+		}
+	}
+	recent := now - 3600*1000
+	old := now - 48*3600*1000
+	mk("in-firing", inA, AlertStatusFiring, "critical", nil)
+	mk("in-acked", inA, AlertStatusAcked, "warning", nil)
+	mk("out-firing", outB, AlertStatusFiring, "critical", nil)
+	mk("out-acked", outB, AlertStatusAcked, "info", nil)
+	mk("out-resolved-recent", outB, AlertStatusResolved, "critical", &recent)
+	mk("out-resolved-old", outB, AlertStatusResolved, "critical", &old)
+	mk("rule-level-firing", "", AlertStatusFiring, "warning", nil)
+	mk("rule-level-resolved", "", AlertStatusResolved, "info", &recent)
+
+	assertSummary := func(label string, got AlertSummary, firing, acked, resolved24h int, sev map[string]int) {
+		t.Helper()
+		if got.Firing != firing || got.Acked != acked || got.Resolved24h != resolved24h {
+			t.Fatalf("%s: 计数不正确 %+v（期望 firing=%d acked=%d resolved_24h=%d）",
+				label, got, firing, acked, resolved24h)
+		}
+		for _, key := range []string{"critical", "warning", "info"} {
+			want, ok := sev[key]
+			if !ok {
+				want = 0
+			}
+			if got.BySeverity[key] != want {
+				t.Fatalf("%s: by_severity[%s] 期望 %d，实际 %+v", label, key, want, got.BySeverity)
+			}
+		}
+		if len(got.BySeverity) != 3 {
+			t.Fatalf("%s: by_severity 必须恒带三个键，实际 %+v", label, got.BySeverity)
+		}
+	}
+
+	// 全量：与改动前一致（规则级告警也计入）。
+	all, err := st.AlertSummary(ctx, now)
+	if err != nil {
+		t.Fatalf("全量统计失败: %v", err)
+	}
+	assertSummary("全量", all, 3, 2, 2, map[string]int{"critical": 2, "warning": 2, "info": 1})
+
+	// 单服务器范围：范围外与规则级都不计入。
+	scopedIn, err := st.AlertSummaryForServers(ctx, now, []string{inA})
+	if err != nil {
+		t.Fatalf("范围统计失败: %v", err)
+	}
+	assertSummary("仅 srv-in", scopedIn, 1, 1, 0, map[string]int{"critical": 1, "warning": 1})
+
+	scopedOut, err := st.AlertSummaryForServers(ctx, now, []string{outB})
+	if err != nil {
+		t.Fatalf("范围统计失败: %v", err)
+	}
+	assertSummary("仅 srv-out", scopedOut, 1, 1, 1, map[string]int{"critical": 1, "info": 1})
+
+	// 多服务器：重复 ID 与空串都要容忍。
+	scopedBoth, err := st.AlertSummaryForServers(ctx, now, []string{inA, outB, inA, ""})
+	if err != nil {
+		t.Fatalf("多范围统计失败: %v", err)
+	}
+	assertSummary("srv-in+srv-out", scopedBoth, 2, 2, 1, map[string]int{"critical": 2, "warning": 1, "info": 1})
+
+	// 空范围 / 全空串 / 不存在的服务器：一律全 0，且不报错。
+	for _, ids := range [][]string{{}, {""}, {"srv-missing"}} {
+		got, err := st.AlertSummaryForServers(ctx, now, ids)
+		if err != nil {
+			t.Fatalf("空范围统计失败(%v): %v", ids, err)
+		}
+		assertSummary("空范围", got, 0, 0, 0, nil)
+	}
+
+	// 全量入口不受影响：再查一次仍一致（防止实现把条件泄漏到 AlertSummary）。
+	again, err := st.AlertSummary(ctx, now)
+	if err != nil {
+		t.Fatalf("全量统计失败: %v", err)
+	}
+	assertSummary("全量复查", again, 3, 2, 2, map[string]int{"critical": 2, "warning": 2, "info": 1})
+}

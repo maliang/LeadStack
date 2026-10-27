@@ -712,3 +712,77 @@ func TestBackupVerifyRejectsSchemaTooNew(t *testing.T) {
 		t.Fatalf("版本兼容时校验应通过，实际 %d", status)
 	}
 }
+
+// TestRestoreStatusAndStagingMutex 覆盖恢复状态只读接口与暂存互斥（SPEC A21 / A23 / S-05）。
+func TestRestoreStatusAndStagingMutex(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+
+	status, _, body := env.doRequest(http.MethodGet, "/api/v1/system/backup/restore-status", jwt, nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("无暂存时状态接口期望 200，实际 %d（body=%s）", status, body)
+	}
+	var none struct {
+		Data restoreStatusPayload `json:"data"`
+	}
+	if err := json.Unmarshal(body, &none); err != nil {
+		t.Fatalf("解析状态响应失败: %v", err)
+	}
+	if none.Data.Pending {
+		t.Fatalf("无暂存时应为 pending=false: %+v", none.Data)
+	}
+
+	// 暂存一份有效归档
+	if st, sb := env.uploadRestoreFile(jwt, []byte("LSBAK1\nvalid-archive-bytes")); st != http.StatusAccepted {
+		t.Fatalf("暂存期望 202，实际 %d（body=%s）", st, sb)
+	}
+
+	status, _, body = env.doRequest(http.MethodGet, "/api/v1/system/backup/restore-status", jwt, nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("有暂存时状态接口期望 200，实际 %d（body=%s）", status, body)
+	}
+	var has struct {
+		Data restoreStatusPayload `json:"data"`
+	}
+	if err := json.Unmarshal(body, &has); err != nil {
+		t.Fatalf("解析状态响应失败: %v", err)
+	}
+	if !has.Data.Pending || has.Data.SchemaVersion != 6 || has.Data.StagedAt == 0 {
+		t.Fatalf("暂存状态不正确: %+v", has.Data)
+	}
+	if len(has.Data.ArchiveSHA256) != 8 {
+		t.Fatalf("sha256 摘要长度应为 8 位前缀，实际 %q", has.Data.ArchiveSHA256)
+	}
+
+	// 已有待应用恢复时，再次上传必须 409 且给可操作文案（不能悄悄覆盖）
+	status, body = env.uploadRestoreFile(jwt, []byte("LSBAK1\nsecond-archive"))
+	if status != http.StatusConflict {
+		t.Fatalf("已有暂存时再次恢复期望 409，实际 %d（body=%s）", status, body)
+	}
+	if !strings.Contains(string(body), "已有待应用的恢复") {
+		t.Fatalf("409 文案应可操作，实际: %s", body)
+	}
+
+	// 并发暂存锁：锁目录存在时同样 409
+	if err := os.RemoveAll(env.cfg.RestorePendingDir()); err != nil {
+		t.Fatalf("清理暂存目录失败: %v", err)
+	}
+	lockDir := filepath.Join(env.cfg.DataDir, ".restore-stage.lock")
+	if err := os.Mkdir(lockDir, 0o700); err != nil {
+		t.Fatalf("创建锁目录失败: %v", err)
+	}
+	status, body = env.uploadRestoreFile(jwt, []byte("LSBAK1\nconcurrent"))
+	if status != http.StatusConflict {
+		t.Fatalf("持锁期间期望 409，实际 %d（body=%s）", status, body)
+	}
+	if err := os.Remove(lockDir); err != nil {
+		t.Fatalf("清理锁目录失败: %v", err)
+	}
+	// 解锁后可正常暂存，且锁已被释放（不残留）
+	if st, sb := env.uploadRestoreFile(jwt, []byte("LSBAK1\nthird-archive")); st != http.StatusAccepted {
+		t.Fatalf("解锁后暂存期望 202，实际 %d（body=%s）", st, sb)
+	}
+	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
+		t.Fatalf("暂存成功后不应残留锁目录: %v", err)
+	}
+}

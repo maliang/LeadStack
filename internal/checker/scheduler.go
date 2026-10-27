@@ -397,20 +397,28 @@ func (s *Scheduler) record(ctx context.Context, st *targetState, r Result) {
 }
 
 // lookupTarget 从 Store 现查一个目标（可能尚未装载进调度表）。
+//
+// 先查启用列表（命中即用，快路径与定时调度一致）；未命中再按 (检测项, 服务器) 精确查
+// 一次、忽略 enabled —— 手动「立即执行」必须能跑停用的检测项。定时循环只走
+// ListEnabledTargets，所以停用项不会被定时探测，只有用户点「立即执行」时才会跑一次。
 func (s *Scheduler) lookupTarget(ctx context.Context, key targetKey) (Target, bool) {
 	if s.deps.Store == nil {
 		return Target{}, false
 	}
 	list, err := s.deps.Store.ListEnabledTargets(ctx)
-	if err != nil {
-		return Target{}, false
-	}
-	for _, t := range list {
-		if t.CheckID == key.checkID && t.ServerID == key.serverID {
-			return t, true
+	if err == nil {
+		for _, t := range list {
+			if t.CheckID == key.checkID && t.ServerID == key.serverID {
+				return t, true
+			}
 		}
 	}
-	return Target{}, false
+	// 启用列表里没有：可能是停用的检测项。精确查一次，命中即按同一套探测/落库流程执行。
+	t, found, err := s.deps.Store.GetCheckTarget(ctx, key.checkID, key.serverID)
+	if err != nil || !found {
+		return Target{}, false
+	}
+	return t, true
 }
 
 // intervalOf 返回规范化的调度间隔（下限 minInterval）。

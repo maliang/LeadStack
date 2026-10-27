@@ -31,6 +31,10 @@ interface ReleaseWizardProps {
   apps: AppItem[]
   templates: DeployTemplate[]
   servers: Server[]
+  /**
+   * legacy 自由标签分组聚合（GET /groups，按 servers.group 文本列聚合）：
+   * 只作展示口径，不参与目标服务器过滤（SPEC R14）。
+   */
   groups: GroupSummary[]
   defaultAppId?: string
   onClose: () => void
@@ -43,7 +47,6 @@ export function ReleaseWizard({
   apps,
   templates,
   servers,
-  groups,
   defaultAppId,
   onClose,
   onCreated,
@@ -103,10 +106,35 @@ export function ReleaseWizard({
     return [...tags].sort((a, b) => a.localeCompare(b, 'zh-CN'))
   }, [servers])
 
+  /**
+   * 授权分组（一等公民归属 group_ids）选项：直接从服务器归属派生，
+   * 避免拿 legacy 分组名去匹配分组 ID —— 两者不同源，永远匹配不上。
+   */
+  const authorizedGroupOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    const names = new Map<string, string>()
+    for (const server of servers) {
+      server.group_ids.forEach((groupId, index) => {
+        if (!groupId) return
+        counts.set(groupId, (counts.get(groupId) ?? 0) + 1)
+        if (!names.has(groupId)) names.set(groupId, server.group_names[index] ?? groupId)
+      })
+    }
+    return [...counts.entries()]
+      .map(([id, count]) => ({ id, count, name: names.get(id) ?? id }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  }, [servers])
+
+  /** 当前授权分组下的服务器台数（未选分组时=全量），用于「该分组共 M 台」。 */
+  const groupTotal = useMemo(
+    () => (pickerGroup ? servers.filter((server) => server.group_ids.includes(pickerGroup)).length : servers.length),
+    [servers, pickerGroup],
+  )
+
   const filteredServers = useMemo(() => {
     const query = search.trim().toLowerCase()
     return servers.filter((server) => {
-      if (pickerGroup && server.group !== pickerGroup) return false
+      if (pickerGroup && !server.group_ids.includes(pickerGroup)) return false
       if (pickerTag && !server.tags.includes(pickerTag)) return false
       if (!query) return true
       return (
@@ -116,6 +144,25 @@ export function ReleaseWizard({
       )
     })
   }, [servers, search, pickerGroup, pickerTag])
+
+  /**
+   * 切换「授权分组」时把已选集合裁剪到该分组内。
+   *
+   * 分组是授权范围（group_ids），列表只渲染当前分组内的服务器；若继续保留分组外
+   * 的旧选中项，就会出现「已选 5 台 / 该分组共 2 台」这种自相矛盾的计数，而且
+   * 用户看不到的服务器也会被一起提交。清空分组（不过滤）时不动已选项。
+   */
+  useEffect(() => {
+    if (!pickerGroup) return
+    setSelected((current) => {
+      const next = new Set(
+        [...current].filter((id) =>
+          servers.some((server) => server.id === id && server.group_ids.includes(pickerGroup)),
+        ),
+      )
+      return next.size === current.size ? current : next
+    })
+  }, [pickerGroup, servers])
 
   const prepareArtifact = async (): Promise<Artifact | null> => {
     if (artifact) return artifact
@@ -491,12 +538,7 @@ export function ReleaseWizard({
       {step === 2 ? (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className={labelClass}>
-              {t('s.0443')}
-              <span className="ml-1.5 font-normal text-slate-400">
-                {t('s.0208')} {selected.size} / {servers.length}
-              </span>
-            </span>
+            <span className={labelClass}>{t('s.0443')}</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -529,14 +571,14 @@ export function ReleaseWizard({
               className={inputClass + ' sm:col-span-2'}
             />
             <select
-              aria-label={t('s.0479')}
+              aria-label={t('picker.authorizedGroup')}
               value={pickerGroup}
               onChange={(event) => setPickerGroup(event.target.value)}
               className={inputClass}
             >
               <option value="">{t('s.0376')}</option>
-              {groups.map((group) => (
-                <option key={group.name} value={group.name}>
+              {authorizedGroupOptions.map((group) => (
+                <option key={group.id} value={group.id}>
                   {group.name}（{group.count}）
                 </option>
               ))}
@@ -554,6 +596,18 @@ export function ReleaseWizard({
                 </option>
               ))}
             </select>
+          </div>
+
+          <p className="text-[11px] leading-relaxed text-slate-400 dark:text-slate-500">
+            {t('picker.authorizedGroupHint')}
+          </p>
+
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+            <span className="font-medium text-indigo-600 dark:text-indigo-300">
+              {t('picker.selectedCount', { n: selected.size })}
+            </span>
+            <span className="text-slate-300 dark:text-slate-600">{' / '}</span>
+            <span>{t('picker.groupTotal', { m: groupTotal })}</span>
           </div>
 
           <div className="max-h-56 overflow-y-auto rounded-md border border-slate-100 dark:border-slate-800/70">
@@ -584,8 +638,17 @@ export function ReleaseWizard({
                     {server.name}
                   </span>
                   <ModeBadge mode={server.mode} />
+                  {server.group_names.length > 0 ? (
+                    <span
+                      title={t('picker.authorizedGroup')}
+                      className="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300"
+                    >
+                      {server.group_names.join(' / ')}
+                    </span>
+                  ) : null}
+                  {/* legacy 自报分组：仅展示，不参与过滤 */}
                   {server.group ? (
-                    <span className="text-[11px] text-slate-400 dark:text-slate-500">{server.group}</span>
+                    <span className="shrink-0 text-[11px] text-slate-400 dark:text-slate-500">{server.group}</span>
                   ) : null}
                   <span className="font-mono text-[11px] text-slate-400 dark:text-slate-500">
                     {server.host}

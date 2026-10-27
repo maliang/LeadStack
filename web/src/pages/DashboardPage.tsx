@@ -52,7 +52,7 @@ interface BatchState {
 
 export default function DashboardPage() {
   const { toast } = useToast()
-  const { can } = useAuth()
+  const { can, scope } = useAuth()
   const [filters, setFilters] = useState<ServerFilters>({})
   const [groupId, setGroupId] = useState('')
   const filterKey = JSON.stringify(filters)
@@ -63,10 +63,28 @@ export default function DashboardPage() {
   const serverGroupsQuery = usePolling(api.serverGroups, 30_000)
   const checksSummaryQuery = usePolling(api.checksSummary, 10_000)
   const alertsSummaryQuery = usePolling(api.alertsSummary, 10_000)
-  const releasesQuery = usePolling(() => api.releases({ limit: 5 }), 10_000)
+  // 「最近发布」读 GET /releases（internal/api/router.go:96 只校验 deploy.read，**不要求**全局范围）：
+  // 非全局范围的调用由后端按「目标服务器 ∩ 角色范围」过滤（internal/api/handlers_deploy.go:873-893，
+  // 契约 §53.3），所以组范围且有 deploy.read 的运维角色能看到自己范围内的发布，前端不该替他挡掉。
+  // 真正没有数据的只有「没有 deploy.read」这一种（过去还会每 10 秒吃一次静默 403），只在此时于发请求
+  // 之前门控（usePolling 的 enabled：web/src/lib/hooks.ts:59-64 在 false 时既不请求也不挂定时器）。
+  const canViewReleases = can('deploy.read')
+  // 用 errorMessage 包一层：usePolling 只保留错误文案字符串，裸传会丢掉 ApiError 的 requestId；
+  // 包一层后 releasesQuery.error 自带「（请求编号 xxx）」，与错误 toast 同一口径（errors.ts）。
+  const releasesQuery = usePolling(
+    async () => {
+      try {
+        return await api.releases({ limit: 5 })
+      } catch (caught) {
+        throw new Error(errorMessage(caught, t('s.0625')))
+      }
+    },
+    10_000,
+    canViewReleases,
+  )
   const recentRuns = useReleaseRuns(
     (releasesQuery.data ?? []).slice(0, 5).map((release) => release.id),
-    true,
+    canViewReleases,
     10_000,
   )
   const now = useNow()
@@ -448,19 +466,34 @@ export default function DashboardPage() {
               </p>
             </div>
           </div>
-          <Link
-            to="/apps"
-            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
-          >
-            {t('s.1020')}
-            <ChevronRightIcon className="h-3.5 w-3.5" />
-          </Link>
+          {canViewReleases ? (
+            <Link
+              to="/apps"
+              className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+            >
+              {t('s.1020')}
+              <ChevronRightIcon className="h-3.5 w-3.5" />
+            </Link>
+          ) : null}
         </div>
 
         <div className="mt-3 space-y-1.5">
-          {(releasesQuery.data ?? []).length === 0 ? (
+          {!canViewReleases ? (
             <p className="rounded-lg bg-slate-50 px-3 py-3 text-xs text-slate-400 dark:bg-slate-950/60 dark:text-slate-500">
-              {t('s.1021')}
+              {t('dashboard.recentReleasesNoPermission')}
+            </p>
+          ) : releasesQuery.error ? (
+            // 三分支且 error 优先：请求失败时 data 还是 null，若继续按「空」渲染，界面会告诉用户
+            // 「范围内暂无发布记录」——用户于是去查权限配置，而真实原因是他连不上控制端。
+            // 这是本会话同一类问题的第三次（403 冒充范围过滤、LIMIT 冒充没有数据、error 冒充空），
+            // 按同一范式在渲染层就把三者分开（同文件 :251 的 serversQuery.error 分支同款写法）。
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
+              {t('dashboard.recentReleasesFailed')}：{releasesQuery.error}
+            </div>
+          ) : (releasesQuery.data ?? []).length === 0 ? (
+            <p className="rounded-lg bg-slate-50 px-3 py-3 text-xs text-slate-400 dark:bg-slate-950/60 dark:text-slate-500">
+              {/* 两种「空」要分开说：全局角色确实没有任何发布；范围受限角色只是自己范围内没有。 */}
+              {scope.mode === 'all' ? t('s.1021') : t('dashboard.recentReleasesScopedEmpty')}
             </p>
           ) : (
             (releasesQuery.data ?? []).slice(0, 5).map((release) => {

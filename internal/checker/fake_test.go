@@ -131,13 +131,17 @@ type storedState struct {
 }
 
 type fakeStore struct {
-	mu       sync.Mutex
-	targets  []Target
+	mu      sync.Mutex
+	targets []Target
+	// lookup 模拟「按 (检测项, 服务器) 精确查、忽略 enabled」：停用的检测项目标放在这里，
+	// 不会出现在 targets（启用列表）里。两者分开才能复现「停用项点立即执行」的场景。
+	lookup   map[targetKey]Target
 	results  []storedResult
 	states   []storedState
 	listErr  error
 	saveErr  error
 	stateErr error
+	getErr   error
 }
 
 func (s *fakeStore) ListEnabledTargets(ctx context.Context) ([]Target, error) {
@@ -149,6 +153,20 @@ func (s *fakeStore) ListEnabledTargets(ctx context.Context) ([]Target, error) {
 	out := make([]Target, len(s.targets))
 	copy(out, s.targets)
 	return out, nil
+}
+
+// GetCheckTarget 精确查目标（忽略 enabled），命中 lookup 才有结果。
+func (s *fakeStore) GetCheckTarget(ctx context.Context, checkID, serverID string) (Target, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.getErr != nil {
+		return Target{}, false, s.getErr
+	}
+	t, ok := s.lookup[targetKey{checkID: checkID, serverID: serverID}]
+	if !ok {
+		return Target{}, false, nil
+	}
+	return t, true, nil
 }
 
 func (s *fakeStore) SaveResult(ctx context.Context, checkID, serverID string, r Result) error {
@@ -181,6 +199,16 @@ func (s *fakeStore) addTarget(t Target) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.targets = append(s.targets, t)
+}
+
+// setLookupTargets 设置「精确查找」可见的目标（可含停用项），不影响启用列表。
+func (s *fakeStore) setLookupTargets(ts ...Target) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lookup = make(map[targetKey]Target, len(ts))
+	for _, t := range ts {
+		s.lookup[targetKey{checkID: t.CheckID, serverID: t.ServerID}] = t
+	}
 }
 
 func (s *fakeStore) resultCount() int {

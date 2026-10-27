@@ -31,6 +31,24 @@ func NewCheckerStore(st *store.Store, logger *slog.Logger) *CheckerStore {
 	return &CheckerStore{st: st, logger: logger}
 }
 
+// targetFromRow 把 store 的一行目标映射成 checker.Target（含服务器 mode 与规格）。
+func targetFromRow(row store.EnabledCheckTarget) checker.Target {
+	return checker.Target{
+		CheckID:  row.Check.ID,
+		ServerID: row.ServerID,
+		Mode:     row.Mode,
+		Spec: checker.Spec{
+			ID:        row.Check.ID,
+			Name:      row.Check.Name,
+			Kind:      checker.Kind(row.Check.Kind),
+			Target:    row.Check.Target,
+			IntervalS: row.Check.IntervalS,
+			TimeoutS:  row.Check.TimeoutS,
+			Params:    decodeParams(row.Check.ParamsJSON),
+		},
+	}
+}
+
 // ListEnabledTargets 返回启用中的 (检测项, 服务器)，并带出服务器 mode 供检测层选执行通道。
 func (s *CheckerStore) ListEnabledTargets(ctx context.Context) ([]checker.Target, error) {
 	rows, err := s.st.ListEnabledCheckTargets(ctx)
@@ -39,22 +57,23 @@ func (s *CheckerStore) ListEnabledTargets(ctx context.Context) ([]checker.Target
 	}
 	out := make([]checker.Target, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, checker.Target{
-			CheckID:  row.Check.ID,
-			ServerID: row.ServerID,
-			Mode:     row.Mode,
-			Spec: checker.Spec{
-				ID:        row.Check.ID,
-				Name:      row.Check.Name,
-				Kind:      checker.Kind(row.Check.Kind),
-				Target:    row.Check.Target,
-				IntervalS: row.Check.IntervalS,
-				TimeoutS:  row.Check.TimeoutS,
-				Params:    decodeParams(row.Check.ParamsJSON),
-			},
-		})
+		out = append(out, targetFromRow(row))
 	}
 	return out, nil
+}
+
+// GetCheckTarget 按 (检测项, 服务器) 精确查一个目标，忽略检测项的 enabled 标志。
+//
+// 手动「立即执行」走这条路：停用只停掉定时探测，用户点了执行仍要真正跑一次并落库。
+func (s *CheckerStore) GetCheckTarget(ctx context.Context, checkID, serverID string) (checker.Target, bool, error) {
+	row, err := s.st.GetCheckTarget(ctx, checkID, serverID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return checker.Target{}, false, nil
+		}
+		return checker.Target{}, false, err
+	}
+	return targetFromRow(*row), true, nil
 }
 
 // SaveResult 写入一条检测结果。

@@ -526,8 +526,10 @@ type fakePlanRunner struct {
 	plans       []deploy.Plan
 	servers     []string
 	failOn      map[string]bool
-	hold        time.Duration
-	hooksLog    []string
+	// failPlan 可按计划内容指定失败（nil 表示不额外判定），用于「探测备份不存在」这类场景。
+	failPlan func(p deploy.Plan) bool
+	hold     time.Duration
+	hooksLog []string
 }
 
 func (f *fakePlanRunner) RunPlan(ctx context.Context, serverID string, p deploy.Plan, hooks deploy.Hooks) (deploy.RunOutcome, error) {
@@ -539,6 +541,13 @@ func (f *fakePlanRunner) RunPlan(ctx context.Context, serverID string, p deploy.
 	f.plans = append(f.plans, p)
 	f.servers = append(f.servers, serverID)
 	shouldFail := f.failOn[serverID]
+	if shouldFail {
+		// 一次性注入：失败只触发一次就自动失效。
+		// 双保险，见 TestDeployOrchestratorConcurrencyAndStatus 里「先清 failOn 再 /retry」的注释——
+		// 万一以后有人把清零挪回请求之后，异步重试也不会读到残留。
+		delete(f.failOn, serverID)
+	}
+	failPlan := f.failPlan
 	hold := f.hold
 	f.mu.Unlock()
 
@@ -568,6 +577,9 @@ func (f *fakePlanRunner) RunPlan(ctx context.Context, serverID string, p deploy.
 	}
 	if shouldFail {
 		return deploy.RunOutcome{Status: "failed", ExitCode: 1, Message: "步骤失败", FailedStep: "switch"}, nil
+	}
+	if failPlan != nil && failPlan(p) {
+		return deploy.RunOutcome{Status: deploy.StatusFailed, ExitCode: 1, Message: "命令执行失败", FailedStep: p.Steps[0].Name}, nil
 	}
 	return deploy.RunOutcome{Status: "success", ExitCode: 0, Message: "部署成功"}, nil
 }
@@ -691,13 +703,18 @@ func TestDeployOrchestratorConcurrencyAndStatus(t *testing.T) {
 
 	// retry：只重跑 failed 的那台
 	_, plansBefore, _ := runner.snapshot()
+	// 必须先清失败注入，再触发 /retry。
+	// /retry 只是在后台起 goroutine 重跑，返回时那台的重试可能已经在 RunPlan 里
+	// 读过 runner.failOn（见 fakePlanRunner.RunPlan 的 shouldFail := f.failOn[serverID]）。
+	// 若把清零放在请求之后（历史写法），高 CPU 负载下 goroutine 抢在清零前读表，
+	// 第二次重跑仍会失败、release 永久停在 failed，表现为「没改代码却偶发红」。
+	runner.mu.Lock()
+	runner.failOn = map[string]bool{}
+	runner.mu.Unlock()
 	status, raw = env.request(http.MethodPost, "/api/v1/releases/"+release2+"/retry", jwt, nil)
 	if status != http.StatusOK {
 		t.Fatalf("retry 失败: %d（body=%s）", status, raw)
 	}
-	runner.mu.Lock()
-	runner.failOn = map[string]bool{}
-	runner.mu.Unlock()
 	// retry 刚返回时，release 状态可能仍是上一轮的 failed（新一轮还没把状态改成 running），
 	// 因此这里容忍中间态，最终必须收敛到 success。
 	finalStatus := env.waitReleaseStatusAfterRetry(t, jwt, release2, 60*time.Second)
@@ -1004,5 +1021,251 @@ verified:
 	}
 	if n != 0 {
 		t.Fatalf("没有上一版本时不应回滚任何机器，实际 %d", n)
+	}
+}
+
+// TestAppsPayloadRedactsSensitiveFields 覆盖 A8 / R1：敏感字段按调用者可见性收敛，env_keys 始终只给键名。
+func TestAppsPayloadRedactsSensitiveFields(t *testing.T) {
+	env := newTestEnv(t)
+	admin := env.login()
+	ctx := context.Background()
+
+	// 管理员 = 全局范围 + deploy.write ⇒ 看得到原值。
+	status, raw := env.request(http.MethodPost, "/api/v1/apps", admin, map[string]any{
+		"name": "敏感字段", "slug": "secret-app",
+		"env_json":    `{"B":"2","A":"1"}`,
+		"init_script": "echo init",
+		"restart_cmd": "systemctl restart secret-app",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("创建应用失败: %d body=%s", status, raw)
+	}
+	var created appPayload
+	decodeData(t, raw, &created)
+	if created.EnvJSON == nil || *created.EnvJSON != `{"B":"2","A":"1"}` {
+		t.Fatalf("管理员应看到 env_json 原值: %v", created.EnvJSON)
+	}
+	if created.InitScript == nil || created.RestartCmd == nil {
+		t.Fatalf("管理员应看到 init_script/restart_cmd: %+v", created)
+	}
+	if created.Redacted {
+		t.Fatal("管理员不应被标记 redacted")
+	}
+	if len(created.EnvKeys) != 2 || created.EnvKeys[0] != "A" || created.EnvKeys[1] != "B" {
+		t.Fatalf("env_keys 应是键名的字母序清单: %v", created.EnvKeys)
+	}
+
+	srv := env.createServerVia(admin, map[string]any{"name": "范围服务器", "host": "10.9.0.1", "mode": "agent"})
+	// ① 有 deploy.write 但范围不是全局 ⇒ 收敛。
+	scopedRole := env.createRoleVia(admin, "范围内的发布员", []string{"deploy.read", "deploy.write"},
+		map[string]any{"mode": "servers", "server_ids": []string{srv.ID}})
+	env.createUserVia(admin, "scoped-deployer", "ScopedDeploy-123", scopedRole)
+	scoped := env.loginAs(t, "scoped-deployer", "ScopedDeploy-123")
+	// ② 全局范围但只有 deploy.read ⇒ 收敛。
+	readRole := env.createRoleVia(admin, "发布只读", []string{"deploy.read"}, map[string]any{"mode": "all"})
+	env.createUserVia(admin, "deploy-viewer", "DeployViewer-123", readRole)
+	viewer := env.loginAs(t, "deploy-viewer", "DeployViewer-123")
+
+	for _, tc := range []struct{ name, token string }{
+		{"范围内的发布员", scoped},
+		{"发布只读", viewer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// 详情：字段置 null，但不改鉴权结论（仍 200，不是 403）。
+			status, raw := env.request(http.MethodGet, "/api/v1/apps/"+created.ID, tc.token, nil)
+			if status != http.StatusOK {
+				t.Fatalf("越权读仍应 200（只收敛字段）: %d body=%s", status, raw)
+			}
+			var got appPayload
+			decodeData(t, raw, &got)
+			if got.EnvJSON != nil || got.InitScript != nil || got.RestartCmd != nil {
+				t.Fatalf("敏感字段应全部为 null: env=%v init=%v restart=%v", got.EnvJSON, got.InitScript, got.RestartCmd)
+			}
+			if !got.Redacted {
+				t.Fatal("收敛时应标记 redacted=true")
+			}
+			if len(got.EnvKeys) != 2 || got.EnvKeys[0] != "A" || got.EnvKeys[1] != "B" {
+				t.Fatalf("受限调用者仍应拿到 env_keys（只含键名）: %v", got.EnvKeys)
+			}
+			if got.Name != "敏感字段" || got.Slug != "secret-app" {
+				t.Fatalf("非敏感字段不应被收敛: %+v", got)
+			}
+
+			// 列表：同一收敛函数，元素结构一致。
+			status, raw = env.request(http.MethodGet, "/api/v1/apps", tc.token, nil)
+			if status != http.StatusOK {
+				t.Fatalf("读应用列表失败: %d body=%s", status, raw)
+			}
+			var list []appPayload
+			decodeData(t, raw, &list)
+			var found *appPayload
+			for i := range list {
+				if list[i].ID == created.ID {
+					found = &list[i]
+				}
+			}
+			if found == nil {
+				t.Fatalf("列表里没有该应用: %+v", list)
+			}
+			if found.EnvJSON != nil || found.InitScript != nil || found.RestartCmd != nil || !found.Redacted {
+				t.Fatalf("列表元素也应收敛: %+v", found)
+			}
+			if len(found.EnvKeys) != 2 {
+				t.Fatalf("列表元素也应带 env_keys: %v", found.EnvKeys)
+			}
+		})
+	}
+
+	// env_json 是脏数据（非法 JSON）时不能 500，env_keys 退化为空数组。
+	dirty := `{bad`
+	if err := env.st.UpdateAppDeploy(ctx, created.ID, nil, nil, nil, nil, &dirty, nil, nil, nil); err != nil {
+		t.Fatalf("写入脏 env_json 失败: %v", err)
+	}
+	status, raw = env.request(http.MethodGet, "/api/v1/apps/"+created.ID, admin, nil)
+	if status != http.StatusOK {
+		t.Fatalf("env_json 非法时不应 500: %d body=%s", status, raw)
+	}
+	var dirtyPayload appPayload
+	decodeData(t, raw, &dirtyPayload)
+	if len(dirtyPayload.EnvKeys) != 0 || dirtyPayload.EnvKeysTruncated {
+		t.Fatalf("非法 env_json 应给空 env_keys: %+v", dirtyPayload)
+	}
+	if dirtyPayload.EnvKeys == nil {
+		t.Fatal("env_keys 必须始终出现（即使为空也应是 []）")
+	}
+
+	// 超过 64 个键：截断 + env_keys_truncated=true。
+	big := make(map[string]string, 65)
+	for i := 0; i < 65; i++ {
+		big[fmt.Sprintf("K%02d", i)] = "v"
+	}
+	bigRaw, err := json.Marshal(big)
+	if err != nil {
+		t.Fatalf("序列化环境变量失败: %v", err)
+	}
+	bigStr := string(bigRaw)
+	if err := env.st.UpdateAppDeploy(ctx, created.ID, nil, nil, nil, nil, &bigStr, nil, nil, nil); err != nil {
+		t.Fatalf("写入大 env_json 失败: %v", err)
+	}
+	status, raw = env.request(http.MethodGet, "/api/v1/apps/"+created.ID, admin, nil)
+	if status != http.StatusOK {
+		t.Fatalf("读取应用失败: %d body=%s", status, raw)
+	}
+	var bigPayload appPayload
+	decodeData(t, raw, &bigPayload)
+	if len(bigPayload.EnvKeys) != maxAppEnvKeys || !bigPayload.EnvKeysTruncated {
+		t.Fatalf("超过 %d 个键应截断并置 env_keys_truncated: len=%d truncated=%v",
+			maxAppEnvKeys, len(bigPayload.EnvKeys), bigPayload.EnvKeysTruncated)
+	}
+}
+
+// TestPatchAppSemanticsAndValidation 覆盖 A9：PATCH 缺键不变 / 空串清空 / 四项入参校验。
+func TestPatchAppSemanticsAndValidation(t *testing.T) {
+	env := newTestEnv(t)
+	admin := env.login()
+	app := env.createAppVia(admin, "patch-app", "patch-app")
+
+	// 1) 写入环境变量。
+	envJSON := `{"K":"v"}`
+	status, raw := env.request(http.MethodPatch, "/api/v1/apps/"+app.ID, admin,
+		map[string]any{"env_json": envJSON, "healthcheck_path": "/healthz", "healthcheck_port": 18781})
+	if status != http.StatusOK {
+		t.Fatalf("PATCH 失败: %d body=%s", status, raw)
+	}
+	// 2) 只改 description：env_json 与 healthcheck_path 必须保持不变（缺键=不变）。
+	status, raw = env.request(http.MethodPatch, "/api/v1/apps/"+app.ID, admin,
+		map[string]any{"description": "只改描述"})
+	if status != http.StatusOK {
+		t.Fatalf("PATCH description 失败: %d body=%s", status, raw)
+	}
+	var afterPatch appPayload
+	decodeData(t, raw, &afterPatch)
+	if afterPatch.EnvJSON == nil || *afterPatch.EnvJSON != envJSON {
+		t.Fatalf("未提供 env_json 时库中环境变量不应变: %v", afterPatch.EnvJSON)
+	}
+	if afterPatch.HealthcheckPath == nil || *afterPatch.HealthcheckPath != "/healthz" {
+		t.Fatalf("未提供 healthcheck_path 时不应被清空: %v", afterPatch.HealthcheckPath)
+	}
+
+	// 3) 空串 = 清空。
+	status, raw = env.request(http.MethodPatch, "/api/v1/apps/"+app.ID, admin, map[string]any{"env_json": ""})
+	if status != http.StatusOK {
+		t.Fatalf("PATCH 清空 env_json 失败: %d body=%s", status, raw)
+	}
+	var cleared appPayload
+	decodeData(t, raw, &cleared)
+	if cleared.EnvJSON != nil {
+		t.Fatalf("env_json 传空串应清空为 null: %v", cleared.EnvJSON)
+	}
+	if len(cleared.EnvKeys) != 0 {
+		t.Fatalf("清空后 env_keys 应为空: %v", cleared.EnvKeys)
+	}
+
+	// 4) 入参校验：400 + invalid_argument + message 指名违法字段。
+	cases := []struct {
+		name    string
+		body    map[string]any
+		wantMsg string
+	}{
+		{"healthcheck_path 不以 / 开头", map[string]any{"healthcheck_path": "healthz"}, "必须以 / 开头"},
+		{"healthcheck_path 含空白", map[string]any{"healthcheck_path": "/he althz"}, "不能包含空白字符"},
+		{"healthcheck_path 含查询串", map[string]any{"healthcheck_path": "/healthz?full=1"}, "? 或 #"},
+		{"healthcheck_path 含锚点", map[string]any{"healthcheck_path": "/healthz#top"}, "? 或 #"},
+		{"healthcheck_path 过长", map[string]any{"healthcheck_path": "/" + strings.Repeat("a", maxHealthcheckPathLen)}, "过长"},
+		{"keep_paths 绝对路径", map[string]any{"keep_paths": "/var/log"}, "绝对路径"},
+		{"keep_paths 含上跳", map[string]any{"keep_paths": "conf/../../etc"}, ".."},
+		{"healthcheck_port 越界", map[string]any{"healthcheck_port": 70000}, "1-65535"},
+		{"env_json 非对象", map[string]any{"env_json": `["a"]`}, "env_json"},
+		{"所有键都缺失", map[string]any{}, "至少需要提供"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, raw := env.request(http.MethodPatch, "/api/v1/apps/"+app.ID, admin, tc.body)
+			if status != http.StatusBadRequest {
+				t.Fatalf("应 400，实际 %d body=%s", status, raw)
+			}
+			code, message, _ := decodeErrorBody(t, raw)
+			if code != codeInvalidArgument {
+				t.Fatalf("code 应为 %s，实际 %s（%s）", codeInvalidArgument, code, message)
+			}
+			if !strings.Contains(message, tc.wantMsg) {
+				t.Fatalf("message 应包含 %q，实际 %q", tc.wantMsg, message)
+			}
+		})
+	}
+
+	// 5) 合法值仍可保存（防止校验过度）。
+	status, raw = env.request(http.MethodPatch, "/api/v1/apps/"+app.ID, admin, map[string]any{
+		"healthcheck_path": "/healthz2", "healthcheck_port": 0, "keep_paths": "conf,logs,web/client",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("合法值应保存成功: %d body=%s", status, raw)
+	}
+	var okPayload appPayload
+	decodeData(t, raw, &okPayload)
+	if okPayload.HealthcheckPath == nil || *okPayload.HealthcheckPath != "/healthz2" {
+		t.Fatalf("合法 healthcheck_path 未保存: %v", okPayload.HealthcheckPath)
+	}
+}
+
+// TestCreateReleaseRejectsCanaryCountAboveServers 覆盖 A9c：canary_count 超过目标服务器数 → 400 指名 canary_count。
+func TestCreateReleaseRejectsCanaryCountAboveServers(t *testing.T) {
+	env, _, _, app, servers := canaryFixture(t, 3)
+	jwt := env.login()
+
+	status, raw := env.request(http.MethodPost, "/api/v1/releases", jwt, map[string]any{
+		"app_id": app.ID, "template_id": "tmpl-canary", "version": "2.0.0",
+		"artifact_id": "art-canary", "server_ids": servers,
+		"strategy": "canary", "canary_count": 5, "hold_seconds": 0,
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("canary_count 超过服务器数应 400，实际 %d body=%s", status, raw)
+	}
+	code, message, _ := decodeErrorBody(t, raw)
+	if code != codeInvalidArgument {
+		t.Fatalf("code 应为 %s，实际 %s", codeInvalidArgument, code)
+	}
+	if !strings.Contains(message, "canary_count") {
+		t.Fatalf("message 应指名 canary_count，实际 %q", message)
 	}
 }

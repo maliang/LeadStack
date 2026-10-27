@@ -40,7 +40,7 @@ func (s *Store) CreateCheck(ctx context.Context, c *Check) error {
 		c.ID, c.Name, c.Kind, c.Target, c.IntervalS, c.TimeoutS, c.ParamsJSON, boolToInt(c.Enabled), c.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return fmt.Errorf("创建检测项 %s: %w", c.Name, ErrConflict)
+			return fmt.Errorf("检测项 %s 已存在: %w", c.Name, ErrConflict)
 		}
 		return fmt.Errorf("创建检测项 %s: %w", c.Name, err)
 	}
@@ -226,9 +226,25 @@ func (s *Store) ListCheckTargets(ctx context.Context, checkID string) ([]string,
 }
 
 // ListAllCheckTargets 一次性返回 check_id → server_id 列表（列表页避免 N+1 查询）。
-func (s *Store) ListAllCheckTargets(ctx context.Context) (map[string][]string, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT check_id, server_id FROM check_targets ORDER BY check_id ASC, server_id ASC`)
+//
+// serverIDs 收紧目标集合：nil = 不限；非 nil = 只返回落在集合内的目标（非 nil 空切片
+// 表示调用者范围内一台服务器都没有，直接返回空）。检测项「是否可见」与「payload 里该
+// 出现哪些 server_ids」都由这一份过滤后的目标决定，避免可见性判定与字段裁剪各算一遍、
+// 出现「列表显示可见、字段却带着范围外服务器」的裂缝。
+func (s *Store) ListAllCheckTargets(ctx context.Context, serverIDs []string) (map[string][]string, error) {
+	if serverIDs != nil && len(serverIDs) == 0 {
+		return map[string][]string{}, nil
+	}
+	query := `SELECT check_id, server_id FROM check_targets`
+	args := make([]any, 0, len(serverIDs))
+	if serverIDs != nil {
+		query += ` WHERE server_id IN (` + placeholders(len(serverIDs)) + `)`
+		for _, id := range serverIDs {
+			args = append(args, id)
+		}
+	}
+	query += ` ORDER BY check_id ASC, server_id ASC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("批量查询检测项目标: %w", err)
 	}
@@ -318,12 +334,24 @@ type CheckResultFilter struct {
 	From     int64
 	To       int64
 	Limit    int
+	// ServerIDs 是资源范围：只保留 server_id 落在集合内的结果；nil = 不限，
+	// 非 nil 且长度为 0 = 范围为空（直接返回空列表，调用方不必先判空）。
+	//
+	// 为什么必须下沉到 SQL：检测项是「一台机器可达即可见」的对象（checkVisible 只看
+	// 目标集合与范围有没有交集），但同一检测项下的结果分属不同服务器。只在 Go 里按
+	// 可见性过一遍，等于把「组内可见检测项」当成「组内可见全部结果」，组范围用户能
+	// 读到组外服务器的时间线（还带 server_name）。范围条件因此进 SQL、且排在 LIMIT 前。
+	ServerIDs []string
 }
 
 // ListCheckResults 返回结果时间线（按时间倒序）。
 func (s *Store) ListCheckResults(ctx context.Context, f CheckResultFilter) ([]CheckResult, error) {
 	if f.Limit <= 0 {
 		f.Limit = 100
+	}
+	if f.ServerIDs != nil && len(f.ServerIDs) == 0 {
+		// 范围为空：没有任何服务器可见，直接返回空结果（也避免 SQL 出现 IN ()）。
+		return []CheckResult{}, nil
 	}
 	query := `SELECT id, check_id, server_id, ts, ok, latency_ms, status_code, message
 	            FROM check_results WHERE check_id = ?`
@@ -339,6 +367,20 @@ func (s *Store) ListCheckResults(ctx context.Context, f CheckResultFilter) ([]Ch
 	if f.To > 0 {
 		query += ` AND ts <= ?`
 		args = append(args, f.To)
+	}
+	if len(f.ServerIDs) > 0 {
+		// 紧贴 LIMIT 之前：先筛范围再截断，范围用户不会因为「范围内结果不在全局最新
+		// N 条」而看到空时间线。索引有测量依据（sqlite3 EXPLAIN QUERY PLAN，迁移
+		// 0004 的 idx_check_results_lookup(check_id, server_id, ts)）：
+		//   SEARCH check_results USING COVERING INDEX idx_check_results_lookup
+		//          (check_id=? AND server_id=?)
+		//   USE TEMP B-TREE FOR ORDER BY
+		// 即范围条件直接吃既有复合索引做 SEARCH（不是全表扫），因此无需新增迁移。
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(f.ServerIDs)), ",")
+		query += ` AND server_id IN (` + placeholders + `)`
+		for _, id := range f.ServerIDs {
+			args = append(args, id)
+		}
 	}
 	query += ` ORDER BY ts DESC, id DESC LIMIT ?`
 	args = append(args, f.Limit)
@@ -364,11 +406,33 @@ func (s *Store) ListCheckResults(ctx context.Context, f CheckResultFilter) ([]Ch
 }
 
 // ListLatestCheckResults 返回每个检测项最近的一条结果；checkIDs 为空表示全部。
-func (s *Store) ListLatestCheckResults(ctx context.Context, checkIDs []string) (map[string]CheckResult, error) {
+//
+// serverIDs 收紧「最近」的口径：nil = 不限；非 nil = 只在给定服务器里取最新一行
+// （非 nil 空切片 = 范围为空，直接返回空）。约束必须落在 SQL 的子查询里：
+// 「MAX(ts) 再取行」若只按 check_id 算，得到的是全服务器的最新一条，可能就是范围外
+// 服务器那一行（t36 报的 last_result 泄露）。外层再按同一集合取行，是因为子查询取到
+// 的 ts 可能同时被范围外服务器占用，只靠内层条件仍会把它们的行带进来。
+func (s *Store) ListLatestCheckResults(ctx context.Context, checkIDs, serverIDs []string) (map[string]CheckResult, error) {
+	if serverIDs != nil && len(serverIDs) == 0 {
+		return map[string]CheckResult{}, nil
+	}
+	sub := `SELECT MAX(ts) FROM check_results WHERE check_id = r.check_id`
+	args := make([]any, 0, len(checkIDs)+2*len(serverIDs))
+	if serverIDs != nil {
+		sub += ` AND server_id IN (` + placeholders(len(serverIDs)) + `)`
+		for _, id := range serverIDs {
+			args = append(args, id)
+		}
+	}
 	query := `SELECT r.id, r.check_id, r.server_id, r.ts, r.ok, r.latency_ms, r.status_code, r.message
 	            FROM check_results r
-	           WHERE r.ts = (SELECT MAX(ts) FROM check_results WHERE check_id = r.check_id)`
-	args := make([]any, 0, len(checkIDs))
+	           WHERE r.ts = (` + sub + `)`
+	if serverIDs != nil {
+		query += ` AND r.server_id IN (` + placeholders(len(serverIDs)) + `)`
+		for _, id := range serverIDs {
+			args = append(args, id)
+		}
+	}
 	if len(checkIDs) > 0 {
 		query += ` AND r.check_id IN (` + placeholders(len(checkIDs)) + `)`
 		for _, id := range checkIDs {
@@ -388,6 +452,11 @@ func (s *Store) ListLatestCheckResults(ctx context.Context, checkIDs []string) (
 		if err != nil {
 			return nil, err
 		}
+		// 多台服务器同一毫秒都有结果时（同一次调度批量写入很常见），取 id 最大的一条，
+		// 让「最近一条」在并列时不随 SQLite 返回顺序漂移。
+		if prev, ok := out[r.CheckID]; ok && (r.TS < prev.TS || (r.TS == prev.TS && r.ID < prev.ID)) {
+			continue
+		}
 		out[r.CheckID] = *r
 	}
 	if err := rows.Err(); err != nil {
@@ -397,14 +466,32 @@ func (s *Store) ListLatestCheckResults(ctx context.Context, checkIDs []string) (
 }
 
 // ListCheckStates 返回检测项状态；checkIDs 为空表示全部。
-func (s *Store) ListCheckStates(ctx context.Context, checkIDs []string) (map[string][]CheckState, error) {
+//
+// serverIDs 收紧状态口径：nil = 不限；非 nil = 只返回给定服务器的状态（非 nil 空切片 =
+// 范围为空，直接返回空）。必须一起收紧：状态里的 consecutive_fail 与「是否 down」会直接
+// 折算成列表上的 status，若把范围外服务器的失败算进来，组范围用户会看到「我的机器都通，
+// 这个检测项却红了」这种由范围外服务器造成的假象。
+func (s *Store) ListCheckStates(ctx context.Context, checkIDs, serverIDs []string) (map[string][]CheckState, error) {
+	if serverIDs != nil && len(serverIDs) == 0 {
+		return map[string][]CheckState{}, nil
+	}
 	query := `SELECT check_id, server_id, ok, consecutive_fail, since, last_ts, last_message FROM check_state`
-	args := make([]any, 0, len(checkIDs))
+	conds := make([]string, 0, 2)
+	args := make([]any, 0, len(checkIDs)+len(serverIDs))
 	if len(checkIDs) > 0 {
-		query += ` WHERE check_id IN (` + placeholders(len(checkIDs)) + `)`
+		conds = append(conds, `check_id IN (`+placeholders(len(checkIDs))+`)`)
 		for _, id := range checkIDs {
 			args = append(args, id)
 		}
+	}
+	if serverIDs != nil {
+		conds = append(conds, `server_id IN (`+placeholders(len(serverIDs))+`)`)
+		for _, id := range serverIDs {
+			args = append(args, id)
+		}
+	}
+	if len(conds) > 0 {
+		query += ` WHERE ` + strings.Join(conds, ` AND `)
 	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -440,10 +527,27 @@ func (s *Store) GetCheckState(ctx context.Context, checkID, serverID string) (*C
 }
 
 // ListAvailability 统计 since（Unix 毫秒）以来每个检测项的可用率。
-func (s *Store) ListAvailability(ctx context.Context, since int64) (map[string]AvailabilityStat, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT check_id, COUNT(*), COALESCE(SUM(ok), 0) FROM check_results
-		  WHERE ts >= ? GROUP BY check_id`, since)
+//
+// serverIDs 收紧统计口径：nil = 不限；非 nil = 只统计给定服务器的结果（非 nil 空切片 =
+// 范围为空，直接返回空）。原先只做 GROUP BY check_id，等于把组外服务器的成功次数算进
+// 组范围用户的 availability_24h/results_24h，既泄露别处机器状况，也让「本组全挂」
+// 显示成 85.71% 这种假绿。
+func (s *Store) ListAvailability(ctx context.Context, since int64, serverIDs []string) (map[string]AvailabilityStat, error) {
+	if serverIDs != nil && len(serverIDs) == 0 {
+		return map[string]AvailabilityStat{}, nil
+	}
+	query := `SELECT check_id, COUNT(*), COALESCE(SUM(ok), 0) FROM check_results
+	            WHERE ts >= ?`
+	args := make([]any, 0, 1+len(serverIDs))
+	args = append(args, since)
+	if serverIDs != nil {
+		query += ` AND server_id IN (` + placeholders(len(serverIDs)) + `)`
+		for _, id := range serverIDs {
+			args = append(args, id)
+		}
+	}
+	query += ` GROUP BY check_id`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("统计可用率: %w", err)
 	}
@@ -631,6 +735,42 @@ func (s *Store) ListEnabledCheckTargets(ctx context.Context) ([]EnabledCheckTarg
 		return nil, fmt.Errorf("遍历启用的检测目标: %w", err)
 	}
 	return out, nil
+}
+
+// GetCheckTarget 按 (检测项, 服务器) 精确查一个目标，忽略检测项的 enabled 标志。
+//
+// 手动「立即执行」用它：停用只是停掉定时探测，用户点「立即执行」仍应真正执行一次并
+// 落库；只查 ListEnabledCheckTargets 会命中不到停用项，结果是零条结果、页面全是空值。
+// 目标不存在（检测项与服务器不在 check_targets 里）返回 ErrNotFound。
+func (s *Store) GetCheckTarget(ctx context.Context, checkID, serverID string) (*EnabledCheckTarget, error) {
+	if strings.TrimSpace(checkID) == "" || strings.TrimSpace(serverID) == "" {
+		return nil, fmt.Errorf("查询检测目标: %w", ErrNotFound)
+	}
+	row := s.db.QueryRowContext(ctx,
+		`SELECT c.id, c.name, c.kind, c.target, c.interval_s, c.timeout_s, c.params_json, c.enabled, c.created_at,
+		        ct.server_id, s.mode
+		   FROM checks c
+		   JOIN check_targets ct ON ct.check_id = c.id
+		   JOIN servers s ON s.id = ct.server_id
+		  WHERE c.id = ? AND ct.server_id = ?`, checkID, serverID)
+
+	var (
+		t       EnabledCheckTarget
+		enabled int
+	)
+	if err := row.Scan(&t.Check.ID, &t.Check.Name, &t.Check.Kind, &t.Check.Target,
+		&t.Check.IntervalS, &t.Check.TimeoutS, &t.Check.ParamsJSON, &enabled, &t.Check.CreatedAt,
+		&t.ServerID, &t.Mode); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("查询检测目标: %w", ErrNotFound)
+		}
+		return nil, fmt.Errorf("查询检测目标: %w", err)
+	}
+	t.Check.Enabled = enabled != 0
+	if strings.TrimSpace(t.Check.ParamsJSON) == "" {
+		t.Check.ParamsJSON = "{}"
+	}
+	return &t, nil
 }
 
 // UpsertCheckState 按一次检测结果推进状态机：

@@ -26,7 +26,7 @@ func (s *Store) CreateCredential(ctx context.Context, c *Credential) error {
 		c.ID, c.Name, c.Kind, c.Username, c.SecretEnc, nullableStr(c.Fingerprint), c.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return fmt.Errorf("创建凭证 %s: %w", c.Name, ErrConflict)
+			return fmt.Errorf("凭证 %s 已存在: %w", c.Name, ErrConflict)
 		}
 		return fmt.Errorf("创建凭证 %s: %w", c.Name, err)
 	}

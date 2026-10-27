@@ -492,18 +492,25 @@ func TestAgentHostInfoVisibleInList(t *testing.T) {
 		IPAddrs: []string{"10.0.0.9"}, CollectedAt: store.NowMS(),
 	})
 
+	// 轮询条件必须看内容而不只是 HostInfo != nil：零值快照（Hostname 为空）说明这一帧没有真正落进去，
+	// 要继续等到正确的那一帧。否则「空载荷覆盖了快照」这类缺陷会表现为随机失败（改了 poll 条件才稳定暴露）。
 	var srv serverPayload
+	var lastSeen []serverPayload
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		servers := env.listServers(jwt)
+		lastSeen = servers
 		if len(servers) == 1 && servers[0].HostInfo != nil {
-			srv = servers[0]
-			break
+			var probe protocol.HostInfo
+			if err := json.Unmarshal(servers[0].HostInfo, &probe); err == nil && probe.Hostname != "" {
+				srv = servers[0]
+				break
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	if srv.HostInfo == nil {
-		t.Fatalf("agent 上报后列表应带 host_info: %+v", env.listServers(jwt))
+		t.Fatalf("agent 上报后列表应带 host_info: %+v", lastSeen)
 	}
 
 	var info protocol.HostInfo
@@ -527,6 +534,98 @@ func TestAgentHostInfoVisibleInList(t *testing.T) {
 	}
 	if detail.Data.HostInfo == nil {
 		t.Fatal("详情接口应带 host_info")
+	}
+
+	// 空载荷的 host_info 帧（agent 版本回退/序列化失败时的真实形态）不得把上面的快照清空。
+	// 这条断言让「缺防空守卫」在走真实 WebSocket 链路时也必然稳定变红，而不是靠负载运气。
+	sendFrame(t, conn, protocol.TypeHostInfo, protocol.HostInfo{})
+	time.Sleep(200 * time.Millisecond)
+	afterEmpty := env.listServers(jwt)
+	if len(afterEmpty) != 1 || afterEmpty[0].HostInfo == nil {
+		t.Fatalf("空帧后列表仍应带 host_info: %+v", afterEmpty)
+	}
+	var afterInfo protocol.HostInfo
+	if err := json.Unmarshal(afterEmpty[0].HostInfo, &afterInfo); err != nil {
+		t.Fatalf("空帧后解析 host_info 失败: %v", err)
+	}
+	if afterInfo.Hostname != "hi-agent" || afterInfo.CPUCores != 8 {
+		t.Fatalf("空载荷的 host_info 覆盖了已有快照: %+v", afterInfo)
+	}
+}
+
+// TestAgentHostInfoEmptyPayloadKeepsSnapshot 锁定「空 host_info 帧不得覆盖已有快照」。
+//
+// 现实形态：agent 因版本回退/序列化失败发来一帧没有载荷的 host_info，服务端把零值 struct
+// 序列化后写库，页面上服务器的主机信息就变成一片空。这里直接调 onAgentHostInfo 走出真实落库路径。
+func TestAgentHostInfoEmptyPayloadKeepsSnapshot(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+	srv := env.createServerVia(jwt, map[string]any{"name": "hi-guard", "host": "10.10.8.1", "mode": "agent"})
+
+	ctx := context.Background()
+	ac := &agentConn{}
+	ac.setServerID(srv.ID)
+	tok := &store.EnrollToken{ID: "tok-host-info-guard"}
+
+	// 1) 先落一份正常快照，后续空帧都不许改动它的字节与 collected_at。
+	good := protocol.HostInfo{
+		Hostname: "hi-guard", OS: "linux", Arch: "amd64", Kernel: "6.1.0",
+		CPUCores: 8, MemTotalBytes: 16 << 30, CollectedAt: 1_700_000_000_000,
+	}
+	raw, err := json.Marshal(good)
+	if err != nil {
+		t.Fatalf("序列化正常快照失败: %v", err)
+	}
+	if err := env.api.onAgentHostInfo(ctx, ac, tok, "10.10.8.1", protocol.Envelope{Type: protocol.TypeHostInfo, Payload: raw}); err != nil {
+		t.Fatalf("落正常快照失败: %v", err)
+	}
+	before, err := env.st.GetServerHostInfo(ctx, srv.ID)
+	if err != nil {
+		t.Fatalf("读取初次快照失败: %v", err)
+	}
+	if before.CollectedAt != good.CollectedAt {
+		t.Fatalf("初次快照 collected_at 应为上报值 %d，实际 %d", good.CollectedAt, before.CollectedAt)
+	}
+
+	// 2) 空载荷、空对象、字段全空三种形态：一律静默忽略（返回 nil），且快照一字不变。
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{"无载荷", nil},
+		{"空对象", []byte("{}")},
+		{"字段全空", []byte(`{"hostname":"","os":""}`)},
+	}
+	for _, c := range cases {
+		if err := env.api.onAgentHostInfo(ctx, ac, tok, "10.10.8.1", protocol.Envelope{Type: protocol.TypeHostInfo, Payload: c.payload}); err != nil {
+			t.Fatalf("%s：空帧应被静默忽略，实际返回错误 %v", c.name, err)
+		}
+		after, err := env.st.GetServerHostInfo(ctx, srv.ID)
+		if err != nil {
+			t.Fatalf("%s：读取快照失败: %v", c.name, err)
+		}
+		if after.InfoJSON != before.InfoJSON || after.CollectedAt != before.CollectedAt {
+			t.Fatalf("%s：空帧覆盖了已有快照（before=%+v after=%+v）", c.name, before, after)
+		}
+	}
+
+	// 3) 反向确认守卫没有把正常帧一起挡掉：换一份新快照必须能写进去。
+	newer := good
+	newer.Hostname = "hi-guard-2"
+	newer.CollectedAt = 1_700_000_600_000
+	raw2, err := json.Marshal(newer)
+	if err != nil {
+		t.Fatalf("序列化第二份快照失败: %v", err)
+	}
+	if err := env.api.onAgentHostInfo(ctx, ac, tok, "10.10.8.1", protocol.Envelope{Type: protocol.TypeHostInfo, Payload: raw2}); err != nil {
+		t.Fatalf("第二次正常上报失败: %v", err)
+	}
+	final, err := env.st.GetServerHostInfo(ctx, srv.ID)
+	if err != nil {
+		t.Fatalf("读取最终快照失败: %v", err)
+	}
+	if final.CollectedAt != newer.CollectedAt || final.InfoJSON == before.InfoJSON {
+		t.Fatalf("正常帧应覆盖快照（期望 collected_at=%d，实际 %+v）", newer.CollectedAt, final)
 	}
 }
 

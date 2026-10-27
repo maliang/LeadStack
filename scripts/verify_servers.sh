@@ -44,6 +44,19 @@ api() { # api METHOD PATH [JSON_BODY] [TOKEN]
 status_of() { curl -sS -o /dev/null -w '%{http_code}' "$@" 2>/dev/null; }
 # jget <json> <jq-filter>：取不到时返回空串，不报错
 jget() { printf '%s' "$1" | jq -r "$2 // empty" 2>/dev/null; }
+# 前端产物断言：make build 会把 web/dist 拷进 internal/webui/dist，缺特征串即视为契约回归。
+dist_has() { # <label> <needle...>
+  local label="$1"; shift
+  local js missing="" needle
+  js="$(ls -t internal/webui/dist/assets/index-*.js 2>/dev/null | head -1)"
+  if [ -z "$js" ]; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
+  for needle in "$@"; do grep -qF -- "$needle" "$js" || missing="${missing}[${needle}] "; done
+  if [ -z "$missing" ]; then
+    pass "${label}（${js##*/} 命中 $# 个特征串）"
+  else
+    fail "${label}：产物缺少 ${missing}"
+  fi
+}
 
 echo "临时数据目录：$DATA_DIR"
 
@@ -256,6 +269,14 @@ if [ -n "$ETOKEN" ]; then
 else
   fail "创建接入令牌失败：$ETOKEN_JSON"
 fi
+
+# ---------------------------------------------------------------- 13. Agent 升级入口
+step "13. Agent 升级入口（A30）"
+# A30 前端：服务器页要能对 mode=agent 的机器发起升级（预填当前平台归档），
+# 无 agent.upgrade 权限时按钮禁用并给出只读说明（title 即说明文本）。
+dist_has "升级 Agent 入口与无权限说明（A30）" \
+  'server.agentUpgrade' 'server.agentUpgradeSubmit' 'server.agentUpgradeNoPerm' \
+  'agent_assets' 'refreshUpdateCheck().then('
 
 # ---------------------------------------------------------------- 汇总
 step "验收结果"

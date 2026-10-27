@@ -193,7 +193,7 @@ sudo sh install-control.sh --from-file ./leadstack --port 8080
 安装之后改端口有两种方式：重跑脚本带新 `--port`（服务会自动重启），或编辑
 `/etc/leadstack/leadstack.env` 里的 `LEADSTACK_LISTEN` 后 `systemctl restart leadstack`。
 
-验收脚本：`make verify-install`（或 `bash scripts/verify_install_control.sh`，39 项）——覆盖端口参数校验、
+验收脚本：`make verify-install`（或 `bash scripts/verify_install_control.sh`，48 项；其中 5 项容器内 systemd 单元渲染需要本机 Docker）——覆盖端口参数校验、
 按端口真实监听、篡改包必须中止、幂等重装、卸载保留数据、环境文件引号编码，以及 Linux systemd 单元渲染（有 docker 时）。
 
 **B. 源码构建（开发或自建）**
@@ -393,7 +393,9 @@ db-01.internal
    支持 `{{ROOT}}`、`{{VERSION}}`、`{{RELEASE_DIR}}`、`{{ARTIFACT_URL}}`、`{{ARTIFACT_SHA256}}` 等占位符，并可「渲染预览」看替换结果；
 3. **制品**：填 URL（**必须提供 sha256**）或上传文件（服务端自动算校验和）；
 4. **发布**：选应用 → 模板 → 版本 → 制品 → 目标服务器（可按分组/标签全选）→ 确认；
-5. 详情页可看**逐台状态 + 实时增量日志**；失败可「重试失败项」，也可「回滚」。
+5. 详情页可看**逐台状态 + 实时增量日志**；失败可「重试失败项」，也可「回滚」；发到一半后悔了点**「中止发布」**——
+   二次确认会写明「已完成的 N 台不会回滚」，中止只取消还在排队/执行中的服务器（响应里的台数会显示在提示里）；
+   中止后发布整体状态显示为**「已取消」（琥珀色）**，只有真发生故障才是红色「失败」——成功若干台 + 主动中止不会被判成失败。
 
 **接管已有项目**（目录型 / systemd 型）：
 - 应用「部署方式 = 接管已有目录」→ 填目标目录（或从服务器详情「接管已有应用」自动探测并回填）；
@@ -461,16 +463,22 @@ leadstack restore --file /tmp/leadstack.lsbak --data-dir ./data
 > ⚠️ **`backup.pass` 是解密备份的唯一钥匙，必须与备份文件分开保管**（另一台机器/密码管理器/离线介质）。
 > 它不在归档里；丢了它，备份永久无法解密。恢复前数据会自动移到 `<data_dir>.pre-restore-<时间>/` 保留。
 
+**界面里恢复备份（不用停服务）**：上传归档 → 控制端校验后**暂存**在 `<data_dir>/.restore-pending/`，提示「重启后生效」，
+并给出 linux / darwin / docker 三条重启命令（带复制按钮）。重启后再回到备份页：页面每 5 秒查一次
+`GET /api/v1/system/backup/restore-status`，状态从「待应用」变成「已应用」时会显示**「恢复已完成（归档 <sha 前 8 位>）」**——
+不用猜重启到底生效了没有。暂存目录还在时重复上传会被拒绝（409，并说明原因）。
+
 ### 第 10 步：多人协作与安全
 
 | 能力 | 说明 |
 |---|---|
 | **用户与角色** | 内置 `admin`（全部）/`operator`（日常运维）/`viewer`（只读）；另有 **自定义角色**：24 个权限点自由勾选 |
-| **服务器分组与资源级授权** | 分组是一等公民（可建/改/删/管成员）；角色可限定「全部 / 指定分组 / 指定服务器」，受限用户只能看到并操作范围内的机器与检测、告警、发布、定时任务 |
+| **服务器分组与资源级授权** | 分组是一等公民（可建/改/删/管成员）；角色可限定「全部 / 指定分组 / 指定服务器」，受限用户只能看到并操作范围内的机器与检测、告警、发布、定时任务。这些列表都是**先按范围过滤、再分页**，范围内的数据不会因为排在全局窗口之外就显示为空（见 `docs/ARCHITECTURE.md` §66） |
 | **登录保护** | 连续失败 `N` 次锁定账号（默认 5 次 / 15 分钟），同 IP 有频率上限；管理员可一键解锁；锁定与解锁均进审计 |
 | **API Token** | 「系统 → API Token」创建 `lsk_` 令牌供 CI/脚本调用；**明文只显示一次**，可撤销、可设过期 |
 | **审计日志** | 所有写操作自动记录（谁、何时、哪个 IP、改了什么），敏感字段脱敏；保留 180 天 |
 | **凭证安全** | SSH 密码/私钥 AES-256-GCM 加密、接口不回显；主机密钥变更即拒绝连接 |
+| **应用环境变量按权限收敛** | 应用详情/列表接口返回 `env_keys`（键名）与 `redacted` 标记；没有 `deploy.write` 或角色范围不是「全部」时，`env_json`/`init_script`/`restart_cmd` 一律返回 `null` 而不是 403——看不到内容，也不会泄露「这个应用存在」 |
 | **终端开关** | 浏览器终端默认关闭，需 `LEADSTACK_TERMINAL_ENABLED=true` 或 `--terminal-enabled` 开启 |
 
 ### 第 11 步：日常运维
@@ -727,6 +735,10 @@ sudo systemctl start leadstack
 
 > 完整 runbook（含发布流程、兼容性承诺、跨版本升级、常见坑）见 **[docs/UPGRADE.md](docs/UPGRADE.md)**。
 
+> **发版前必跑 `make verify-upgrade`**（`scripts/verify_upgrade.sh`，20 项）：在本地 mock GitHub Releases 上
+> 真实走一遍「检查更新 → 备份 → 换二进制 → 新版本崩溃 → watchdog 回退」。它不在 `make test-e2e` 的主干闸门里
+> ——那套验收要替换运行中的二进制并依赖 watchdog 的 10 秒级时序，对负载敏感、容易 flaky，所以单独跑。
+
 ---
 
 ## 常见问题
@@ -749,6 +761,26 @@ sudo systemctl start leadstack
 
 **Q：发布失败了，线上没事吧？**
 没事。失败时 `current` 仍指向上一个成功版本。看发布详情的「失败步骤」与日志，修好后重试或回滚即可。
+
+**Q：报错里的「请求编号」是干什么的？**
+错误提示末尾的「请求编号 xxx」就是响应头 `X-Request-Id` 的值，日志里搜这个号能定位到那一次请求，报障时把它一起发出来最省时间。
+顺便区分三种失败：`502` 且消息形如「下载文件失败: 连接被拒」= **目标机/远端**执行失败（控制端本身是好的，问题在这台机器或网络）；
+`503` 且消息形如「发布执行器未启用，无法体检」= **控制端自己**的能力没装配上（不是目标机的错，报文里没有「失败: 」前缀）；
+`500` 才是控制端内部错误。三者都带请求编号。
+
+**Q：受限用户看到「暂无发布记录」或「没有告警」，但我确定数据就在他的范围内？**
+先确认两件事：他的角色范围确实包含这台服务器，以及页面没有报错（报错会有 toast 和请求编号，那是另一码事）。
+如果两者都成立却还是空列表，那是旧版本「先截断再按范围过滤」的缺陷——只取了全局最新 N 条才开始筛范围，范围内的记录若排在窗口之外就被丢掉，接口于是回一个空数组。
+现在范围过滤在 SQL 里就排在 `LIMIT` 之前，分页/游标也随之变成「我范围内第 N 条起」，**客户端不需要改任何东西**；代价是旧版那种「单页可能不满」的现象消失了，只有最后一页会短（技术细节见 `docs/ARCHITECTURE.md` §66）。
+
+**Q：界面里恢复备份后，怎么确认真的生效了？**
+上传归档只是**暂存**，控制端重启时才会应用。备份页每 5 秒查一次 `/api/v1/system/backup/restore-status`，
+重启回来后状态会从「待应用」变成**「恢复已完成（归档 <sha 前 8 位>）」**；命令行等价查法：
+
+```bash
+curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/system/backup/restore-status
+# 没有待应用的恢复：{"data":{"pending":false}}
+```
 
 **Q：备份恢复后凭证还能用吗？**
 能——归档包含 `master.key`，它与数据库是配套的。但如果用错口令或把别的机器的数据库配这个 `master.key`，凭证会解不开。
@@ -854,6 +886,7 @@ make test           # Go 测试
 make fmt-check      # gofmt 闸门
 make test-race      # 竞态检测（api + store）
 make test-e2e       # 端到端验收（13 个脚本，逐段断言）
+make verify-upgrade # 控制端自升级验收（20 项，单独跑；不在 test-e2e 闸门内，发版前必跑）
 make dev            # 开发模式（另开 make web-dev 走前端热更新）
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check   # Docker 构建 + 容器内健康检查 + 备份校验
@@ -878,6 +911,22 @@ bash scripts/verify_authz.sh            # 权限点、自定义角色、分组�
 bash scripts/verify_install_control.sh  # 控制端一键安装：端口、下载校验、幂等升级、卸载、systemd 单元
 ```
 
+每套脚本的断言数（`make test-e2e` 各脚本末尾「通过 N 项」累加，实测值）：bootstrap 19、servers 34、
+checks 31、alerts 36、deploy 33、deploy_v2 66、deploy_script 24、deploy_rollout 35、baota 28、backup 45、
+ops 67、authz 78、install_control 48，**合计 544 项**；其中 install_control 的 5 项容器内 systemd 单元渲染
+需要本机 Docker，没有 Docker 时这 5 项跳过（合计 539 项）。
+
+**控制端自升级单独跑**：
+
+```bash
+make verify-upgrade   # = bash scripts/verify_upgrade.sh（20 项，前置 make build）
+```
+
+它覆盖「检查更新 → 备份失败中止 → 正常升级 → 新版本一启动就崩溃 → watchdog 自动回退 → 开关与权限」，
+是**唯一覆盖回退链路**的验收。**故意不进 `make test-e2e` 主干闸门**：这套验收要真实替换运行中的二进制，
+并依赖 watchdog 自查回退的 10 秒级时序窗口，对机器负载敏感，放进主干容易出现「代码没动却 CI 红」。
+**发版前必跑。**
+
 ---
 
 ## 设计原则
@@ -900,5 +949,7 @@ bash scripts/verify_install_control.sh  # 控制端一键安装：端口、下�
 
 ## 状态
 
-功能已完整交付，**十三套验收共 458 项断言全绿**（`make test-e2e`）。已知环境限制：
+功能已完整交付，**十三套验收脚本共 544 项断言**（`make test-e2e`；统计口径为各脚本末尾「通过 N 项」累加，
+其中 5 项容器内 systemd 单元渲染需要本机 Docker，没有 Docker 时是 539 项；另有 `make verify-upgrade`
+单独跑的控制端自升级 20 项，不计入这个总数）。已知环境限制：
 macOS 公证 / Windows 代码签名需证书；钉钉/飞书/Slack/Telegram/邮件需你的真实凭据才能验证实际投递。

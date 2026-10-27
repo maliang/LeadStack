@@ -48,7 +48,7 @@ die()  { printf '[leadstack-install] 错误：%s\n' "$*" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 TTY_OUT=0
 if [ -t 1 ] || [ -t 2 ]; then TTY_OUT=1; fi
-STEP_TOTAL=4
+STEP_TOTAL=5
 STEP_N=0
 STEP_T0=0
 STEP_ALL_T0=0
@@ -688,10 +688,10 @@ do_uninstall() {
 
 do_install() {
 	STEP_N=0
-	STEP_TOTAL=4
+	STEP_TOTAL=5
 	STEP_ALL_T0=$(date +%s)
 
-	# ---- 1/4 参数与权限 ----
+	# ---- 1/5 参数与权限 ----
 	step "检查参数、平台与权限"
 	[ -n "$SERVER" ] || die "缺少 --server（控制端地址），例如：--server http://127.0.0.1:8080"
 	[ -n "$TOKEN" ]  || die "缺少 --token（接入令牌，先在控制台生成接入令牌）"
@@ -737,7 +737,7 @@ do_install() {
 	fi
 	step_ok "环境就绪（${_priv}${PROGRESS_ARG:+，下载显示进度}）"
 
-	# ---- 2/4 下载、校验并安装 ----
+	# ---- 2/5 下载、校验并安装 ----
 	if [ -n "$FROM_FILE" ]; then
 		step "安装 agent 二进制（本地文件）"
 		run_priv mkdir -p "$INSTALL_DIR"
@@ -756,7 +756,7 @@ do_install() {
 		fi
 	fi
 
-	# ---- 3/4 可执行性自检 ----
+	# ---- 3/5 可执行性自检 ----
 	step "确认二进制可执行"
 	verify_binary
 	if [ "$DRY_RUN" -eq 1 ]; then
@@ -765,7 +765,7 @@ do_install() {
 		step_ok "${BIN_PATH} 可执行"
 	fi
 
-	# ---- 4/4 服务注册 ----
+	# ---- 4/5 服务注册 ----
 	step "写入凭证并注册服务"
 	SERVICE_STATE=""
 	install_service
@@ -784,6 +784,10 @@ do_install() {
 		*) step_ok "凭证文件已写入" ;;
 	esac
 
+	# ---- 5/5 控制端可达性 ----
+	step "确认控制端可达"
+	check_server_reachable
+
 	# ---- 汇总 ----
 	_total=$(( $(date +%s) - STEP_ALL_T0 ))
 	log "安装完成（总耗时 ${_total}s）。"
@@ -798,6 +802,53 @@ do_install() {
 		log "  查看状态：launchctl print system/${LAUNCHD_LABEL}"
 		log "  查看日志：tail -f /var/log/${SERVICE_NAME}.log"
 	fi
+}
+
+# 确认控制端可达（SPEC R17 / A28）：只读 GET <server>/healthz，不改变安装结果与退出码。
+# 控制端健康探针是 GET /healthz（不新增 /api/v1/health），响应形如 {"data":{"status":"ok",...}}。
+# 判据：HTTP 200 且 data.status=="ok"。--dry-run 也照样真实发起请求。
+check_server_reachable() {
+	_base=$SERVER
+	case "$_base" in
+		ws://*)  _base="http://${_base#ws://}" ;;
+		wss://*) _base="https://${_base#wss://}" ;;
+	esac
+	while [ "${_base%/}" != "$_base" ]; do _base=${_base%/}; done
+	_url="${_base}/healthz"
+
+	_tls=""
+	if [ -n "$CA_FILE" ]; then _tls="--cacert $CA_FILE"; fi
+	if [ "$INSECURE" -eq 1 ]; then _tls="$_tls -k"; fi
+
+	if command -v curl >/dev/null 2>&1; then
+		# shellcheck disable=SC2086
+		_body=$(curl -fsS --max-time 5 $_tls "$_url" 2>/dev/null) || _body=""
+	elif command -v wget >/dev/null 2>&1; then
+		_wget_tls=""
+		if [ -n "$CA_FILE" ]; then _wget_tls="--ca-certificate=$CA_FILE"; fi
+		if [ "$INSECURE" -eq 1 ]; then _wget_tls="$_wget_tls --no-check-certificate"; fi
+		# shellcheck disable=SC2086
+		_body=$(wget -q -T 5 -O - $_wget_tls "$_url" 2>/dev/null) || _body=""
+	else
+		_body=""
+	fi
+
+	case "$_body" in
+		*'"status"'*'"ok"'*)
+			step_ok "控制端可达（${_url}）"
+			log "  回到控制台刷新，即可看到该机器在线"
+			return 0
+			;;
+	esac
+
+	log "  ⚠ 控制端不可达：${_url}"
+	log "    安装已完成，但 agent 现在连不上控制端，控制台不会出现这台机器。"
+	log "    自签证书场景：请加 --ca <证书路径> 或 --insecure 重新执行本脚本。"
+	log "    也请确认控制端地址可从本机访问（防火墙 / 反向代理 / 端口）。"
+	# 结论行不受 TTY 限制：进度条可以只给交互终端，但每个阶段是否做成必须写进日志
+	# （CI 与 `curl | sh` 都会重定向/管道输出，隐藏结论会让它们看不到第 5 阶段结果）。
+	printf '[leadstack-install]    – 跳过：控制端可达性自检（不影响安装结果）\n'
+	return 0
 }
 
 # 安装后确认二进制可执行（dry-run 跳过；不依赖二进制支持 --help，且加超时防挂住）

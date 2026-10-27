@@ -227,6 +227,11 @@ verify-authz: ## 单独跑权限体系验收（前置：make build）
 verify-install: ## 单独跑控制端一键安装验收（前置：make build；有 docker 时额外验证 systemd 单元）
 	@bash scripts/verify_install_control.sh
 
+# 自升级不进 test-e2e 主干闸门：它要真实替换运行中的二进制，并依赖 watchdog 在 10 秒内
+# 自查失败后回退——对机器负载与时序敏感，放进主干会让「代码没动却 CI 红」。发版前必跑。
+verify-upgrade: ## 单独跑控制端自升级验收（含备份失败中止与 watchdog 回退，前置：make build；发版前必跑）
+	@bash scripts/verify_upgrade.sh
+
 verify-baota: ## 单独跑宝塔面板部署验收（前置：make build）
 	@bash scripts/verify_baota.sh
 

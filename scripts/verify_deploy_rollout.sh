@@ -46,6 +46,19 @@ code() {
   curl "${args[@]}" 2>/dev/null
 }
 sget() { local v; v="$(printf '%s' "$1" | jq -r "$2" 2>/dev/null)"; [ "$v" = "null" ] && v=""; printf '%s' "$v"; }
+# 前端产物断言：make build 会把 web/dist 拷进 internal/webui/dist，缺特征串即视为契约回归。
+dist_has() { # <label> <needle...>
+  local label="$1"; shift
+  local js missing="" needle
+  js="$(ls -t internal/webui/dist/assets/index-*.js 2>/dev/null | head -1)"
+  if [ -z "$js" ]; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
+  for needle in "$@"; do grep -qF -- "$needle" "$js" || missing="${missing}[${needle}] "; done
+  if [ -z "$missing" ]; then
+    pass "${label}（${js##*/} 命中 $# 个特征串）"
+  else
+    fail "${label}：产物缺少 ${missing}"
+  fi
+}
 wait_release() {
   local id="$1" want="$2" max="${3:-90}" i st
   for i in $(seq 1 "$max"); do
@@ -141,7 +154,9 @@ CANARY_META="$(sget "$(api GET "/api/v1/releases/$CANARY" "" "$TOKEN")" '.data.r
 # ---------------------------------------------------------------- 回滚到指定版本
 step "3. 回滚到指定版本"
 SHA2="$(make_artifact r2)"; ART2="$(upload_artifact "$DATA_DIR/r2.tar.gz")"
-REL2="$(create_release "$APP_ID" "$TPL_ID" "1.0.1" "$ART2" all 0 0)"
+# 两台「服务器」在验收环境里其实是同一台机器上的同一个部署根，并行发布会在 `ln -sfn current` 上互相抢；
+# 用灰度串行（canary 1）避免这个环境假象，真实多机部署不存在共享路径。
+REL2="$(create_release "$APP_ID" "$TPL_ID" "1.0.1" "$ART2" canary 1 0)"
 [ "$(wait_release "$REL2" success 120)" = "success" ] && pass "第二个版本发布成功" || { fail "第二个版本发布失败"; dump_runs "$REL2"; }
 
 TARGETS="$(api GET "/api/v1/apps/$APP_ID/rollback-targets" "" "$TOKEN")"
@@ -168,7 +183,7 @@ SCRIPT_REL="$(sget "$(api POST /api/v1/releases "$SCRIPT_BODY" "$TOKEN")" '.data
 REJECT="$(code POST "/api/v1/releases/$SCRIPT_REL/rollback" "$(jq -n --arg t "$SCRIPT_REL" '{target_release_id:$t}')" "$TOKEN")"
 [ "$REJECT" = "400" ] && pass "脚本模式回滚到指定版本被拒（400）" || fail "脚本模式应拒绝，实际 $REJECT"
 REJECT_MSG="$(api POST "/api/v1/releases/$SCRIPT_REL/rollback" "$(jq -n --arg t "$SCRIPT_REL" '{target_release_id:$t}')" "$TOKEN" | jq -r '.error.message // empty')"
-printf '%s' "$REJECT_MSG" | grep -q "脚本模式" && pass "拒绝原因说明清楚" || fail "拒绝原因不明确：$REJECT_MSG"
+printf '%s' "$REJECT_MSG" | grep -q "不支持回滚到指定版本" && pass "拒绝原因说明清楚：$REJECT_MSG" || fail "拒绝原因不明确：$REJECT_MSG"
 
 # ---------------------------------------------------------------- 接管体检
 step "4. 接管体检"
@@ -188,11 +203,82 @@ DIR_CHECK="$(printf '%s' "$DIAG" | jq -r '.data.checks[] | select(.id=="dir") | 
 BAD_DIAG="$(code POST "/api/v1/servers/$SRV1/diagnose" '{"kind":"nope","name":"x"}' "$TOKEN")"
 [ "$BAD_DIAG" = "400" ] && pass "非法 kind 被拒（400）" || fail "非法 kind 应 400，实际 $BAD_DIAG"
 
+# ---------------------------------------------------------------- 中止发布
+step "5. 中止进行中的灰度发布（A26）"
+SHA3="$(make_artifact r3)"; ART3="$(upload_artifact "$DATA_DIR/r3.tar.gz")"
+ABORT_REL="$(create_release "$APP_ID" "$TPL_ID" "1.0.2" "$ART3" canary 1 30)"
+[ -n "$ABORT_REL" ] && pass "可中止的灰度发布已创建（hold 30s）" || fail "创建待中止发布失败"
+# 等到「第一批已成功、第二批仍 pending」这个时间窗，此时中止才有意义。
+ABORT_READY=0
+for _ in $(seq 1 90); do
+  ABORT_RUNS="$(api GET "/api/v1/releases/$ABORT_REL/runs" "" "$TOKEN")"
+  S_N="$(printf '%s' "$ABORT_RUNS" | jq -r '[.data.runs[] | select(.status=="success")] | length' 2>/dev/null)"
+  P_N="$(printf '%s' "$ABORT_RUNS" | jq -r '[.data.runs[] | select(.status=="pending")] | length' 2>/dev/null)"
+  if [ "${S_N:-0}" -ge 1 ] && [ "${P_N:-0}" -ge 1 ]; then ABORT_READY=1; break; fi
+  sleep 1
+done
+[ "$ABORT_READY" = "1" ] && pass "进入可中止窗口（成功 ${S_N} 台 / 待执行 ${P_N} 台）" \
+  || fail "未能进入可中止窗口（成功 ${S_N:-?} 台 / 待执行 ${P_N:-?} 台）：$(printf '%s' "$ABORT_RUNS" | jq -c '[.data.runs[] | {status}]')"
+
+ABORT_RESP="$(api POST "/api/v1/releases/$ABORT_REL/cancel" "" "$TOKEN")"
+ABORT_CANCELED="$(sget "$ABORT_RESP" '.data.canceled')"
+[ "$ABORT_CANCELED" = "1" ] && pass "中止只取消未开始的 1 台（data.canceled=${ABORT_CANCELED}）" \
+  || fail "中止台数不符：data.canceled=${ABORT_CANCELED:-空}（应为 1）resp=$(printf '%s' "$ABORT_RESP" | jq -c '.data' 2>/dev/null)"
+
+ABORT_ST=""
+for _ in $(seq 1 40); do
+  ABORT_ST="$(sget "$(api GET "/api/v1/releases/$ABORT_REL" "" "$TOKEN")" '.data.release.status')"
+  case "$ABORT_ST" in success|failed|canceled) break;; esac
+  sleep 1
+done
+case "$ABORT_ST" in
+  canceled) pass "中止后发布收敛到 canceled（1 台成功 + 1 台取消 ≠ 失败，A26 语义）";;
+  success|failed) fail "中止后发布状态应为 canceled，实际 ${ABORT_ST}（有机器成功不代表发布成功，有机器取消也不代表失败）";;
+  *) fail "中止后发布仍停在 ${ABORT_ST:-空}（应进入 canceled）";;
+esac
+ABORT_UNFINISHED="$(api GET "/api/v1/releases/$ABORT_REL/runs" "" "$TOKEN" \
+  | jq -r '[.data.runs[] | select(.status=="pending" or .status=="running")] | length' 2>/dev/null)"
+[ "${ABORT_UNFINISHED:-1}" = "0" ] && pass "中止后没有残留 pending/running 的 run" \
+  || fail "中止后仍有 ${ABORT_UNFINISHED:-?} 个 run 未收尾"
+
+ABORT_RUNS2="$(api GET "/api/v1/releases/$ABORT_REL/runs" "" "$TOKEN")"
+KEPT="$(printf '%s' "$ABORT_RUNS2" | jq -r '[.data.runs[] | select(.status=="success")] | length' 2>/dev/null)"
+GONE="$(printf '%s' "$ABORT_RUNS2" | jq -r '[.data.runs[] | select(.status=="canceled")] | length' 2>/dev/null)"
+[ "${KEPT:-0}" = "1" ] && [ "${GONE:-0}" = "1" ] \
+  && pass "已完成的 ${KEPT} 台保持 success、未开始的 ${GONE} 台标记 canceled（已完成不回滚）" \
+  || fail "中止后 run 状态不符：success=${KEPT:-?}、canceled=${GONE:-?}（应为 1/1）"
+
+# 纯中止（还没有任何一台成功）：应直接落 canceled，而不是 failed——这是「中止」与「失败」的分界。
+FULL_REL=""; FULL_CANCELED=0
+for _ in 1 2 3; do
+  FULL_REL="$(create_release "$APP_ID" "$TPL_ID" "1.0.3" "$ART3" all 0 0)"
+  [ -z "$FULL_REL" ] && break
+  FULL_CANCELED="$(sget "$(api POST "/api/v1/releases/$FULL_REL/cancel" "" "$TOKEN")" '.data.canceled')"
+  [ "${FULL_CANCELED:-0}" = "2" ] && break
+  wait_release "$FULL_REL" success 90 >/dev/null 2>&1 || true
+  FULL_CANCELED=0
+done
+[ "${FULL_CANCELED:-0}" = "2" ] && pass "纯中止：两台都在开始前被取消（data.canceled=${FULL_CANCELED}）" \
+  || fail "纯中止未能取消两台：data.canceled=${FULL_CANCELED:-空}（应 2）"
+FULL_ST=""
+for _ in $(seq 1 40); do
+  FULL_ST="$(sget "$(api GET "/api/v1/releases/$FULL_REL" "" "$TOKEN")" '.data.release.status')"
+  [ "$FULL_ST" = "canceled" ] && break
+  sleep 1
+done
+[ "$FULL_ST" = "canceled" ] && pass "无任何 success 的发布状态为 canceled（实际 ${FULL_ST}）" \
+  || fail "纯中止状态应为 canceled，实际 ${FULL_ST}"
+
+# 前端「中止发布」入口契约（A26）：确认框写明「已完成的 N 台不会回滚」、按钮为 danger、台数取 data.canceled。
+dist_has "前端中止发布入口（A26）" \
+  'release.abort' 'release.abortConfirmTitle' 'release.abortConfirmBody' 'release.abortDone' \
+  '不会回滚' 'cancelRelease('
+
 # ---------------------------------------------------------------- 汇总
 echo
 if [ "$FAIL" -eq 0 ]; then
-  printf '\033[32m全部通过：%d 项\033[0m\n' "$PASS"
+  printf '\033[32m通过 %d 项，失败 0 项\033[0m\n' "$PASS"
   exit 0
 fi
-printf '\033[31m失败 %d 项，通过 %d 项\033[0m\n' "$FAIL" "$PASS"
+printf '\033[31m通过 %d 项，失败 %d 项\033[0m\n' "$PASS" "$FAIL"
 exit 1

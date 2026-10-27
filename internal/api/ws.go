@@ -470,6 +470,15 @@ func (a *API) onAgentHostInfo(ctx context.Context, ac *agentConn, tok *store.Enr
 		}
 	}
 
+	// 空载荷 / 全零快照一律忽略：一条畸形或空的 host_info 帧不能把原本良好的快照清空。
+	// 这类帧不落库、不推进 collected_at、也不覆盖 servers 上的系统信息，直接当成功的空操作返回
+	// （返回错误只会污染 agent 的上报重试逻辑，而这并不是需要它重试的错误）。
+	if info.Hostname == "" && info.OS == "" {
+		a.logger.Debug("忽略空的主机信息载荷（不覆盖已有快照）",
+			"remote_host", remoteHost, "payload_bytes", len(env.Payload))
+		return nil
+	}
+
 	serverID, _, err := a.ensureServer(ctx, ac, tok, remoteHost, protocol.Hello{})
 	if err != nil {
 		return err

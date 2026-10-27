@@ -306,6 +306,39 @@ else
   fail "概览异常：$SUMMARY"
 fi
 
+# ---------------------------------------------------------------- 13. 概览范围
+step "13. 告警概览按授权范围收敛（A13）"
+# 受限用户只被授权一台「没有任何检测项」的服务器：范围外的 firing 绝不能进他的概览与列表，
+# 否则界面上会出现「概览说有 1 条告警，列表里一条都没有」的自相矛盾。
+OUT_SRV="$(sget "$(api POST /api/v1/servers \
+  "$(jq -n --arg cid "$CRED_ID" '{name:"m3-outside",host:"127.0.0.9",mode:"ssh",credential_id:$cid,group:"out"}')" "$TOKEN")" '.data.id')"
+[ -n "$OUT_SRV" ] && pass "范围外服务器已创建（不绑任何检测项）" || fail "创建范围外服务器失败"
+ALERT_ROLE="$(sget "$(api POST /api/v1/roles \
+  "$(jq -n --arg s "$OUT_SRV" '{name:"告警只读-限定范围",permissions:["alert.read"],scope:{mode:"servers",group_ids:[],server_ids:[$s]}}')" "$TOKEN")" '.data.key')"
+[ -n "$ALERT_ROLE" ] && pass "alert.read + 单机授权角色已创建" || fail "创建受限角色失败"
+api POST /api/v1/users \
+  "$(jq -n --arg k "$ALERT_ROLE" '{username:"alertsviewer",password:"Alerts-Viewer-1",role:$k}')" "$TOKEN" >/dev/null
+VIEWER="$(sget "$(api POST /api/v1/auth/login '{"username":"alertsviewer","password":"Alerts-Viewer-1"}')" '.data.token')"
+[ -n "$VIEWER" ] && pass "受限用户登录成功" || fail "受限用户登录失败"
+
+ADMIN_FIRING="$(printf '%s' "$SUMMARY" | jq -r '.data.firing // 0')"
+VIEW_SUM="$(api GET /api/v1/alerts/summary "" "$VIEWER")"
+VIEW_FIRING="$(printf '%s' "$VIEW_SUM" | jq -r '.data.firing // -1')"
+if [ "$VIEW_FIRING" = "0" ] && [ "${ADMIN_FIRING:-0}" -ge 1 ]; then
+  pass "范围外 firing 不计入受限用户概览（管理员 firing=${ADMIN_FIRING}、受限用户 firing=0）"
+else
+  fail "概览未按范围收敛：管理员 firing=${ADMIN_FIRING}、受限用户 firing=${VIEW_FIRING}（应 ≥1 / 0）"
+fi
+VIEW_SEV="$(printf '%s' "$VIEW_SUM" | jq -r '[((.data.by_severity // {}) | to_entries[] | .value)] | add // 0')"
+[ "${VIEW_SEV:-0}" = "0" ] && pass "概览的严重度分布也为空（合计 0）" \
+  || fail "概览严重度仍统计到范围外告警：$(printf '%s' "$VIEW_SUM" | jq -c '.data.by_severity')"
+VIEW_LIST_N="$(api GET /api/v1/alerts "" "$VIEWER" | jq '.data | length')"
+[ "${VIEW_LIST_N:-1}" = "0" ] && pass "受限用户告警列表为空（与概览 firing=0 一致）" \
+  || fail "受限用户列表越权可见 ${VIEW_LIST_N} 条告警"
+ADMIN_LIST_N="$(api GET /api/v1/alerts "" "$TOKEN" | jq '.data | length')"
+[ "${ADMIN_LIST_N:-0}" -ge 1 ] && pass "管理员仍能看到 ${ADMIN_LIST_N} 条告警（对照）" \
+  || fail "管理员告警列表为空，无法证明范围过滤（应 ≥1）"
+
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"

@@ -53,6 +53,19 @@ code() {
   curl "${args[@]}" 2>/dev/null
 }
 sget() { local v; v="$(printf '%s' "$1" | jq -r "$2" 2>/dev/null)"; [ "$v" = "null" ] && v=""; printf '%s' "$v"; }
+# 前端产物断言：make build 会把 web/dist 拷进 internal/webui/dist，缺特征串即视为契约回归。
+dist_has() { # <label> <needle...>
+  local label="$1"; shift
+  local js missing="" needle
+  js="$(ls -t internal/webui/dist/assets/index-*.js 2>/dev/null | head -1)"
+  if [ -z "$js" ]; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
+  for needle in "$@"; do grep -qF -- "$needle" "$js" || missing="${missing}[${needle}] "; done
+  if [ -z "$missing" ]; then
+    pass "${label}（${js##*/} 命中 $# 个特征串）"
+  else
+    fail "${label}：产物缺少 ${missing}"
+  fi
+}
 
 wait_release() { # <release_id> <token> <期望状态> <最长秒数>
   local id="$1" tok="$2" want="$3" max="${4:-90}" i st
@@ -330,6 +343,51 @@ D_OK="$(sget "$DISC" '.data.server_id')"
 [ "$D_OK" = "$SRV_ID" ] && pass "探测接口返回报告" || fail "探测接口异常：$DISC"
 printf '%s' "$DISC" | jq -e '.data.candidates | type == "array"' >/dev/null 2>&1 && pass "候选列表是数组" || fail "候选列表格式不对"
 printf '%s' "$DISC" | jq -e '.data.raw.SYSTEMD != null' >/dev/null 2>&1 && pass "原始分段（SYSTEMD/PORTS/…）可回传" || fail "缺少原始分段"
+
+# ---------------------------------------------------------------- D. 应用参数校验
+step "7. 应用参数校验与健康检查路径持久化（A9）"
+# healthcheck_path：必须以 / 开头、不含空白/?/#、长度 <= 200
+chk_pair() { # <期望码> <body> <说明>
+  local want="$1" body="$2" desc="$3" c r
+  r="$(api PATCH "/api/v1/apps/$APP_A" "$body" "$TOKEN")"
+  c="$(printf '%s' "$r" | jq -r '.error.code // empty' 2>/dev/null)"
+  if [ "$want" = "200" ]; then
+    if printf '%s' "$r" | jq -e '.data.id' >/dev/null 2>&1; then pass "$desc"; else fail "$desc（响应：$r）"; fi
+  else
+    if printf '%s' "$r" | jq -e --arg c "$want" '.error.code == $c' >/dev/null 2>&1; then pass "$desc"
+    else fail "$desc（期望 $want，实际 $r）"; fi
+  fi
+}
+chk_pair invalid_argument '{"healthcheck_path":"healthz"}' "healthcheck_path 无前导 / → 400"
+chk_pair invalid_argument '{"healthcheck_path":"/he althz"}' "healthcheck_path 含空白 → 400"
+chk_pair invalid_argument '{"healthcheck_path":"/a?x=1"}' "healthcheck_path 含 ? → 400"
+chk_pair invalid_argument '{"healthcheck_path":"/a#frag"}' "healthcheck_path 含 # → 400"
+LONG_PATH="/$(printf 'a%.0s' $(seq 1 200))"
+chk_pair invalid_argument "{\"healthcheck_path\":\"$LONG_PATH\"}" "healthcheck_path 超过 200 字符 → 400"
+chk_pair invalid_argument '{"keep_paths":"/etc/passwd"}' "keep_paths 含绝对路径 → 400"
+chk_pair invalid_argument '{"keep_paths":"../outside"}' "keep_paths 含 .. → 400"
+chk_pair invalid_argument '{"canary_count":99999}' "canary_count 超过服务器数 → 400"
+chk_pair 200 '{"healthcheck_path":"/healthz"}' "合法 healthcheck_path 保存成功"
+SAVED_PATH="$(sget "$(api GET "/api/v1/apps/$APP_A" "" "$TOKEN")" '.data.healthcheck_path')"
+[ "$SAVED_PATH" = "/healthz" ] && pass "编辑保存后 healthcheck_path 未被清空（A1）" \
+  || fail "healthcheck_path 被清空或丢失：$SAVED_PATH"
+ENV_KEYS="$(api GET "/api/v1/apps/$APP_A" "" "$TOKEN" | jq -c '.data.env_keys // []' 2>/dev/null)"
+printf '%s' "$ENV_KEYS" | jq -e 'length > 0' >/dev/null 2>&1 && pass "应用响应带 env_keys 键名数组（不泄露值）" \
+  || fail "缺少 env_keys：$ENV_KEYS"
+printf '%s' "$ENV_KEYS" | jq -e 'all(.[]; . == "DB_HOST" or . == "SERVER_PORT" or . == "KEY")' >/dev/null 2>&1 \
+  && pass "env_keys 只含键名" || fail "env_keys 内容异常：$ENV_KEYS"
+
+# ---------------------------------------------------------------- 8. 前端表单契
+step "8. 前端表单契约（A1/A2/A25）"
+# A1/A2：健康检查路径与端口必须是可定位的独立输入（e2e 钩子 id），提示文案说明「留空不检查」；
+#        env_keys 模式要显式告知「仅键名、保存不覆盖」。
+dist_has "健康检查路径/端口输入与提示（A1/A2）" \
+  'app-healthcheck' 'app-healthcheck-port' 'apps.healthcheckPathHint' 'apps.envKeysOnly' \
+  '留空 = 不检查' '仅显示键名' 'healthcheck_path' 'env_keys'
+# A25：按授权分组选机，计数必须是「已选 N 台 / 该分组共 M 台」，且分组来自授权分组而非 legacy group。
+dist_has "按授权分组选机与计数（A25）" \
+  'picker.selectedCount' 'picker.groupTotal' 'picker.authorizedGroup' \
+  '已选 {n} 台' '该分组共 {m} 台' '授权分组'
 
 # ---------------------------------------------------------------- 汇总
 echo

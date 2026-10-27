@@ -39,7 +39,7 @@ func (s *Store) CreateAlertRule(ctx context.Context, r *AlertRule) error {
 		nullableInt(r.SilenceUntil), r.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return fmt.Errorf("创建告警规则 %s: %w", r.Name, ErrConflict)
+			return fmt.Errorf("告警规则 %s 已存在: %w", r.Name, ErrConflict)
 		}
 		return fmt.Errorf("创建告警规则 %s: %w", r.Name, err)
 	}
@@ -234,7 +234,7 @@ func (s *Store) CreateAlertChannel(ctx context.Context, c *AlertChannel) error {
 		nullableStr(c.LastError), nullableInt(c.LastOKAt), c.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return fmt.Errorf("创建通知渠道 %s: %w", c.Name, ErrConflict)
+			return fmt.Errorf("通知渠道 %s 已存在: %w", c.Name, ErrConflict)
 		}
 		return fmt.Errorf("创建通知渠道 %s: %w", c.Name, err)
 	}
@@ -471,6 +471,16 @@ type AlertFilter struct {
 	From     int64
 	To       int64
 	Limit    int
+	// ServerIDs 是资源范围：只保留 server_id 落在集合内的告警；nil = 不限，空切片 = 范围为空。
+	//
+	// 范围过滤必须与 LIMIT 在同一条 SQL 里、且排在 LIMIT 之前。先在 Go 里取「全局最新
+	// N 条」再按范围筛，会把范围用户自己那条更早的告警截掉，前端于是显示「暂无告警」——
+	// 而告警恰是「说假话」代价最高的地方：真有故障却告诉用户没事。
+	//
+	// 注意条件里的 server_id IS NOT NULL 是刻意写的：规则级告警（server_id 为 NULL）
+	// 只对全局角色可见（契约 §53.3），不能因为修范围过滤而顺手放开。
+	// 非 nil 空切片等价于「范围为空」：ListAlerts 会直接返回空列表（不再依赖调用方先判空）。
+	ServerIDs []string
 }
 
 // ListAlerts 返回告警列表（按开始时间倒序）。
@@ -478,8 +488,15 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter) ([]Alert, error) 
 	if f.Limit <= 0 {
 		f.Limit = 100
 	}
+	if f.ServerIDs != nil && len(f.ServerIDs) == 0 {
+		// 非 nil 空切片 = 范围为空：没有任何服务器可见，直接返回空列表。
+		// 这条判断必须与结构体注释一致。历史上实现是「len>0 才拼条件」，空切片等价于
+		// 不限，只因 handler 先早退 + Go 兜底才没出事故；下一个把空切片直接喂进来的
+		// 调用方就是一次全量越权读。
+		return []Alert{}, nil
+	}
 	query := `SELECT ` + alertColumns + ` FROM alerts WHERE 1 = 1`
-	args := make([]any, 0, 8)
+	args := make([]any, 0, 8+len(f.ServerIDs))
 	if f.Status != "" {
 		query += ` AND status = ?`
 		args = append(args, f.Status)
@@ -503,6 +520,20 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter) ([]Alert, error) 
 	if f.To > 0 {
 		query += ` AND started_at <= ?`
 		args = append(args, f.To)
+	}
+	if len(f.ServerIDs) > 0 {
+		// 紧贴 LIMIT 之前：SQLite 先筛范围、再截断，范围用户不会因为「范围内告警不在
+		// 全局最新 N 条」而拿到空数组。server_id IS NOT NULL 保证规则级告警不落到这里。
+		// 没有 server_id 索引是已知取舍，有测量依据（sqlite3 EXPLAIN QUERY PLAN）：
+		//   SCAN alerts USING INDEX idx_alerts_started
+		//   USE TEMP B-TREE FOR LAST TERM OF ORDER BY
+		// 即有序扫描 + 逐行过滤 server_id，N 很小、命中稀疏时才多扫几行；alerts 表量级
+		// （万级以内）下不值得为此加迁移 + 索引。
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(f.ServerIDs)), ",")
+		query += ` AND server_id IS NOT NULL AND server_id IN (` + placeholders + `)`
+		for _, id := range f.ServerIDs {
+			args = append(args, id)
+		}
 	}
 	query += ` ORDER BY started_at DESC, id DESC LIMIT ?`
 	args = append(args, f.Limit)
@@ -530,24 +561,70 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter) ([]Alert, error) 
 // AlertSummary 统计告警概览：firing/acked 为当前活跃数，resolved_24h 为近 24 小时解除数，
 // by_severity 统计当前活跃告警（firing+acked）的严重级别分布。
 func (s *Store) AlertSummary(ctx context.Context, nowMS int64) (AlertSummary, error) {
+	return s.alertSummary(ctx, nowMS, nil)
+}
+
+// AlertSummaryForServers 只在给定服务器范围内统计告警概览，口径与 AlertSummary 完全一致
+// （同一段 SQL，只多一个 server_id IN (...) 条件）；规则级告警 server_id IS NULL，
+// 因此受限范围下自然不计入，与 optionalServerVisible 对 nil 返回 false 一致。
+// serverIDs 为 nil 表示不限范围；非 nil 空切片表示范围内没有任何服务器 → 全 0。
+func (s *Store) AlertSummaryForServers(ctx context.Context, nowMS int64, serverIDs []string) (AlertSummary, error) {
+	return s.alertSummary(ctx, nowMS, serverIDs)
+}
+
+// alertSummaryScopeCond 构造告警统计的范围条件与参数；nil 表示不限范围，
+// 非 nil 空切片表示范围内没有任何服务器（返回恒假条件）。
+func alertSummaryScopeCond(serverIDs []string) (string, []any) {
+	if serverIDs == nil {
+		return "", nil
+	}
+	ids := make([]string, 0, len(serverIDs))
+	seen := make(map[string]struct{}, len(serverIDs))
+	for _, id := range serverIDs {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		// 范围内的服务器 ID 全是空串：不可能命中任何告警，返回恒假条件。
+		return ` AND 1 = 0`, nil
+	}
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	return ` AND server_id IN (` + placeholders(len(ids)) + `)`, args
+}
+
+// alertSummary 是 AlertSummary / AlertSummaryForServers 的共同实现。
+func (s *Store) alertSummary(ctx context.Context, nowMS int64, serverIDs []string) (AlertSummary, error) {
 	summary := AlertSummary{BySeverity: map[string]int{"critical": 0, "warning": 0, "info": 0}}
+	cond, scopeArgs := alertSummaryScopeCond(serverIDs)
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM alerts WHERE status = ?`, AlertStatusFiring).Scan(&summary.Firing); err != nil {
+		`SELECT COUNT(*) FROM alerts WHERE status = ?`+cond,
+		append([]any{AlertStatusFiring}, scopeArgs...)...).Scan(&summary.Firing); err != nil {
 		return summary, fmt.Errorf("统计 firing 告警: %w", err)
 	}
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM alerts WHERE status = ?`, AlertStatusAcked).Scan(&summary.Acked); err != nil {
+		`SELECT COUNT(*) FROM alerts WHERE status = ?`+cond,
+		append([]any{AlertStatusAcked}, scopeArgs...)...).Scan(&summary.Acked); err != nil {
 		return summary, fmt.Errorf("统计 acked 告警: %w", err)
 	}
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM alerts WHERE status = ? AND resolved_at >= ?`,
-		AlertStatusResolved, nowMS-24*3600*1000).Scan(&summary.Resolved24h); err != nil {
+		`SELECT COUNT(*) FROM alerts WHERE status = ? AND resolved_at >= ?`+cond,
+		append([]any{AlertStatusResolved, nowMS - 24*3600*1000}, scopeArgs...)...).
+		Scan(&summary.Resolved24h); err != nil {
 		return summary, fmt.Errorf("统计 24h 解除告警: %w", err)
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT severity, COUNT(*) FROM alerts WHERE status IN (?, ?) GROUP BY severity`,
-		AlertStatusFiring, AlertStatusAcked)
+		`SELECT severity, COUNT(*) FROM alerts WHERE status IN (?, ?)`+cond+` GROUP BY severity`,
+		append([]any{AlertStatusFiring, AlertStatusAcked}, scopeArgs...)...)
 	if err != nil {
 		return summary, fmt.Errorf("统计活跃告警级别: %w", err)
 	}

@@ -33,6 +33,18 @@ type UpdateAsset struct {
 	Name      string `json:"name,omitempty"`
 }
 
+// AgentUpdateAsset 是 agent 归档产物（供「升级 Agent」一次性拿到 url + sha256）。
+//
+// 与控制端 assets[] 严格互斥：assets 只含 leadstack_*，agent_assets 只含 leadstack-agent_*。
+type AgentUpdateAsset struct {
+	OS        string `json:"os"`
+	Arch      string `json:"arch"`
+	URL       string `json:"url"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
+	Name      string `json:"name"`
+}
+
 // UpdateInfo 是检查更新的结果（契约 51.2）。
 type UpdateInfo struct {
 	Current       string        `json:"current"`
@@ -43,7 +55,9 @@ type UpdateInfo struct {
 	Notes         string        `json:"notes"`
 	SchemaChanged bool          `json:"schema_changed"`
 	Assets        []UpdateAsset `json:"assets"`
-	Upgradable    bool          `json:"upgradable"`
+	// AgentAssets 是同一版本下的 agent 归档（离线/无 agent 包时为空数组，不会是 null）。
+	AgentAssets []AgentUpdateAsset `json:"agent_assets"`
+	Upgradable  bool               `json:"upgradable"`
 	// UpgradeNote 说明「为什么不能在本平台一键升级」（空串表示可升级）。
 	UpgradeNote string `json:"upgrade_note,omitempty"`
 	CheckedAt   int64  `json:"checked_at"`

@@ -377,6 +377,14 @@ func (e *testEnv) wsURL(path string) string {
 // request 发起一次 HTTP 请求，返回状态码与响应体。
 func (e *testEnv) request(method, path, token string, body any) (int, []byte) {
 	e.t.Helper()
+	status, _, data := e.doRequest(method, path, token, body, nil)
+	return status, data
+}
+
+// doRequest 发起一次可附加请求头的 HTTP 请求，返回状态码、响应头与响应体。
+// headers 为 nil 时等同于 request；需要断言 X-Request-Id 等响应头时用它。
+func (e *testEnv) doRequest(method, path, token string, body any, headers map[string]string) (int, http.Header, []byte) {
+	e.t.Helper()
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -395,6 +403,9 @@ func (e *testEnv) request(method, path, token string, body any) (int, []byte) {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	resp, err := e.http.Do(req)
 	if err != nil {
 		e.t.Fatalf("发起请求失败: %v", err)
@@ -404,7 +415,7 @@ func (e *testEnv) request(method, path, token string, body any) (int, []byte) {
 	if err != nil {
 		e.t.Fatalf("读取响应体失败: %v", err)
 	}
-	return resp.StatusCode, data
+	return resp.StatusCode, resp.Header, data
 }
 
 // login 登录并返回 JWT。
@@ -966,10 +977,618 @@ func TestSPAFallback(t *testing.T) {
 	}
 }
 
+// ============ 错误语义：409 精确原因 / 502 remote_failure / 500 request_id（T-05，验收 A17-A20） ============
+
+// fakeRemoteExecutor 是 RemoteExecutor 的替身，用于构造远端执行失败。
+type fakeRemoteExecutor struct {
+	err      error
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
+func (f *fakeRemoteExecutor) Exec(context.Context, string, string, int) (string, string, int, error) {
+	return f.stdout, f.stderr, f.exitCode, f.err
+}
+
+// decodeErrorBody 解析统一错误体 {"error":{code,message,request_id}}。
+func decodeErrorBody(t *testing.T, raw []byte) (code, message, requestID string) {
+	t.Helper()
+	var out struct {
+		Error struct {
+			Code      string `json:"code"`
+			Message   string `json:"message"`
+			RequestID string `json:"request_id"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("解析错误体失败: %v（body=%s）", err, raw)
+	}
+	return out.Error.Code, out.Error.Message, out.Error.RequestID
+}
+
+// TestMapStoreErrorConflictDetail 覆盖 A17/A18 的映射层：409 仍用 conflict，但 message 透出 store 的精确原因。
+func TestMapStoreErrorConflictDetail(t *testing.T) {
+	cases := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantCode    string
+		wantMessage string
+	}{
+		{
+			name:        "凭证被引用数量",
+			err:         fmt.Errorf("凭证 cred-1 仍被 3 台服务器引用: %w", store.ErrConflict),
+			wantStatus:  http.StatusConflict,
+			wantCode:    codeConflict,
+			wantMessage: "凭证 cred-1 仍被 3 台服务器引用",
+		},
+		{
+			name:        "应用发布记录数",
+			err:         fmt.Errorf("应用 app-1 仍有 2 条发布记录，禁止删除: %w", store.ErrConflict),
+			wantStatus:  http.StatusConflict,
+			wantCode:    codeConflict,
+			wantMessage: "应用 app-1 仍有 2 条发布记录，禁止删除",
+		},
+		{
+			name:        "裸哨兵值回退通用文案",
+			err:         store.ErrConflict,
+			wantStatus:  http.StatusConflict,
+			wantCode:    codeConflict,
+			wantMessage: "资源已存在或冲突",
+		},
+		{
+			name:        "细节过短回退通用文案",
+			err:         fmt.Errorf("创建凭证 foo: %w", store.ErrConflict),
+			wantStatus:  http.StatusConflict,
+			wantCode:    codeConflict,
+			wantMessage: "资源已存在或冲突",
+		},
+		{
+			name:       "非 store 业务错误不映射",
+			err:        errors.New("boom"),
+			wantStatus: 0,
+		},
+	}
+	for _, tc := range cases {
+		status, code, message := mapStoreError(tc.err)
+		if status != tc.wantStatus || code != tc.wantCode || message != tc.wantMessage {
+			t.Fatalf("%s: mapStoreError=(%d,%q,%q)，期望 (%d,%q,%q)",
+				tc.name, status, code, message, tc.wantStatus, tc.wantCode, tc.wantMessage)
+		}
+	}
+}
+
+// TestConflictDetailTrimsSentinel 校验哨兵文案的两种形态都被去掉（英文 conflict 与本地化的记录冲突）。
+func TestConflictDetailTrimsSentinel(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"本地化哨兵", "凭证 cred-1 仍被 3 台服务器引用: 记录冲突", "凭证 cred-1 仍被 3 台服务器引用"},
+		{"英文哨兵", "app app-1 still has 2 releases: conflict", "app app-1 still has 2 releases"},
+		{"无哨兵", "应用 app-1 仍有 2 条发布记录，禁止删除", "应用 app-1 仍有 2 条发布记录，禁止删除"},
+		{"只有哨兵", "记录冲突", ""},
+		{"过短", "创建凭证 foo", ""},
+	}
+	for _, tc := range cases {
+		if got := conflictDetail(errors.New(tc.in)); got != tc.want {
+			t.Fatalf("%s: conflictDetail=%q，期望 %q", tc.name, got, tc.want)
+		}
+	}
+	if got := conflictDetail(nil); got != "" {
+		t.Fatalf("nil 错误应返回空串，实际 %q", got)
+	}
+}
+
+// TestStoreConflictErrorMessages 覆盖 A17/A18：删除仍被引用的资源返回 409 + conflict + 含数字的精确原因。
+func TestStoreConflictErrorMessages(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+
+	// A17：凭证仍被 3 台服务器引用。
+	cred := env.createCredentialVia(jwt, map[string]any{
+		"name": "conflict-cred", "kind": "password", "username": "root", "password": "SuperSecretPw123",
+	})
+	credID, _ := cred["id"].(string)
+	if credID == "" {
+		t.Fatalf("创建凭证未返回 id: %+v", cred)
+	}
+	for i := 0; i < 3; i++ {
+		env.createServerVia(jwt, map[string]any{
+			"name": fmt.Sprintf("cred-user-%d", i), "host": fmt.Sprintf("10.90.0.%d", i+1),
+			"port": 22, "mode": "ssh", "credential_id": credID,
+		})
+	}
+	status, headers, raw := env.doRequest(http.MethodDelete, "/api/v1/credentials/"+credID, jwt, nil,
+		map[string]string{"X-Request-Id": "trace-a17"})
+	if status != http.StatusConflict {
+		t.Fatalf("删除被 3 台服务器引用的凭证期望 409，实际 %d（body=%s）", status, raw)
+	}
+	code, message, requestID := decodeErrorBody(t, raw)
+	if code != codeConflict {
+		t.Fatalf("409 错误码期望 %q，实际 %q（body=%s）", codeConflict, code, raw)
+	}
+	if !strings.Contains(message, "3") || !strings.Contains(message, "服务器") {
+		t.Fatalf("409 message 应含引用数量与「服务器」，实际 %q", message)
+	}
+	if strings.Contains(message, "SuperSecretPw123") {
+		t.Fatalf("409 message 泄露了敏感值: %q", message)
+	}
+	if requestID != "trace-a17" || requestID != headers.Get("X-Request-Id") {
+		t.Fatalf("409 的 request_id 应与响应头一致（%q），实际 %q", headers.Get("X-Request-Id"), requestID)
+	}
+
+	// A18：应用仍有 2 条发布记录。
+	app := env.createAppVia(jwt, "conflict-app", "conflict-app")
+	tmpl := env.createTemplateVia(jwt, "conflict-tmpl", "binary", "#!/bin/sh\necho hello\n")
+	srv := env.createServerVia(jwt, map[string]any{"name": "rel-srv", "host": "10.90.1.1", "mode": "agent"})
+	for i := 0; i < 2; i++ {
+		status, raw = env.request(http.MethodPost, "/api/v1/releases", jwt, map[string]any{
+			"app_id": app.ID, "template_id": tmpl.ID,
+			"version": fmt.Sprintf("1.0.%d", i), "server_ids": []string{srv.ID},
+		})
+		if status != http.StatusCreated {
+			t.Fatalf("创建第 %d 条发布失败: %d（body=%s）", i+1, status, raw)
+		}
+	}
+	status, _, raw = env.doRequest(http.MethodDelete, "/api/v1/apps/"+app.ID, jwt, nil, nil)
+	if status != http.StatusConflict {
+		t.Fatalf("删除仍有发布记录的应用期望 409，实际 %d（body=%s）", status, raw)
+	}
+	code, message, _ = decodeErrorBody(t, raw)
+	if code != codeConflict {
+		t.Fatalf("409 错误码期望 %q，实际 %q（body=%s）", codeConflict, code, raw)
+	}
+	if !strings.Contains(message, "2") || !strings.Contains(message, "发布") {
+		t.Fatalf("409 message 应含发布条数与「发布」，实际 %q", message)
+	}
+}
+
+// TestRemoteFailureErrorCodeAndMessage 覆盖 A19：远端执行失败固定 502 + remote_failure，message 沿用「<动作>失败: <原因>」。
+func TestRemoteFailureErrorCodeAndMessage(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+	srv := env.createServerVia(jwt, map[string]any{"name": "remote-fail", "host": "10.90.2.1", "mode": "agent"})
+
+	// 注入必然失败的远端执行通道（agent 模式文件下载走 Exec）。
+	env.api.remoteExec = &fakeRemoteExecutor{err: errors.New("ssh: connect to host 10.90.2.1 port 22: connection refused"), exitCode: 1}
+
+	status, headers, raw := env.doRequest(http.MethodGet,
+		"/api/v1/servers/"+srv.ID+"/files/download?path=%2Ftmp%2Fa.log", jwt, nil, nil)
+	if status != http.StatusBadGateway {
+		t.Fatalf("远端执行失败期望 502，实际 %d（body=%s）", status, raw)
+	}
+	code, message, requestID := decodeErrorBody(t, raw)
+	if code != codeRemoteFailure {
+		t.Fatalf("502 错误码期望 %q，实际 %q（body=%s）", codeRemoteFailure, code, raw)
+	}
+	if !strings.HasPrefix(message, "下载文件失败: ") {
+		t.Fatalf("502 message 应以「下载文件失败: 」开头，实际 %q", message)
+	}
+	if !strings.Contains(message, "connection refused") {
+		t.Fatalf("502 message 应保留底层原因，实际 %q", message)
+	}
+	if requestID == "" || requestID != headers.Get("X-Request-Id") {
+		t.Fatalf("502 的 request_id 应与响应头一致（%q），实际 %q", headers.Get("X-Request-Id"), requestID)
+	}
+}
+
+// TestInternalErrorRequestIDMatchesHeader 覆盖 A20：500 响应体的 error.request_id 等于响应头 X-Request-Id。
+func TestInternalErrorRequestIDMatchesHeader(t *testing.T) {
+	env := newTestEnv(t)
+	handler := env.api.middlewareRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		env.api.internalError(w, r, errors.New("数据库连接失败: 内部细节不得外泄"))
+	}))
+
+	// 未带 X-Request-Id：由中间件生成，响应体与响应头必须一致且非空。
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/boom", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("内部错误期望 500，实际 %d", rec.Code)
+	}
+	code, message, requestID := decodeErrorBody(t, rec.Body.Bytes())
+	if code != codeInternal {
+		t.Fatalf("500 错误码期望 %q，实际 %q", codeInternal, code)
+	}
+	if message != "服务器内部错误" {
+		t.Fatalf("500 message 不应泄露内部细节，实际 %q", message)
+	}
+	headerID := rec.Header().Get("X-Request-Id")
+	if headerID == "" {
+		t.Fatalf("响应头缺少 X-Request-Id")
+	}
+	if requestID != headerID {
+		t.Fatalf("500 的 request_id=%q 与响应头 X-Request-Id=%q 不一致", requestID, headerID)
+	}
+
+	// 带 X-Request-Id：必须原样透传（便于跨服务串联）。
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/boom", nil)
+	req2.Header.Set("X-Request-Id", "upstream-trace-42")
+	handler.ServeHTTP(rec2, req2)
+	_, _, requestID2 := decodeErrorBody(t, rec2.Body.Bytes())
+	if requestID2 != "upstream-trace-42" || rec2.Header().Get("X-Request-Id") != "upstream-trace-42" {
+		t.Fatalf("应透传入站 X-Request-Id：body=%q header=%q", requestID2, rec2.Header().Get("X-Request-Id"))
+	}
+}
+
+// TestWriteErrorAlwaysIncludesRequestIDKey 保证所有错误体都带 request_id 键（无中间件时为空串），形状稳定。
+func TestWriteErrorAlwaysIncludesRequestIDKey(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeError(rec, http.StatusBadRequest, codeInvalidArgument, "参数错误")
+	var out map[string]map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("解析错误体失败: %v（body=%s）", err, rec.Body.String())
+	}
+	errBody, ok := out["error"]
+	if !ok {
+		t.Fatalf("错误体缺少 error 对象: %s", rec.Body.String())
+	}
+	if errBody["code"] != codeInvalidArgument || errBody["message"] != "参数错误" {
+		t.Fatalf("错误体结构被破坏: %s", rec.Body.String())
+	}
+	if _, ok := errBody["request_id"]; !ok {
+		t.Fatalf("错误体缺少 request_id 键: %s", rec.Body.String())
+	}
+}
+
 // truncate 截断字符串，便于断言失败时输出。
 func truncate(b []byte, n int) string {
 	if len(b) <= n {
 		return string(b)
 	}
 	return string(b[:n]) + "..."
+}
+
+// TestConflictDetailAcceptsShortPreciseReasons 校验冲突文案「标志词」判定：
+// 名字很短（如「分组 a 已存在」）但已说明原因时必须透出，不能被长度阈值吞掉。
+func TestConflictDetailAcceptsShortPreciseReasons(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"短名已存在", "分组 a 已存在: " + store.ErrConflict.Error(), "分组 a 已存在"},
+		{"短名被占用", "分组 a 的新名称已被占用: " + store.ErrConflict.Error(), "分组 a 的新名称已被占用"},
+		{"禁止删除", "应用 a 仍有 1 条发布记录，禁止删除: " + store.ErrConflict.Error(), "应用 a 仍有 1 条发布记录，禁止删除"},
+		{"引用数量", "凭证 c 仍被 1 台服务器引用: " + store.ErrConflict.Error(), "凭证 c 仍被 1 台服务器引用"},
+		{"不能确认", "告警 a 当前状态为 recovered，不能确认: " + store.ErrConflict.Error(), "告警 a 当前状态为 recovered，不能确认"},
+		{"无信息量回退", "创建凭证 foo: " + store.ErrConflict.Error(), ""},
+	}
+	for _, tc := range cases {
+		if got := conflictDetail(errors.New(tc.in)); got != tc.want {
+			t.Fatalf("%s: conflictDetail=%q，期望 %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestCreateConflictReturnsPreciseReason 覆盖 A17 的建服侧：重名分组 → 409 + conflict，
+// message 是「分组 X 已存在」而不是空泛的「资源已存在或冲突」（长名/短名都要成立）。
+func TestCreateConflictReturnsPreciseReason(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+
+	for _, name := range []string{"web-group", "a"} {
+		status, raw := env.request(http.MethodPost, "/api/v1/server-groups", jwt, map[string]any{"name": name})
+		if status != http.StatusCreated {
+			t.Fatalf("创建分组 %q 失败: %d（body=%s）", name, status, raw)
+		}
+		status, headers, raw := env.doRequest(http.MethodPost, "/api/v1/server-groups", jwt,
+			map[string]any{"name": name}, nil)
+		if status != http.StatusConflict {
+			t.Fatalf("重名分组 %q 期望 409，实际 %d（body=%s）", name, status, raw)
+		}
+		code, message, requestID := decodeErrorBody(t, raw)
+		if code != codeConflict {
+			t.Fatalf("409 错误码期望 %q，实际 %q（body=%s）", codeConflict, code, raw)
+		}
+		want := "分组 " + name + " 已存在"
+		if message != want {
+			t.Fatalf("409 message 期望 %q，实际 %q", want, message)
+		}
+		if requestID == "" || requestID != headers.Get("X-Request-Id") {
+			t.Fatalf("409 的 request_id 应与响应头一致（%q），实际 %q", headers.Get("X-Request-Id"), requestID)
+		}
+	}
+}
+
+// remoteFailDeploy 在 fakeDeployOrchestrator 之上补齐「远端探测/体检」两个可选能力，
+// 用于构造目标机不可达的 502 场景。
+type remoteFailDeploy struct {
+	*fakeDeployOrchestrator
+	discoverErr error
+	diagnoseErr error
+}
+
+func (f *remoteFailDeploy) Discover(context.Context, string) (*DiscoveryReport, error) {
+	return nil, f.discoverErr
+}
+
+func (f *remoteFailDeploy) RunDiagnose(context.Context, string, string) (string, error) {
+	return "", f.diagnoseErr
+}
+
+// TestRemoteFailureEndpointsReturn502 覆盖 A19：所有「远端执行失败」的入口都必须是
+// 502 + code=remote_failure，message 保持「<动作>失败: <原因>」，且 request_id 与响应头一致。
+func TestRemoteFailureEndpointsReturn502(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+	srv := env.createServerVia(jwt, map[string]any{"name": "unreachable", "host": "10.91.0.9", "mode": "agent"})
+
+	remoteErr := errors.New("dial tcp 10.91.0.9:22: connect: connection refused")
+	env.api.deploy = &remoteFailDeploy{
+		fakeDeployOrchestrator: env.deploy,
+		discoverErr:            remoteErr,
+		diagnoseErr:            remoteErr,
+	}
+	env.ssh.hostErr = remoteErr
+
+	cases := []struct {
+		name       string
+		method     string
+		path       string
+		body       map[string]any
+		wantPrefix string
+	}{
+		{"discover", http.MethodPost, "/api/v1/servers/" + srv.ID + "/discover", nil, "探测失败: "},
+		{"diagnose", http.MethodPost, "/api/v1/servers/" + srv.ID + "/diagnose",
+			map[string]any{"kind": "systemd", "name": "nginx"}, "体检失败: "},
+		{"refresh-host-info", http.MethodPost, "/api/v1/servers/" + srv.ID + "/refresh-host-info", nil, "SSH 采集失败: "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, headers, raw := env.doRequest(tc.method, tc.path, jwt, tc.body, nil)
+			if status != http.StatusBadGateway {
+				t.Fatalf("%s 期望 502，实际 %d（body=%s）", tc.name, status, raw)
+			}
+			code, message, requestID := decodeErrorBody(t, raw)
+			if code != codeRemoteFailure {
+				t.Fatalf("%s 错误码期望 %q，实际 %q（body=%s）", tc.name, codeRemoteFailure, code, raw)
+			}
+			if !strings.HasPrefix(message, tc.wantPrefix) {
+				t.Fatalf("%s message 应以 %q 开头，实际 %q", tc.name, tc.wantPrefix, message)
+			}
+			if !strings.Contains(message, "connection refused") {
+				t.Fatalf("%s message 应保留底层原因，实际 %q", tc.name, message)
+			}
+			if requestID == "" || requestID != headers.Get("X-Request-Id") {
+				t.Fatalf("%s 的 request_id 应与响应头一致（%q），实际 %q", tc.name, headers.Get("X-Request-Id"), requestID)
+			}
+		})
+	}
+}
+
+// TestPanicRecoveredAs500WithRequestID 覆盖 A20 的兜底路径：handler panic 由 recover 中间件
+// 转成 500，响应体 error.request_id 必须等于响应头 X-Request-Id（与普通 500 同一形状）。
+func TestPanicRecoveredAs500WithRequestID(t *testing.T) {
+	env := newTestEnv(t)
+	handler := env.api.middlewareRequestID(env.api.middlewareRecover(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			panic("handler 炸了：内部细节不得外泄")
+		})))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/boom-panic", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("panic 期望被转成 500，实际 %d", rec.Code)
+	}
+	code, message, requestID := decodeErrorBody(t, rec.Body.Bytes())
+	if code != codeInternal {
+		t.Fatalf("panic 500 错误码期望 %q，实际 %q", codeInternal, code)
+	}
+	if strings.Contains(message, "内部细节") {
+		t.Fatalf("panic 500 泄露了内部细节: %q", message)
+	}
+	headerID := rec.Header().Get("X-Request-Id")
+	if headerID == "" || requestID != headerID {
+		t.Fatalf("panic 500 的 request_id=%q 应等于响应头 %q", requestID, headerID)
+	}
+}
+
+// TestUpdateCheckEndpointAgentAssets 覆盖 A29 的接口层：POST /system/update/check 的
+// agent_assets 与会话期一致——checksums.txt 取不到时资产仍返回、sha256 置空；
+// 首检就失败（离线）时也必须是 []（不是 null）。
+func TestUpdateCheckEndpointAgentAssets(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+
+	t.Run("checksums 不可得仍返回资产", func(t *testing.T) {
+		var baseURL string
+		mux := http.NewServeMux()
+		mux.HandleFunc("/repos/maliang/leadstack/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"tag_name":     "v0.2.0",
+				"published_at": time.Now().UTC().Format(time.RFC3339),
+				"assets": []map[string]any{
+					{"name": "checksums.txt", "browser_download_url": baseURL + "/download/v0.2.0/checksums.txt"},
+					{"name": "leadstack_0.2.0_linux_amd64.tar.gz",
+						"browser_download_url": baseURL + "/download/v0.2.0/leadstack_0.2.0_linux_amd64.tar.gz"},
+					{"name": "leadstack-agent_0.2.0_linux_amd64.tar.gz",
+						"browser_download_url": baseURL + "/download/v0.2.0/leadstack-agent_0.2.0_linux_amd64.tar.gz"},
+				},
+			})
+		})
+		// checksums.txt 故意 404：拿不到校验和时不得阻断整体响应。
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		baseURL = srv.URL
+
+		env.api.updates = newUpdateChecker("maliang/leadstack", srv.URL, "v0.1.0", time.Hour, noopLogger{})
+
+		status, raw := env.request(http.MethodPost, "/api/v1/system/update/check", jwt, nil)
+		if status != http.StatusOK {
+			t.Fatalf("检查更新期望 200，实际 %d（body=%s）", status, raw)
+		}
+		var out struct {
+			Data struct {
+				Assets      []UpdateAsset      `json:"assets"`
+				AgentAssets []AgentUpdateAsset `json:"agent_assets"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("解析响应失败: %v（body=%s）", err, raw)
+		}
+		if len(out.Data.AgentAssets) != 1 {
+			t.Fatalf("agent_assets 应有 1 项，实际 %d（body=%s）", len(out.Data.AgentAssets), raw)
+		}
+		if out.Data.AgentAssets[0].SHA256 != "" {
+			t.Fatalf("checksums 不可得时 sha256 应为空，实际 %q", out.Data.AgentAssets[0].SHA256)
+		}
+		if !strings.HasPrefix(out.Data.AgentAssets[0].Name, agentAssetPrefix) {
+			t.Fatalf("agent_assets 混入非 agent 包：%s", out.Data.AgentAssets[0].Name)
+		}
+		for _, a := range out.Data.Assets {
+			if strings.Contains(a.Name, "agent") {
+				t.Fatalf("assets 混入 agent 包：%s", a.Name)
+			}
+		}
+	})
+
+	t.Run("离线首检 assets 与 agent_assets 都是空数组", func(t *testing.T) {
+		// 127.0.0.1:1 必然拒绝连接 → 首次检查失败、无缓存可保留。
+		env.api.updates = newUpdateChecker("maliang/leadstack", "http://127.0.0.1:1", "v0.1.0", time.Hour, noopLogger{})
+		// 两个入口都要形状一致：前端 Array.isArray 对 null 与 [] 走两条分支（F5）。
+		for _, tc := range []struct{ name, method, path string }{
+			{"POST check", http.MethodPost, "/api/v1/system/update/check"},
+			{"GET cached", http.MethodGet, "/api/v1/system/update"},
+		} {
+			status, raw := env.request(tc.method, tc.path, jwt, nil)
+			if status != http.StatusOK {
+				t.Fatalf("%s：检查更新失败也应 200（带 error 字段），实际 %d（body=%s）", tc.name, status, raw)
+			}
+			var out struct {
+				Data struct {
+					Assets      json.RawMessage `json:"assets"`
+					AgentAssets json.RawMessage `json:"agent_assets"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(raw, &out); err != nil {
+				t.Fatalf("%s：解析响应失败: %v（body=%s）", tc.name, err, raw)
+			}
+			if string(out.Data.Assets) != "[]" {
+				t.Fatalf("%s：离线时 assets 必须是 [] 而不是 null，实际 %s", tc.name, out.Data.Assets)
+			}
+			if string(out.Data.AgentAssets) != "[]" {
+				t.Fatalf("%s：离线时 agent_assets 必须是 [] 而不是 null，实际 %s", tc.name, out.Data.AgentAssets)
+			}
+		}
+	})
+}
+
+// TestLoginErrorsCarryRequestID 覆盖 reviewer F1：登录失败（401）与触发锁定（429）
+// 的错误体也必须带 request_id，且与响应头 X-Request-Id 同值。
+//
+// 登录是用户最常撞到的错误路径：没有请求号，用户报「登不进去」时运维拿着时间和账号
+// 也对不上日志，等于断掉一条排查链（A20 之前只强制了 500）。
+func TestLoginErrorsCarryRequestID(t *testing.T) {
+	env := newTestEnv(t)
+	admin := env.login()
+	env.createUserVia(admin, "reqid-user", "ReqIdPass-123", "viewer")
+
+	wrong := map[string]string{"username": "reqid-user", "password": "WrongPass-000"}
+
+	status, headers, raw := env.doRequest(http.MethodPost, "/api/v1/auth/login", "", wrong, nil)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("错误密码应 401，实际 %d（body=%s）", status, raw)
+	}
+	headerID := headers.Get("X-Request-Id")
+	if headerID == "" {
+		t.Fatal("响应头缺少 X-Request-Id")
+	}
+	code, _, requestID := decodeErrorBody(t, raw)
+	if code != codeUnauthorized {
+		t.Fatalf("401 的 code 应为 %q，实际 %q（body=%s）", codeUnauthorized, code, raw)
+	}
+	if requestID != headerID {
+		t.Fatalf("401 的 error.request_id 应等于响应头 %q，实际 %q（body=%s）", headerID, requestID, raw)
+	}
+	if !bytes.Contains(raw, []byte(`"remaining_attempts"`)) {
+		t.Fatalf("401 应保留 details.remaining_attempts: %s", raw)
+	}
+
+	// 继续失败到阈值：第 5 次触发锁定 → 429 login_locked，同样要带 request_id。
+	var status429 int
+	var headers429 http.Header
+	var raw429 []byte
+	for i := 2; i <= 5; i++ {
+		status429, headers429, raw429 = env.doRequest(http.MethodPost, "/api/v1/auth/login", "", wrong, nil)
+	}
+	if status429 != http.StatusTooManyRequests {
+		t.Fatalf("连续失败达阈值应 429，实际 %d（body=%s）", status429, raw429)
+	}
+	code429, _, requestID429 := decodeErrorBody(t, raw429)
+	if code429 != "login_locked" {
+		t.Fatalf("锁定 code 应为 login_locked，实际 %q（body=%s）", code429, raw429)
+	}
+	if header429 := headers429.Get("X-Request-Id"); requestID429 == "" || requestID429 != header429 {
+		t.Fatalf("429 的 error.request_id 应等于响应头 %q，实际 %q（body=%s）", header429, requestID429, raw429)
+	}
+	if !bytes.Contains(raw429, []byte(`"retry_after_s"`)) {
+		t.Fatalf("429 应保留 details.retry_after_s: %s", raw429)
+	}
+}
+
+// TestOrchestratorDisabledReturns503 覆盖 reviewer F4：控制端本地没装配发布执行器
+// 属于本地能力缺失，必须 503 + unavailable + 本地文案，绝不能 502 remote_failure +
+// 「探测失败: 」——后者把责任推给目标机，用户会拿着这句话去目标机查日志，一条也查不到。
+func TestOrchestratorDisabledReturns503(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+
+	status, raw := env.request(http.MethodPost, "/api/v1/servers", jwt, map[string]any{
+		"name": "no-orchestrator", "host": "10.9.9.9", "mode": "agent",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("创建服务器失败: %d（body=%s）", status, raw)
+	}
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &created); err != nil || created.Data.ID == "" {
+		t.Fatalf("解析服务器 ID 失败: %v（body=%s）", err, raw)
+	}
+	serverID := created.Data.ID
+
+	original := env.api.deploy
+	defer func() { env.api.deploy = original }()
+
+	endpoints := []struct {
+		name string
+		path string
+		body any
+	}{
+		{name: "discover", path: "/api/v1/servers/" + serverID + "/discover"},
+		{name: "diagnose", path: "/api/v1/servers/" + serverID + "/diagnose",
+			body: map[string]any{"kind": "systemd", "name": "nginx"}},
+	}
+
+	// 两种「本地没装配」：deploy 为 nil（能力断言直接失败）、执行器存在但执行端为空
+	// （Discover/RunDiagnose 返回 errOrchestratorDisabled 哨兵）。
+	deploys := []struct {
+		label  string
+		deploy DeployOrchestrator
+	}{
+		{label: "未注入编排器", deploy: nil},
+		{label: "编排器无执行端", deploy: &deployOrchestrator{}},
+	}
+	for _, d := range deploys {
+		env.api.deploy = d.deploy
+		for _, ep := range endpoints {
+			status, headers, raw := env.doRequest(http.MethodPost, ep.path, jwt, ep.body, nil)
+			if status != http.StatusServiceUnavailable {
+				t.Fatalf("%s/%s：本地缺执行器应 503，实际 %d（body=%s）", d.label, ep.name, status, raw)
+			}
+			code, message, requestID := decodeErrorBody(t, raw)
+			if code != codeUnavailable {
+				t.Fatalf("%s/%s：code 应为 %q，实际 %q（body=%s）", d.label, ep.name, codeUnavailable, code, raw)
+			}
+			if !strings.Contains(message, "发布执行器未启用") {
+				t.Fatalf("%s/%s：message 应说明是本地的执行器未启用，实际 %q", d.label, ep.name, message)
+			}
+			for _, bad := range []string{"失败: ", "探测失败", "体检失败"} {
+				if strings.Contains(message, bad) {
+					t.Fatalf("%s/%s：message 不该带远端语义 %q，实际 %q", d.label, ep.name, bad, message)
+				}
+			}
+			if headerID := headers.Get("X-Request-Id"); requestID == "" || requestID != headerID {
+				t.Fatalf("%s/%s：503 也必须带 request_id（响应头 %q，body %q）", d.label, ep.name, headerID, requestID)
+			}
+		}
+	}
 }

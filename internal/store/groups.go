@@ -71,7 +71,7 @@ func (s *Store) CreateServerGroup(ctx context.Context, g *ServerGroup) error {
 		g.ID, g.Name, g.Description, g.CreatedAt, g.UpdatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return fmt.Errorf("创建分组 %s: %w", g.Name, ErrConflict)
+			return fmt.Errorf("分组 %s 已存在: %w", g.Name, ErrConflict)
 		}
 		return fmt.Errorf("创建分组 %s: %w", g.Name, err)
 	}
@@ -103,7 +103,7 @@ func (s *Store) UpdateServerGroup(ctx context.Context, id string, upd GroupUpdat
 		args = append(args, id)
 		if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 			if isUniqueViolation(err) {
-				return nil, fmt.Errorf("更新分组 %s: %w", id, ErrConflict)
+				return nil, fmt.Errorf("分组 %s 的新名称已被占用: %w", id, ErrConflict)
 			}
 			return nil, fmt.Errorf("更新分组 %s: %w", id, err)
 		}

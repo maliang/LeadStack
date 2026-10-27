@@ -913,3 +913,133 @@ func TestAlertEventKindsMatchStore(t *testing.T) {
 		}
 	}
 }
+
+// alertSummaryPayload 是 GET /alerts/summary 的响应体。
+type alertSummaryPayload struct {
+	Firing      int            `json:"firing"`
+	Acked       int            `json:"acked"`
+	Resolved24h int            `json:"resolved_24h"`
+	BySeverity  map[string]int `json:"by_severity"`
+}
+
+// getAlertSummary 查询告警概览。
+func (e *testEnv) getAlertSummary(jwt string) alertSummaryPayload {
+	e.t.Helper()
+	status, raw := e.request(http.MethodGet, "/api/v1/alerts/summary", jwt, nil)
+	if status != http.StatusOK {
+		e.t.Fatalf("查询 alerts summary 失败: %d（body=%s）", status, raw)
+	}
+	var out struct {
+		Data alertSummaryPayload `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		e.t.Fatalf("解析 alerts summary 失败: %v（body=%s）", err, raw)
+	}
+	return out.Data
+}
+
+// countAlertsByStatus 返回 GET /alerts?status=X 的条数（与 summary 对账用）。
+func (e *testEnv) countAlertsByStatus(jwt, status string) int {
+	e.t.Helper()
+	code, raw := e.request(http.MethodGet, "/api/v1/alerts?status="+status, jwt, nil)
+	if code != http.StatusOK {
+		e.t.Fatalf("查询告警列表(status=%s)失败: %d（body=%s）", status, code, raw)
+	}
+	var out struct {
+		Data []alertPayload `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		e.t.Fatalf("解析告警列表失败: %v（body=%s）", err, raw)
+	}
+	return len(out.Data)
+}
+
+// TestAlertSummaryScopedToVisibleAlerts 覆盖 A13/A14：受限角色的告警概览只统计范围内服务器，
+// 规则级告警（server_id IS NULL）不计入；全局角色返回与改动前一致。
+func TestAlertSummaryScopedToVisibleAlerts(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	admin := env.login()
+	now := store.NowMS()
+
+	srvIn := env.createServerVia(admin, map[string]any{"name": "al-sum-in", "host": "10.21.0.1"})
+	srvOut := env.createServerVia(admin, map[string]any{"name": "al-sum-out", "host": "10.21.0.2"})
+	groupID := env.createGroupVia(admin, "告警汇总组")
+	env.setGroupMembers(admin, groupID, []string{srvIn.ID})
+
+	roleKey := env.createRoleVia(admin, "告警只读", []string{"server.read", "alert.read"},
+		map[string]any{"mode": "groups", "group_ids": []string{groupID}, "server_ids": []string{}})
+	env.createUserVia(admin, "alviewer", "AlPass-123", roleKey)
+	scoped := env.loginAs(t, "alviewer", "AlPass-123")
+
+	seed := func(id, status, severity string, serverID *string, resolvedAt *int64) {
+		t.Helper()
+		if err := env.st.CreateAlert(ctx, store.Alert{
+			ID: id, RuleID: "rule-summary", DedupKey: "k-" + id, ServerID: serverID,
+			Status: status, Severity: severity, Title: "告警 " + id,
+			StartedAt: now, UpdatedAt: now, ResolvedAt: resolvedAt,
+		}); err != nil {
+			t.Fatalf("写入告警 %s 失败: %v", id, err)
+		}
+	}
+	recent := now - 3600*1000
+	old := now - 48*3600*1000
+	seed("al-in-firing", store.AlertStatusFiring, "critical", &srvIn.ID, nil)
+	seed("al-in-acked", store.AlertStatusAcked, "warning", &srvIn.ID, nil)
+	seed("al-in-resolved", store.AlertStatusResolved, "info", &srvIn.ID, &recent)
+	seed("al-out-firing", store.AlertStatusFiring, "critical", &srvOut.ID, nil)
+	seed("al-out-resolved-old", store.AlertStatusResolved, "warning", &srvOut.ID, &old)
+	seed("al-rule-firing", store.AlertStatusFiring, "info", nil, nil)
+
+	// 全局角色：与改动前完全一致（A14）。
+	adminSummary := env.getAlertSummary(admin)
+	if adminSummary.Firing != 3 || adminSummary.Acked != 1 || adminSummary.Resolved24h != 1 {
+		t.Fatalf("全局角色概览不正确: %+v", adminSummary)
+	}
+	if adminSummary.BySeverity["critical"] != 2 || adminSummary.BySeverity["warning"] != 1 ||
+		adminSummary.BySeverity["info"] != 1 {
+		t.Fatalf("全局角色严重级别分布不正确: %+v", adminSummary.BySeverity)
+	}
+	if adminSummary.Firing != env.countAlertsByStatus(admin, store.AlertStatusFiring) {
+		t.Fatalf("全局角色 firing 与列表条数不一致: %+v", adminSummary)
+	}
+	if adminSummary.Acked != env.countAlertsByStatus(admin, store.AlertStatusAcked) {
+		t.Fatalf("全局角色 acked 与列表条数不一致: %+v", adminSummary)
+	}
+
+	// 受限角色：范围外 firing 与规则级告警都不计入（A13）。
+	scopedSummary := env.getAlertSummary(scoped)
+	if scopedSummary.Firing != 1 || scopedSummary.Acked != 1 || scopedSummary.Resolved24h != 1 {
+		t.Fatalf("受限角色概览应只覆盖范围内告警: %+v", scopedSummary)
+	}
+	if scopedSummary.BySeverity["critical"] != 1 || scopedSummary.BySeverity["warning"] != 1 ||
+		scopedSummary.BySeverity["info"] != 0 {
+		t.Fatalf("受限角色严重级别分布不正确: %+v", scopedSummary.BySeverity)
+	}
+	if scopedSummary.Firing != env.countAlertsByStatus(scoped, store.AlertStatusFiring) {
+		t.Fatalf("受限角色 firing 与列表条数不一致: %+v", scopedSummary)
+	}
+	if scopedSummary.Acked != env.countAlertsByStatus(scoped, store.AlertStatusAcked) {
+		t.Fatalf("受限角色 acked 与列表条数不一致: %+v", scopedSummary)
+	}
+
+	// 范围内一台服务器都没有 → 200 且全 0（by_severity 三个键都在）。
+	emptyGroup := env.createGroupVia(admin, "告警空范围组")
+	emptyRole := env.createRoleVia(admin, "告警空范围只读", []string{"server.read", "alert.read"},
+		map[string]any{"mode": "groups", "group_ids": []string{emptyGroup}, "server_ids": []string{}})
+	env.createUserVia(admin, "alempty", "AlEmpty-123", emptyRole)
+	emptyJWT := env.loginAs(t, "alempty", "AlEmpty-123")
+
+	emptySummary := env.getAlertSummary(emptyJWT)
+	if emptySummary.Firing != 0 || emptySummary.Acked != 0 || emptySummary.Resolved24h != 0 {
+		t.Fatalf("空范围概览应全 0: %+v", emptySummary)
+	}
+	for _, sev := range []string{"critical", "warning", "info"} {
+		if v, ok := emptySummary.BySeverity[sev]; !ok || v != 0 {
+			t.Fatalf("空范围 by_severity[%s] 期望 0 且存在，实际 %+v", sev, emptySummary.BySeverity)
+		}
+	}
+	if n := env.countAlertsByStatus(emptyJWT, store.AlertStatusFiring); n != 0 {
+		t.Fatalf("空范围 firing 列表应为空，实际 %d", n)
+	}
+}

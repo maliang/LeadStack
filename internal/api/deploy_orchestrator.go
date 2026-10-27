@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -510,17 +512,31 @@ func (o *deployOrchestrator) runOne(ctx context.Context, release *store.Release,
 	}
 	// 部署后健康检查（builtin 通道；baota 通道在 runOneBaota 内部完成）。
 	if status == store.ReleaseStatusSuccess {
-		if port, hpath := healthTarget(app); hpath != "" && port > 0 {
-			logf("system", fmt.Sprintf("--- 健康检查 http://<host>:%d%s ---\n", port, hpath))
+		port, hpath := healthTarget(app)
+		// B-04：跳过健康检查不能静默，否则用户会误以为「配了端口就有保护」（A4）。
+		// healthTarget 在没有端口时会连 path 一起返回空，因此这里用配置本身判定「缺哪一项」。
+		if strings.TrimSpace(derefStr(app.HealthcheckPath)) == "" {
+			logf("system", "跳过健康检查：未配置 healthcheck_path\n")
+		} else if port <= 0 {
+			logf("system", "跳过健康检查：healthcheck_port 与 site_port 均未配置\n")
+		}
+		if hpath != "" && port > 0 {
 			srv, serr := o.st.GetServer(ctx, run.ServerID)
 			if serr != nil {
 				o.finishRun(ctx, run, store.ReleaseStatusFailed, -1, "读取服务器失败: "+serr.Error(), strPtrOrNil(deploy.StepHealthCheck), logf)
 				return
 			}
-			if herr := waitHTTPHealthy(ctx, fmt.Sprintf("http://%s:%d%s", srv.Host, port, hpath)); herr != nil {
-				logf("system", "健康检查失败，执行回滚: "+herr.Error()+"\n")
+			healthURL := fmt.Sprintf("http://%s:%d%s", srv.Host, port, hpath)
+			logf("system", "--- 健康检查 "+healthURL+" ---\n")
+			if herr := waitHTTPHealthy(ctx, healthURL); herr != nil {
+				reason := healthCheckReason(herr)
+				logf("system", "健康检查失败: "+reason+"\n")
 				o.rollbackAfterHealthFailure(ctx, run, plan, logf)
-				o.finishRun(ctx, run, store.ReleaseStatusFailed, -1, "部署后健康检查失败: "+herr.Error(), strPtrOrNil(deploy.StepHealthCheck), logf)
+				var hce *healthCheckError
+				if errors.As(herr, &hce) && hce.isConnectionFailure() {
+					reason += healthCheckHint
+				}
+				o.finishRun(ctx, run, store.ReleaseStatusFailed, -1, "部署后健康检查失败: "+reason, strPtrOrNil(deploy.StepHealthCheck), logf)
 				return
 			}
 			logf("system", "健康检查通过\n")
@@ -879,45 +895,119 @@ func (h *DeployOrchestratorHandle) Preview(ctx context.Context, app *store.App, 
 	return h.inner.Preview(ctx, app, tmpl, artifact, version, servers)
 }
 
+// 回滚判定词表（唯一，英文机器码；PLAN「回滚判定词表」）。
+//
+// 前端只按码映射文案，禁止把中文当 reason 传输。
+const (
+	// 逐台 skipped：不需要或无法回滚，但都不算失败。
+	rollbackSkipNoSuccessfulRun = "no-successful-run" // 目标版本在这台服务器上没有成功记录
+	rollbackSkipAlreadyCurrent  = "already-current"   // 目标版本已是这台服务器的当前版本
+	rollbackSkipMissingBackup   = "missing-backup"    // inplace：后继发布的备份文件缺失
+	// 逐台 failed：真的执行过回滚但失败了。
+	rollbackFailReason = "rollback-error"
+)
+
+// rollbackSkip 是「该服务器无需/无法回滚」的逐台原因（进 skipped，不算失败）。
+type rollbackSkip struct {
+	ServerID string `json:"server_id"`
+	Reason   string `json:"reason"`
+}
+
+// rollbackFailure 是逐台回滚失败（进 failed）。
+type rollbackFailure struct {
+	ServerID string `json:"server_id"`
+	Reason   string `json:"reason"`
+	Message  string `json:"message"`
+}
+
+// rollbackToResult 是「回滚到指定版本」的执行结果。
+type rollbackToResult struct {
+	RolledBack      int               `json:"rolled_back"`
+	TargetReleaseID string            `json:"target_release_id"`
+	TargetVersion   string            `json:"-"`
+	Skipped         []rollbackSkip    `json:"skipped"`
+	Failed          []rollbackFailure `json:"failed"`
+}
+
+// skippedText 把 skipped 清单渲染成 `server_id:reason；…`（用于「全跳过」的 400 文案）。
+func (r rollbackToResult) skippedText() string {
+	parts := make([]string, 0, len(r.Skipped))
+	for _, s := range r.Skipped {
+		parts = append(parts, s.ServerID+":"+s.Reason)
+	}
+	return strings.Join(parts, "；")
+}
+
+// rollbackToError 是「回滚到指定版本」的**请求级**错误：整请求失败，不进 skipped（R6）。
+type rollbackToError struct {
+	// Status 是建议的 HTTP 状态码。
+	Status int
+	// Code 是错误体里的 code（invalid_argument / not_found）。
+	Code    string
+	Message string
+}
+
+func (e *rollbackToError) Error() string { return e.Message }
+
+// newRollbackRequestError 构造请求级回滚错误。
+func newRollbackRequestError(status int, code, message string) *rollbackToError {
+	return &rollbackToError{Status: status, Code: code, Message: message}
+}
+
 // RollbackTo 回滚到**指定历史版本**（release 模式切 current，inplace 模式解回该版本的备份）。
 //
 // 与 Rollback（回上一版）的区别：目标版本由调用方指定，且必须在该服务器上有过成功发布。
 // 脚本模式没有可回放的历史态（git 状态由脚本管理），直接拒绝并说明原因。
-func (o *deployOrchestrator) RollbackTo(releaseID, targetReleaseID string, serverIDs []string) (int, error) {
+//
+// 判定口径（R6/R7）：每台服务器要么进 rolled_back，要么进 skipped（无需/无法回滚，带唯一 reason），
+// 要么进 failed（真的执行过但失败，带底层原因）。全部被跳过时返回请求级错误，message 逐台列原因。
+func (o *deployOrchestrator) RollbackTo(releaseID, targetReleaseID string, serverIDs []string) (rollbackToResult, error) {
+	res := rollbackToResult{
+		TargetReleaseID: targetReleaseID,
+		Skipped:         []rollbackSkip{},
+		Failed:          []rollbackFailure{},
+	}
 	if o == nil {
-		return 0, errors.New("发布编排器未启用")
+		return res, errors.New("发布编排器未启用")
 	}
 	ctx := context.Background()
 	release, err := o.st.GetRelease(ctx, releaseID)
 	if err != nil {
-		return 0, err
+		return res, err
 	}
 	app, err := o.st.GetApp(ctx, release.AppID)
 	if err != nil {
-		return 0, err
+		return res, err
 	}
 	target, err := o.st.GetRelease(ctx, targetReleaseID)
 	if err != nil {
-		return 0, fmt.Errorf("目标版本不存在: %w", err)
+		if errors.Is(err, store.ErrNotFound) {
+			return res, newRollbackRequestError(http.StatusNotFound, codeNotFound,
+				"目标版本不存在（target-not-found）")
+		}
+		return res, err
 	}
-	if target.AppID != release.AppID {
-		return 0, errors.New("目标版本不属于同一个应用")
+	res.TargetVersion = target.Version
+	if target.AppID != app.ID {
+		return res, newRollbackRequestError(http.StatusBadRequest, codeInvalidArgument,
+			"目标版本不属于同一个应用（target-not-in-app）")
 	}
 	if target.Status != store.ReleaseStatusSuccess {
-		return 0, errors.New("只能回滚到发布成功的版本")
+		return res, newRollbackRequestError(http.StatusBadRequest, codeInvalidArgument,
+			"只能回滚到发布成功的版本（target-not-success）")
 	}
 	if app.DeployMode == store.DeployModeScript {
-		return 0, errors.New("脚本模式不支持回滚到指定版本（git 状态由回滚脚本管理），" +
-			"请用回滚脚本或 release/inplace 模式")
+		return res, newRollbackRequestError(http.StatusBadRequest, codeInvalidArgument,
+			"script 模式不支持回滚到指定版本，请在 rollback_script 中实现")
 	}
 
 	runs, err := o.st.ListReleaseRuns(ctx, releaseID)
 	if err != nil {
-		return 0, err
+		return res, err
 	}
 	targetRuns, err := o.st.ListReleaseRuns(ctx, targetReleaseID)
 	if err != nil {
-		return 0, err
+		return res, err
 	}
 	targetOK := map[string]bool{}
 	for _, r := range targetRuns {
@@ -929,40 +1019,29 @@ func (o *deployOrchestrator) RollbackTo(releaseID, targetReleaseID string, serve
 	for _, id := range serverIDs {
 		selected[id] = true
 	}
-
-	// inplace 模式：备份名是 backup-<releaseID>，存的是「该次发布之前」的状态。
-	// 要回滚到版本 X，应恢复「X 之后、替换了 X 的那次发布」的备份。
-	successor := map[string]string{}
-	if app.DeployMode == store.DeployModeInplace {
-		all, lerr := o.st.ListReleases(ctx, store.ReleaseFilter{AppID: app.ID, Status: store.ReleaseStatusSuccess, Limit: 100})
-		if lerr == nil {
-			// ListReleases 按时间倒序；找到 target 之后（更早）最近的一个成功发布。
-			for i, rel := range all {
-				if rel.ID != targetReleaseID {
-					continue
-				}
-				if i > 0 {
-					newer := all[i-1]
-					nr, _ := o.st.ListReleaseRuns(ctx, newer.ID)
-					for _, r := range nr {
-						if r.Status == store.ReleaseStatusSuccess {
-							successor[r.ServerID] = newer.ID
-						}
-					}
-				}
-				break
-			}
-		}
-	}
-
-	rolled := 0
+	candidates := make([]store.ReleaseRun, 0, len(runs))
 	for _, run := range runs {
 		if len(selected) > 0 && !selected[run.ServerID] {
 			continue
 		}
+		candidates = append(candidates, run)
+	}
+
+	// inplace 模式：备份名是 backup-<releaseID>，存的是「该次发布之前」的状态。
+	// 要回滚到版本 X，应恢复「X 之后、替换了 X 的那次发布」的备份；逐台判定（灰度会让服务器进度不同）。
+	successor := map[string]string{}
+	if app.DeployMode == store.DeployModeInplace {
+		servers := make([]string, 0, len(candidates))
+		for _, run := range candidates {
+			servers = append(servers, run.ServerID)
+		}
+		successor = o.successorReleases(ctx, app.ID, targetReleaseID, servers)
+	}
+
+	for _, run := range candidates {
 		if !targetOK[run.ServerID] {
-			o.logger.Warn("目标版本在该服务器上没有成功记录，跳过",
-				"server_id", run.ServerID, "target_release", targetReleaseID)
+			// 目标版本在这台服务器上没有成功记录：无从回滚（R6）。
+			res.Skipped = append(res.Skipped, rollbackSkip{ServerID: run.ServerID, Reason: rollbackSkipNoSuccessfulRun})
 			continue
 		}
 		backupReleaseID := ""
@@ -970,20 +1049,138 @@ func (o *deployOrchestrator) RollbackTo(releaseID, targetReleaseID string, serve
 			backupReleaseID = successor[run.ServerID]
 			if backupReleaseID == "" {
 				// 目标就是该服务器上的最新成功版本：无需回滚。
-				o.logger.Info("目标版本已是该服务器的当前版本，跳过", "server_id", run.ServerID)
+				res.Skipped = append(res.Skipped, rollbackSkip{ServerID: run.ServerID, Reason: rollbackSkipAlreadyCurrent})
+				continue
+			}
+			// 备份文件缺失时不能悄悄执行一条注定失败的恢复命令：直接给出 missing-backup（R6）。
+			// 探测本身失败（如目标机离线）不在此判定，交给回滚执行阶段归类为 rollback-error。
+			if exists, perr := o.inplaceBackupExists(ctx, app, run.ServerID, backupReleaseID); perr == nil && !exists {
+				res.Skipped = append(res.Skipped, rollbackSkip{ServerID: run.ServerID, Reason: rollbackSkipMissingBackup})
 				continue
 			}
 		}
-		if err := o.rollbackToOne(ctx, release, app, target, run, backupReleaseID); err != nil {
-			o.logger.Warn("回滚到指定版本失败", "release_run_id", run.ID, "target", targetReleaseID, "err", err)
+		if rerr := o.rollbackToOne(ctx, release, app, target, run, backupReleaseID); rerr != nil {
+			o.logger.Warn("回滚到指定版本失败", "release_run_id", run.ID, "target", targetReleaseID, "err", rerr)
+			res.Failed = append(res.Failed, rollbackFailure{
+				ServerID: run.ServerID, Reason: rollbackFailReason, Message: rerr.Error(),
+			})
 			continue
 		}
-		rolled++
+		res.RolledBack++
 	}
-	if rolled > 0 {
+	if res.RolledBack > 0 {
 		o.refreshReleaseStatus(ctx, releaseID)
 	}
-	return rolled, nil
+	if res.RolledBack == 0 && len(res.Skipped) > 0 {
+		// 全跳过：请求级 400，message 必须逐台列出 server_id:reason（A10/R7）。
+		version := res.TargetVersion
+		if version == "" {
+			version = targetReleaseID
+		}
+		return res, newRollbackRequestError(http.StatusBadRequest, codeInvalidArgument,
+			fmt.Sprintf("没有任何服务器可回滚到 %s：%s", version, res.skippedText()))
+	}
+	return res, nil
+}
+
+// successorReleases 为每台服务器找出「目标版本之后**最早**的一次成功发布」的 id（inplace 备份口径）。
+//
+// 备份 backup-<releaseID> 存的是那次发布之前的目录状态，所以要恢复「替换了目标版本的那次发布」。
+// 逐台判定：同一次发布可能只覆盖了部分服务器（灰度、重试），不能拿全局「下一次发布」一概而论。
+// store 层没有按 (app_id, server_id) 的查询（本轮不改 store），这里用 ListReleases + ListReleaseRuns 组合，
+// 服务端过滤到「目标版本之后」的成功发布，再逐台取第一个命中的那次。
+func (o *deployOrchestrator) successorReleases(ctx context.Context, appID, targetReleaseID string, servers []string) map[string]string {
+	out := map[string]string{}
+	pending := make(map[string]bool, len(servers))
+	for _, id := range servers {
+		pending[id] = true
+	}
+	if len(pending) == 0 {
+		return out
+	}
+	all, err := o.st.ListReleases(ctx, store.ReleaseFilter{
+		AppID: appID, Status: store.ReleaseStatusSuccess, Limit: releaseListMax,
+	})
+	if err != nil {
+		o.logger.Warn("读取发布历史失败，按无备份处理", "app_id", appID, "err", err)
+		return out
+	}
+	// ListReleases 按时间倒序：这里从最早的一端往前扫，先跳过目标版本及其之前的发布，
+	// 之后遇到的每一次发布都是「晚于目标版本」的，按由早到晚的顺序取每台服务器第一个命中的那次
+	// （最早替换掉目标版本的那次，它的备份里才是目标版本的内容）。
+	passedTarget := false
+	for i := len(all) - 1; i >= 0; i-- {
+		if !passedTarget {
+			if all[i].ID == targetReleaseID {
+				passedTarget = true
+			}
+			continue
+		}
+		if len(pending) == 0 {
+			return out
+		}
+		rel := all[i]
+		runs, rerr := o.st.ListReleaseRuns(ctx, rel.ID)
+		if rerr != nil {
+			o.logger.Warn("读取发布 run 失败，跳过该次发布", "release_id", rel.ID, "err", rerr)
+			continue
+		}
+		for _, run := range runs {
+			if !pending[run.ServerID] || run.Status != store.ReleaseStatusSuccess {
+				continue
+			}
+			out[run.ServerID] = rel.ID
+			delete(pending, run.ServerID)
+		}
+	}
+	if !passedTarget {
+		// 目标版本不在最近的成功发布窗口里：按「没有后继发布」处理（视为已是当前版本）。
+		o.logger.Warn("目标版本不在成功发布窗口内，按无后继发布处理",
+			"app_id", appID, "target_release_id", targetReleaseID)
+	}
+	return out
+}
+
+// inplaceBackupDirName / inplaceBackupExt 复刻 internal/deploy 的备份路径口径。
+//
+// internal/deploy 里的 inplaceBackupDir/inplaceBackupSuffix 未导出，且 deploy 不在本任务范围内，
+// 因此这里镜像同样的常量；deploy_canary_rollback_test.go 用真实的恢复计划做交叉校验，防止两处漂移。
+const (
+	inplaceBackupDirName = ".leadstack-backups"
+	inplaceBackupExt     = ".tar.gz"
+)
+
+// inplaceBackupPath 返回某次 inplace 发布在目标机上的备份文件绝对路径。
+func inplaceBackupPath(workDir, releaseID string) string {
+	return path.Join(workDir, inplaceBackupDirName, "backup-"+releaseID+inplaceBackupExt)
+}
+
+// inplaceBackupExists 在目标机上**只读**探测 inplace 备份是否存在。
+//
+// 返回 (false, nil) 表示明确「不存在」；(false, err) 表示探测没跑成（离线/取消等），
+// 调用方应把它当作「情况未知」，交给回滚执行阶段给出 rollback-error。
+func (o *deployOrchestrator) inplaceBackupExists(ctx context.Context, app *store.App, serverID, backupReleaseID string) (bool, error) {
+	workDir := strings.TrimSpace(derefStr(app.TargetDir))
+	if workDir == "" {
+		workDir = strings.TrimSpace(derefStr(app.Root))
+	}
+	if workDir == "" {
+		return false, errors.New("inplace 模式缺少 target_dir")
+	}
+	plan := deploy.Plan{
+		ReleaseID: backupReleaseID,
+		Root:      workDir,
+		Steps: []deploy.Step{{
+			Name:     "check-backup",
+			Command:  "test -f " + shellQuote(inplaceBackupPath(workDir, backupReleaseID)),
+			TimeoutS: 30,
+		}},
+	}
+	outcome, err := o.exec.RunPlan(ctx, serverID, plan, deploy.Hooks{})
+	if err != nil && outcome.Status == "" {
+		return false, err
+	}
+	return outcome.Status == deploy.StatusSuccess, nil
 }
 
 // rollbackToOne 在单台服务器上回滚到指定版本。
@@ -1075,9 +1272,9 @@ func (o *deployOrchestrator) rollbackToOne(ctx context.Context, release *store.R
 }
 
 // RollbackTo 见 DeployOrchestratorHandle。
-func (h *DeployOrchestratorHandle) RollbackTo(releaseID, targetReleaseID string, serverIDs []string) (int, error) {
+func (h *DeployOrchestratorHandle) RollbackTo(releaseID, targetReleaseID string, serverIDs []string) (rollbackToResult, error) {
 	if h == nil || h.inner == nil {
-		return 0, errors.New("发布编排器未启用")
+		return rollbackToResult{}, errors.New("发布编排器未启用")
 	}
 	return h.inner.RollbackTo(releaseID, targetReleaseID, serverIDs)
 }

@@ -1,11 +1,13 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   METRIC_KEYS,
   api,
   type MetricSeries,
   type MetricsStep,
+  type Server,
   type TestConnectionResult,
+  type UpdateAsset,
 } from '../lib/api'
 import { useNow, usePolling } from '../lib/hooks'
 import { errorMessage } from '../lib/errors'
@@ -23,9 +25,11 @@ import {
   usageTone,
 } from '../lib/format'
 import { Button } from '../components/Button'
+import { Modal } from '../components/Modal'
 import {
   AlertTriangleIcon,
   ArrowLeftIcon,
+  ArrowUpCircleIcon,
   PackageIcon,
   CheckIcon,
   ClockIcon,
@@ -47,6 +51,7 @@ import { ServerLogsTab } from '../components/server/ServerLogsTab'
 import { useI18n } from '../i18n'
 import { useAuth } from '../lib/auth'
 import { useToast } from '../components/Toast'
+import { useUpdateAccess } from '../components/SystemUpdate'
 import { cn } from '../lib/cn'
 
 import { t } from '../i18n'
@@ -112,6 +117,232 @@ function pickSeries(series: MetricSeries[], aliases: readonly string[]): MetricS
   return []
 }
 
+/**
+ * 从 agent 产物清单里按当前服务器的 os/arch 精确匹配。
+ *
+ * 归档名形如 `leadstack-agent_<ver>_<os>_<arch>.tar.gz`，故先按
+ * `_<os>_<arch>` 后缀比对（去掉扩展名后 endsWith，避免 linux_amd64 命中
+ * linux_arm64 之类的近似项）；老版本控制端可能不带 name，再退回 os/arch 字段精确比对。
+ */
+function pickAgentAsset(
+  assets: UpdateAsset[] | undefined,
+  os: string | null,
+  arch: string | null,
+): UpdateAsset | null {
+  const wantOs = (os ?? '').trim().toLowerCase()
+  const wantArch = (arch ?? '').trim().toLowerCase()
+  if (!assets || assets.length === 0 || !wantOs || !wantArch) return null
+  const suffix = `_${wantOs}_${wantArch}`
+  for (const asset of assets) {
+    const base = (asset.name ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\.(?:tar\.gz|tgz|zip)$/, '')
+    if (base !== '' && base.endsWith(suffix)) return asset
+  }
+  return (
+    assets.find(
+      (asset) =>
+        asset.os.trim().toLowerCase() === wantOs && asset.arch.trim().toLowerCase() === wantArch,
+    ) ?? null
+  )
+}
+
+const upgradeInputClass =
+  'mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100'
+const upgradeLabelClass = 'block text-sm font-medium text-slate-700 dark:text-slate-200'
+
+/**
+ * 「升级 Agent」弹窗（T-14）。
+ *
+ * 打开时调 POST /system/update/check（api.refreshUpdateCheck），从返回的 agent_assets 中
+ * 按当前服务器 os/arch 预填 version/url/sha256；取不到（离线 / 无该平台产物）就留空让
+ * 用户手填，不阻断提交。提交走 api.agentUpgrade。
+ *
+ * 注意预填不是必达条件：`/system/update` 系列端点是 PermSystemManage（真实键名
+ * `system.manage`）+ 全局范围（internal/api/router.go:229-232），所以只有
+ * `can('system.manage') && scope.mode === 'all'` 的角色才去请求（复用
+ * components/SystemUpdate.tsx 里的 useUpdateAccess）；否则直接跳过预填，避免
+ * 「打开弹窗就静默 403」，并给一句可理解的说明让用户手填。
+ */
+function AgentUpgradeDialog({
+  open,
+  server,
+  onClose,
+  onDone,
+}: {
+  open: boolean
+  server: Server
+  onClose: () => void
+  onDone: () => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [version, setVersion] = useState('')
+  const [url, setUrl] = useState('')
+  const [sha256, setSha256] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const serverOs = server.os ?? server.host_info?.os ?? null
+  const serverArch = server.arch ?? server.host_info?.arch ?? null
+  // 读取 agent 产物的前提是能看 /system/update（system.manage + 全局范围）；不满足时
+  // 连请求都不发，直接走「手填」路径（A30 要求手填可用）。
+  const canPrefill = useUpdateAccess()
+
+  useEffect(() => {
+    if (!open) return
+    setVersion('')
+    setUrl('')
+    setSha256('')
+    setError(null)
+    if (!canPrefill) return
+    let cancelled = false
+    api
+      .refreshUpdateCheck()
+      .then((info) => {
+        if (cancelled) return
+        const asset = pickAgentAsset(info.agent_assets, serverOs, serverArch)
+        if (!asset) return
+        // 只填还空着的字段：预填返回较晚时不能覆盖用户已经手输的内容。
+        const nextVersion = (info.latest ?? '').trim()
+        setVersion((prev) => (prev.trim() === '' ? nextVersion : prev))
+        setUrl((prev) => (prev.trim() === '' ? asset.url : prev))
+        setSha256((prev) => (prev.trim() === '' ? (asset.sha256 ?? '') : prev))
+      })
+      // 预填只是便利，不算操作失败：离线 / 老控制端都按「取不到」处理。
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [open, canPrefill, server.id, serverOs, serverArch])
+
+  const canSubmit =
+    !submitting && version.trim() !== '' && url.trim() !== '' && sha256.trim() !== ''
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!canSubmit) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      const result = await api.agentUpgrade(server.id, {
+        version: version.trim(),
+        url: url.trim(),
+        sha256: sha256.trim().toLowerCase(),
+      })
+      if (!result.ok) {
+        // 202 只代表指令已排队；ok=false 时沿用后端给出的原因（已是本地化文案）。
+        setError(result.error?.trim() || t('s.1077'))
+        return
+      }
+      toast(t('server.agentUpgradeDone', { version: version.trim() }), 'success')
+      onClose()
+      onDone()
+    } catch (caught) {
+      // 403/404（含范围外服务器的 404 + not_found）统一走 errorMessage：
+      // 文案取自后端本地化 message，并自动附带 request_id（lib/errors.ts）。
+      setError(errorMessage(caught, t('s.1077')))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={t('server.agentUpgradeTitle')}
+      description={server.name}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={submitting}>
+            {t('s.0024')}
+          </Button>
+          <Button
+            type="submit"
+            form="agent-upgrade-form"
+            loading={submitting}
+            disabled={!canSubmit}
+          >
+            {t('server.agentUpgradeSubmit')}
+          </Button>
+        </>
+      }
+    >
+      <form id="agent-upgrade-form" onSubmit={handleSubmit} className="space-y-3">
+        <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600 dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-300">
+          {t('server.agentUpgradeHint')}
+        </p>
+
+        {canPrefill ? null : (
+          <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+            {t('server.agentUpgradeManualHint')}
+          </p>
+        )}
+
+        {error ? (
+          <p
+            role="alert"
+            className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300"
+          >
+            {error}
+          </p>
+        ) : null}
+
+        <div>
+          <label htmlFor="agent-upgrade-version" className={upgradeLabelClass}>
+            {t('releases.version')}
+          </label>
+          <input
+            id="agent-upgrade-version"
+            value={version}
+            onChange={(event) => setVersion(event.target.value)}
+            placeholder="0.1.4"
+            autoComplete="off"
+            className={upgradeInputClass}
+          />
+        </div>
+
+        <div>
+          <label htmlFor="agent-upgrade-url" className={upgradeLabelClass}>
+            {t('s.0470')}
+          </label>
+          <input
+            id="agent-upgrade-url"
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            placeholder="https://example.com/leadstack-agent_0.1.4_linux_amd64.tar.gz"
+            autoComplete="off"
+            className={upgradeInputClass + ' font-mono text-xs'}
+          />
+        </div>
+
+        <div>
+          <label htmlFor="agent-upgrade-sha256" className={upgradeLabelClass}>
+            {t('s.0471')}
+          </label>
+          <input
+            id="agent-upgrade-sha256"
+            value={sha256}
+            onChange={(event) => setSha256(event.target.value)}
+            placeholder="e3b0c442…"
+            autoComplete="off"
+            className={upgradeInputClass + ' font-mono text-xs'}
+          />
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-400 dark:text-slate-500">
+            {t('s.0472')}
+          </p>
+        </div>
+
+        <p className="text-xs text-slate-400 dark:text-slate-500">
+          {[serverOs, serverArch].filter(Boolean).join(' / ') || '—'}
+        </p>
+      </form>
+    </Modal>
+  )
+}
+
 export default function ServerDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { toast } = useToast()
@@ -138,6 +369,8 @@ export default function ServerDetailPage() {
   const [step, setStep] = useState<MetricsStep>('raw')
   const [discoverOpen, setDiscoverOpen] = useState(false)
   const [appPreset, setAppPreset] = useState<AppPreset | null>(null)
+  const [agentUpgradeOpen, setAgentUpgradeOpen] = useState(false)
+  const canAgentUpgrade = can('agent.upgrade')
   const [rangeKey, setRangeKey] = useState<RangeKey>('1h')
   const range = RANGES.find((item) => item.key === rangeKey) ?? RANGES[0]
 
@@ -452,7 +685,28 @@ export default function ServerDetailPage() {
             </InfoRow>
             <InfoRow label={t('s.1097')}>{server.kernel ?? info?.kernel ?? '—'}</InfoRow>
             {server.mode === 'agent' ? (
-              <InfoRow label={t('s.1098')}>{server.agent_version ?? '—'}</InfoRow>
+              <InfoRow label={t('s.1098')}>
+                <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                  <span className="font-mono text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                    {server.agent_version ?? '—'}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<ArrowUpCircleIcon className="h-4 w-4" />}
+                    disabled={!canAgentUpgrade}
+                    title={canAgentUpgrade ? undefined : t('server.agentUpgradeNoPerm')}
+                    onClick={() => setAgentUpgradeOpen(true)}
+                  >
+                    {t('server.agentUpgrade')}
+                  </Button>
+                </span>
+                {canAgentUpgrade ? null : (
+                  <p className="mt-1 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+                    {t('server.agentUpgradeNoPerm')}
+                  </p>
+                )}
+              </InfoRow>
             ) : null}
             <InfoRow label={t('s.0538')}>{formatDateTime(server.last_seen_at)}</InfoRow>
             <InfoRow label={t('s.0271')}>{formatDateTime(server.created_at)}</InfoRow>
@@ -743,6 +997,13 @@ export default function ServerDetailPage() {
             gitDetected,
           })
         }}
+      />
+
+      <AgentUpgradeDialog
+        open={agentUpgradeOpen}
+        server={server}
+        onClose={() => setAgentUpgradeOpen(false)}
+        onDone={() => void query.refresh()}
       />
 
       <AppDialog

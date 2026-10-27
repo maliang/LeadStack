@@ -58,8 +58,8 @@ func (a *API) handleRefreshHostInfo(w http.ResponseWriter, r *http.Request) {
 			a.writeStoreError(w, r, err)
 			return
 		}
-		a.logger.Warn("刷新主机信息失败", "server_id", id, "err", err)
-		writeError(w, http.StatusBadGateway, codeInternal, "SSH 采集失败: "+err.Error())
+		// SSH 握手/采集失败属于远端失败，统一 502 + remote_failure（A19）。
+		a.writeRemoteError(w, r, err, "SSH 采集")
 		return
 	}
 	writeData(w, http.StatusOK, map[string]any{"host_info": info})

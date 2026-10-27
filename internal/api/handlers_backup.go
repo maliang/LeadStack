@@ -262,6 +262,86 @@ func (a *API) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 //
 // 流程：临时落盘 → Verify 校验 → 暂存到 <data_dir>/.restore-pending/（含 meta.json）
 // → 202 {restart_required:true}。校验失败返回 400 且**不留下任何半成品**。
+// errRestoreStageBusy 表示已有另一个恢复正在暂存。
+var errRestoreStageBusy = errors.New("api: 暂存恢复正在进行")
+
+// restoreStageBusyMsg 同时用于「并发暂存」与「已有待应用恢复」两种 409。
+const restoreStageBusyMsg = "已有待应用的恢复，请先重启应用或删除暂存目录"
+
+// acquireRestoreStage 用 O_EXCL 语义原子抢占暂存权（SPEC S-05），返回释放函数。
+//
+// 两层判断：
+//  1. 暂存锁目录已存在 → 已有恢复正在写入，直接 409；
+//  2. 暂存目录里已有 meta.json（上一次恢复还没重启应用）→ 也 409，
+//     否则新的恢复会悄悄覆盖掉尚未生效的那一份。
+func (a *API) acquireRestoreStage(ctx context.Context) (func(), error) {
+	pendingDir := a.cfg.RestorePendingDir()
+	lockDir := filepath.Join(a.cfg.DataDir, ".restore-stage.lock")
+	if err := os.Mkdir(lockDir, 0o700); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil, errRestoreStageBusy
+		}
+		return nil, fmt.Errorf("创建暂存锁 %s: %w", lockDir, err)
+	}
+	release := func() {
+		if rerr := os.Remove(lockDir); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+			a.logger.Warn("释放暂存锁失败", "lock_dir", lockDir, "err", rerr)
+		}
+	}
+	pending, err := ReadPendingRestore(pendingDir)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	if pending != nil {
+		release()
+		return nil, errRestoreStageBusy
+	}
+	_ = ctx
+	return release, nil
+}
+
+// handleRestoreStatus 处理 GET /api/v1/system/backup/restore-status。
+//
+// 没有暂存时返回 200 + pending=false（不返回 404）——前端靠它轮询「重启是否已生效」，
+// 404 会被当成错误提示而不是「还没有待应用的恢复」。
+func (a *API) handleRestoreStatus(w http.ResponseWriter, r *http.Request) {
+	pendingDir := a.cfg.RestorePendingDir()
+	pending, err := ReadPendingRestore(pendingDir)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	if pending == nil {
+		writeData(w, http.StatusOK, restoreStatusPayload{Pending: false})
+		return
+	}
+	shaPrefix := pending.ArchiveSHA256
+	if len(shaPrefix) > 8 {
+		shaPrefix = shaPrefix[:8]
+	}
+	writeData(w, http.StatusOK, restoreStatusPayload{
+		Pending:        true,
+		Source:         pending.Source,
+		SchemaVersion:  pending.SchemaVersion,
+		ArchiveSHA256:  shaPrefix,
+		StagedAt:       pending.CreatedAt,
+		VerifiedAt:     pending.VerifiedAt,
+		PendingDirHint: "重启 leadstack 服务后自动应用，或手动删除该暂存目录以取消",
+	})
+}
+
+// restoreStatusPayload 是恢复状态只读接口的响应体。
+type restoreStatusPayload struct {
+	Pending        bool   `json:"pending"`
+	Source         string `json:"source,omitempty"`
+	SchemaVersion  int    `json:"schema_version,omitempty"`
+	ArchiveSHA256  string `json:"archive_sha256_prefix,omitempty"`
+	StagedAt       int64  `json:"staged_at,omitempty"`
+	VerifiedAt     int64  `json:"verified_at,omitempty"`
+	PendingDirHint string `json:"hint,omitempty"`
+}
+
 func (a *API) handleRestoreUpload(w http.ResponseWriter, r *http.Request) {
 	if a.backups == nil {
 		writeError(w, http.StatusServiceUnavailable, codeInternal, "备份模块未启用")
@@ -342,6 +422,21 @@ func (a *API) handleRestoreUpload(w http.ResponseWriter, r *http.Request) {
 	// 2) 校验 + 解压暂存：由 internal/backup 完成（口令错/损坏/版本过新分别映射成可读错误，
 	//    校验失败不会留下半成品 —— 这是「下次启动才能应用」的安全前提）。
 	pendingDir := a.cfg.RestorePendingDir()
+
+	// 2.0) 并发与重复保护（SPEC S-05）：
+	//     已经在 LISTEN 上排队等同一份恢复时，返回 409 而不是排队堆积。
+	release, err := a.acquireRestoreStage(r.Context())
+	if err != nil {
+		cleanupTmp()
+		if errors.Is(err, errRestoreStageBusy) {
+			writeError(w, http.StatusConflict, codeConflict, restoreStageBusyMsg)
+			return
+		}
+		a.internalError(w, r, err)
+		return
+	}
+	defer release()
+
 	staged, err := a.backups.StageRestore(r.Context(), tmpPath, pendingDir)
 	cleanupTmp()
 	if err != nil {

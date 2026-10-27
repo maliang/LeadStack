@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/maliang/leadstack/internal/deploy"
 	"github.com/maliang/leadstack/internal/store"
@@ -22,6 +23,8 @@ type builtinFixture struct {
 	app    *store.App
 	server *store.Server
 	rel    *store.Release
+	// runID 是单台服务器的发布任务 id（日志按 run 落库，而不是按 release）。
+	runID string
 }
 
 func newBuiltinFixture(t *testing.T, mut func(app *store.App)) *builtinFixture {
@@ -76,7 +79,7 @@ func newBuiltinFixture(t *testing.T, mut func(app *store.App)) *builtinFixture {
 	if orch == nil {
 		t.Fatal("构造编排器失败")
 	}
-	return &builtinFixture{env: env, orch: orch, runner: runner, app: app, server: srv, rel: rel}
+	return &builtinFixture{env: env, orch: orch, runner: runner, app: app, server: srv, rel: rel, runID: run.ID}
 }
 
 func portOf(t *testing.T, rawURL string) int {
@@ -176,5 +179,160 @@ func TestBuiltinHealthCheckSkippedWithoutPort(t *testing.T) {
 	}
 	if run.Status != store.ReleaseStatusSuccess {
 		t.Fatalf("未配置端口应跳过检查并成功，实际 %s", run.Status)
+	}
+}
+
+// runLogText 拼出某次 run 的全部日志文本，供「跳过健康检查必须有痕」这类断言使用。
+func runLogText(t *testing.T, env *testEnv, runID string) string {
+	t.Helper()
+	logs, err := env.st.ListReleaseLogs(context.Background(), runID, 0, 5000)
+	if err != nil {
+		t.Fatalf("读取发布日志失败: %v", err)
+	}
+	var b strings.Builder
+	for _, l := range logs {
+		b.WriteString(l.Chunk)
+	}
+	return b.String()
+}
+
+// TestHealthCheckTreats3xxAsFailure 覆盖 A3/R4：只有 2xx 才算健康，302 必须判失败并走回滚。
+func TestHealthCheckTreats3xxAsFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 不带 Location：Go 不会自动跟随，客户端拿到 302 本身。
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	port := portOf(t, srv.URL)
+	path := "/healthz"
+
+	f := newBuiltinFixture(t, func(app *store.App) {
+		app.HealthcheckPath = &path
+		app.HealthcheckPort = &port
+	})
+	start := time.Now()
+	f.orch.runRelease(context.Background(), f.rel.ID)
+	elapsed := time.Since(start)
+
+	run, err := f.env.st.GetReleaseRun(context.Background(), f.rel.ID, f.server.ID)
+	if err != nil {
+		t.Fatalf("读取发布任务失败: %v", err)
+	}
+	if run.Status != store.ReleaseStatusFailed {
+		t.Fatalf("302 应判为不健康（发布失败），实际 %s", run.Status)
+	}
+	if run.FailedStep == nil || *run.FailedStep != deploy.StepHealthCheck {
+		t.Fatalf("失败步骤应为 %s，实际 %v", deploy.StepHealthCheck, run.FailedStep)
+	}
+	if run.Message == nil || !strings.Contains(*run.Message, "302") {
+		t.Fatalf("失败文案应带上实际状态码 302: %v", run.Message)
+	}
+	if run.Message == nil || !strings.Contains(*run.Message, "期望 2xx") {
+		t.Fatalf("失败文案应说明期望 2xx: %v", run.Message)
+	}
+	// 3xx 是确定性结果，不该等满 30s 预算。
+	if elapsed > 10*time.Second {
+		t.Fatalf("3xx 应立即判失败（实测耗时 %s）", elapsed)
+	}
+	logs := runLogText(t, f.env, f.runID)
+	if !strings.Contains(logs, "健康检查失败") || !strings.Contains(logs, "302") {
+		t.Fatalf("日志应记录健康检查失败与状态码: %q", logs)
+	}
+	if len(f.runner.plans) < 2 {
+		t.Fatalf("健康检查失败应执行回滚计划，实际计划数 %d", len(f.runner.plans))
+	}
+}
+
+// TestHealthCheckTreats4xxAsImmediateFailure 覆盖 R4：4xx 立即判不健康（不重试到超时）。
+func TestHealthCheckTreats4xxAsImmediateFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	port := portOf(t, srv.URL)
+	path := "/absent"
+
+	f := newBuiltinFixture(t, func(app *store.App) {
+		app.HealthcheckPath = &path
+		app.HealthcheckPort = &port
+	})
+	start := time.Now()
+	f.orch.runRelease(context.Background(), f.rel.ID)
+
+	run, err := f.env.st.GetReleaseRun(context.Background(), f.rel.ID, f.server.ID)
+	if err != nil {
+		t.Fatalf("读取发布任务失败: %v", err)
+	}
+	if run.Status != store.ReleaseStatusFailed {
+		t.Fatalf("404 应判为不健康，实际 %s", run.Status)
+	}
+	if run.Message == nil || !strings.Contains(*run.Message, "404") {
+		t.Fatalf("失败文案应带 404: %v", run.Message)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("4xx 不应重试到 30s 预算（实测 %s）", elapsed)
+	}
+}
+
+// TestHealthCheckSkipIsLogged 覆盖 A4：未配置 path/port 时必须写「跳过健康检查」日志，不能静默。
+func TestHealthCheckSkipIsLogged(t *testing.T) {
+	// ① 完全没配 path。
+	f := newBuiltinFixture(t, nil)
+	f.orch.runRelease(context.Background(), f.rel.ID)
+	run, err := f.env.st.GetReleaseRun(context.Background(), f.rel.ID, f.server.ID)
+	if err != nil {
+		t.Fatalf("读取发布任务失败: %v", err)
+	}
+	if run.Status != store.ReleaseStatusSuccess {
+		t.Fatalf("未配置健康检查应成功，实际 %s（%s）", run.Status, derefStr(run.Message))
+	}
+	logs := runLogText(t, f.env, f.runID)
+	if !strings.Contains(logs, "跳过健康检查：未配置 healthcheck_path") {
+		t.Fatalf("日志应写明跳过原因（未配置 healthcheck_path）: %q", logs)
+	}
+
+	// ② 配了 path 但没有端口（healthcheck_port 与 site_port 都缺）。
+	path := "/healthz"
+	f2 := newBuiltinFixture(t, func(app *store.App) {
+		app.HealthcheckPath = &path
+	})
+	f2.orch.runRelease(context.Background(), f2.rel.ID)
+	run2, err := f2.env.st.GetReleaseRun(context.Background(), f2.rel.ID, f2.server.ID)
+	if err != nil {
+		t.Fatalf("读取发布任务失败: %v", err)
+	}
+	if run2.Status != store.ReleaseStatusSuccess {
+		t.Fatalf("缺端口时应跳过而不是失败，实际 %s", run2.Status)
+	}
+	logs2 := runLogText(t, f2.env, f2.runID)
+	if !strings.Contains(logs2, "跳过健康检查：healthcheck_port 与 site_port 均未配置") {
+		t.Fatalf("缺端口时应写明命中哪一条跳过原因: %q", logs2)
+	}
+}
+
+// TestHealthCheckLogsRealURL 覆盖 R4：健康检查日志必须打印真实的探测地址，而不是占位符。
+func TestHealthCheckLogsRealURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	port := portOf(t, srv.URL)
+	path := "/healthz"
+
+	f := newBuiltinFixture(t, func(app *store.App) {
+		app.HealthcheckPath = &path
+		app.HealthcheckPort = &port
+	})
+	f.orch.runRelease(context.Background(), f.rel.ID)
+	logs := runLogText(t, f.env, f.runID)
+	wantURL := "http://127.0.0.1:" + strconv.Itoa(port) + "/healthz"
+	if !strings.Contains(logs, wantURL) {
+		t.Fatalf("日志应打印真实探测地址 %s: %q", wantURL, logs)
+	}
+	if strings.Contains(logs, "<host>") {
+		t.Fatalf("日志不应出现占位符 <host>: %q", logs)
+	}
+	if !strings.Contains(logs, "健康检查通过") {
+		t.Fatalf("通过时应写「健康检查通过」: %q", logs)
 	}
 }

@@ -830,8 +830,21 @@ CREATE TABLE alert_events(
 pending → running → success
                  ↘ failed → (可 retry / rollback)
 pending → canceled
+running → canceled        # 用户「中止发布」
 ```
-发布整体状态由各 run 汇总：全部 success → `success`；任一 failed 且不再重试 → `failed`；仍在跑 → `running`。
+**发布整体状态由各 run 汇总**（`internal/store/deploy.go` 的 `SummarizeReleaseStatus`），按下列顺序判定，命中即返回：
+
+| 优先级 | 条件 | 结果 | 说明 |
+|---|---|---|---|
+| 1 | 仍有 `running` | `running` | 还在推进，先不判终态 |
+| 2 | 仍有 `pending` | `pending` | 尚未开始 |
+| 3 | 存在 `failed` | `failed` | 真发生故障，失败优先于取消 |
+| 4 | 无 failed 且存在 `canceled` | `canceled` | 用户主动中止（含部分机器已成功） |
+| 5 | 全部 `success` | `success` | 正常完成 |
+
+即：`failed > 0` → `failed`；`failed == 0 && canceled > 0` → `canceled`；否则全 success → `success`。
+
+第 3、4 条的顺序是刻意的。「成功若干台 + 用户点了中止」是灰度发布里**正常的人为决策结果**：若把它汇总成 `failed`，页面就会在用户自己按下「中止发布」之后回一个红色「失败」，看起来像是中止导致了故障——这正是本轮要修的体验缺陷。反之「失败 + 取消」仍归 `failed`：取消只是止血，故障已经发生，必须暴露出来。前端展示口径见 §65.6。
 
 ## 24. 目录与快照约定（回滚的基础）
 
@@ -999,7 +1012,9 @@ type RunOutcome struct {
 - **上传型制品需要目标机能访问控制端**：`upload` 制品发布时，控制端把 `<LEADSTACK_PUBLIC_URL>/api/v1/artifacts/{id}/download` 作为下载地址交给目标机。生产部署必须配置 `LEADSTACK_PUBLIC_URL`（如 `http://10.0.0.5:8080`）；不配时创建发布直接 400 并说明原因，而不是让目标机静默失败。
 - `GET /releases`（列表）**不返回 runs**，只返回 release 主体；需要进度时用 `GET /releases/{id}` 或 `/releases/{id}/runs`。
 - `retry` 会重置失败 run 的日志（seq 从 1 重新开始），成功 run 不受影响。
-- `cancel` 会把 pending/running 置 `canceled`；已完成的 run 保持原状态。
+- `cancel` 会把 pending/running 置 `canceled`；已完成的 run 保持原状态。响应体带 `canceled`（本次取消的台数），前端「中止发布」的提示台数直接取自它（见 §65.6）。没有失败时发布整体随之收敛到 `canceled`（已成功的机器仍是 `success`），不是 `failed`（见 §23）。
+- **应用载荷的敏感字段按权限收敛**：`GET /apps` 系列返回 `env_keys`（键名）与 `redacted`；没有 `deploy.write` 或范围不是 `all` 时 `env_json`/`init_script`/`restart_cmd` 一律 `null`，见 §65.3。
+- 409 的 `message` 会透出精确原因（如「分组 a 已存在」「应用 x 仍有 2 条发布记录，禁止删除」），见 §65.2；错误响应统一带 `request_id`，远端执行失败是 502 `remote_failure`，见 §65.1。
 
 ## 28. 数据库迁移 `0006_deploy.sql`
 
@@ -1175,6 +1190,7 @@ type RestoreResult struct {
 | DELETE | `/backups/{name}` | 删除（同时删边车 json） |
 | POST | `/backups/restore` | multipart 上传归档（字段名 `file`）→ 校验 → 暂存到 `<data_dir>/.restore-pending/` → `202 {restart_required:true, staged:{source,created_at,verified_at,archive_sha256,schema_version}}`；**下次启动时应用**。校验失败 400 且不留半成品 |
 | GET/PATCH | `/backup-settings` | `{enabled, interval, retention, include_artifacts}`；`interval` 为 Go duration 字符串 |
+| GET | `/system/backup/restore-status` | 恢复状态只读查询（`backup.restore` + 全局范围）：无暂存 `{pending:false}`，有暂存返回 `source`/`schema_version`/`archive_sha256_prefix`/`staged_at`/`verified_at`/`hint`，详见 §65.4 |
 
 **已知限制（备份 记录）**：「版本过新」在真实环境需由**更新版本的程序**生成的归档才能触发；验收脚本不构造该场景，改由单测覆盖 `ErrSchemaTooNew` 与 `code=schema_too_new`。
 
@@ -1272,6 +1288,7 @@ api_tokens(id TEXT PK, name TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL, role
 - 显式传 `limit`（1–500，默认 100 上限）时：响应 `{data:[...], page:{next_cursor,has_more}}`；`cursor` 为不透明字符串。
 - **不传 `limit` 时保持原样**（`{data:[...]}` 数组），保证既有前端与验收脚本不受影响。
 - 首批接入：`/audit-logs`、`/alerts`、`/releases`、`/checks`、`/servers`、`/scheduled-tasks/{id}/runs`。
+- **分页与资源范围的顺序**：`cursor` 是「过滤后集合」里的偏移量，不是全局窗口偏移；带 `LIMIT` 的列表必须把范围过滤排在 `LIMIT` 之前，否则受限用户会看到假空列表（见 §66）。
 
 ## 40. Web SSH 终端
 
@@ -1572,7 +1589,9 @@ GET  /system/update/status                        -> 进度与结果
 - 保留手动触发（`workflow_dispatch`，可指定 version）。
 - `schema_changed` 的判定来源：发布前对比迁移目录 `internal/store/migrations/` 在上一 tag 与本 tag 之间是否有新增文件，写入 release body 的机器可读标记 `<!-- schema_changed: true -->`。
 
-### 51.5 验收（追加到 `scripts/verify_ops.sh`）
+### 51.5 验收（`scripts/verify_upgrade.sh`，20 项；`make verify-upgrade`）
+
+> 这套验收**故意不在 `make test-e2e` 主干闸门内**：它要真实替换运行中的二进制，并依赖 watchdog 的 10 秒级自查回退时序，对机器负载敏感——放进主干闸门容易出现「代码没动却 CI 红」（本仓库已因 bcrypt 成本撞过 `go test` 包超时，同一类假红）。**发版前必跑 `make verify-upgrade`**；主干 13 套闸门（`E2E_SCRIPTS`）里不含它。
 
 1. `GET /system/update` 在 mock GitHub API 下返回 `current/latest/has_update/schema_changed`；断网（指向不可达地址）时返回 `error` 且**不影响** `/healthz` 与其它接口。
 2. `POST /system/update/apply` 在**备份失败**时返回错误且不替换二进制（用只读备份目录模拟）。
@@ -1666,13 +1685,15 @@ GET  /system/update/status                        -> 进度与结果
    - checks：只要有**任一**目标服务器在范围内即可见；写操作（`check.write`）要求**所有**目标都在范围内；
    - alerts：按 `server_id` 判定；规则级（无 `server_id`）告警仅 `all` 范围可见；
    - releases / scheduled-tasks：按目标服务器判定，创建/重试/运行要求目标全部在范围内。
+   - **带 `LIMIT` 的列表另有一条顺序契约**（`/releases`、`/alerts`）：范围过滤必须与 `LIMIT` 在同一条 SQL 里、且排在 `LIMIT` 之前。顺序反了会让受限用户在数据确实存在时看到空列表，见 §66。
 3. **全局资源**（要求 `scope=all`，且具备对应权限）：备份与备份设置、审计日志、系统设置/网络/自升级、用户/角色/Token/注册令牌、应用与模板定义、告警规则与渠道（规则是全局策略，不允许局部持有）。
 4. **写越界** → 403；**读越界** → 404。删除/批量操作对越界目标整体失败并列出服务器名。
 
 ### 53.4 实现与代价
 
-- 每个请求解析一次范围（1–3 条 SQLite 查询），列表过滤在内存完成；
-- 分页语义：**先过滤后分页**，受限用户单页可能少于 `limit`（`docs` 明示该限制）。
+- 每个请求解析一次范围（1–3 条 SQLite 查询）；
+- 过滤位置：`/releases`、`/alerts` 已下沉到 SQL（必须排在 `LIMIT` 之前，见 §66）；`/servers`、`/checks` 的查询本身不含 `LIMIT`，查出后在内存过滤；`/scheduled-tasks` 不分页；
+- 分页语义：**先过滤后分页**——两种实现下分页都作用在「范围过滤之后的集合」上，只有最后一页会少于 `limit`（旧文档写的「受限用户单页恒少」已不成立）。
 
 ## 54. 登录限流与失败锁定
 
@@ -1951,7 +1972,7 @@ ls -1d /www/wwwroot/*（宝塔站点目录）
 - 下载路由注册在 `requireAuth` 组**之外**，中间件逻辑：有效签名 → 放行；否则回落 JWT + `deploy.read`；
 - 上传制品的下载地址没有扩展名，解包改为**按文件头判断**（zip `PK\x03\x04` / gzip / bzip2 / xz），都不是才当裸二进制安装。
 
-### 58.6 验收（`scripts/verify_deploy_v2.sh`，38 项）
+### 58.6 验收（`scripts/verify_deploy_v2.sh`，66 项）
 
 用两个真实项目的部署形态做样本（devssh 让命令在本机真实执行，断言检查真实文件）：
 
@@ -2088,7 +2109,7 @@ prepare（mkdir <work>/.leadstack/scripts）
 - `strategy=all`（默认）全量并发；`canary` 先发 `canary_count` 台（按 server_id 排序取前 N）；
 - 第一批完成后等待 `hold_seconds`（0 表示不等待）；**观察期内可取消**；
 - 观察结束再确认第一批仍成功，才发剩余批次；
-- 任一停止条件命中 → 剩余 run 标记 `canceled`（message 说明原因），发布整体按已执行结果汇总；
+- 任一停止条件命中 → 剩余 run 标记 `canceled`（message 说明原因），发布整体按已执行结果汇总：已成功的机器保持 `success`，没有失败时整体就是 `canceled`（见 §23）；
 - 约束：服务器 ≥2、`1 ≤ canary_count ≤ 服务器数-1`、`hold_seconds ∈ [0,3600]`；
 - 数据库：`releases.strategy/canary_count/hold_seconds`（迁移 0012）。
 
@@ -2245,7 +2266,7 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 
 ### 64.4 验收
 
-`scripts/verify_install_control.sh`（47 项，`make verify-install`）：端口参数与非法值、环境文件引号编码、按 env 真实启动并 `curl /healthz` + 登录、幂等重装换端口、本地 mock 发布服务的真实下载与篡改包中止、`LEADSTACK_RELEASE_API` 解析、卸载保留数据 / `--purge` 删除、docker 内 systemd 单元渲染（`User=leadstack`、`EnvironmentFile`、`ProtectSystem=strict`）。
+`scripts/verify_install_control.sh`（48 项，`make verify-install`；其中 5 项是容器内 systemd 单元渲染，本机没有可用的 docker 时跳过）：端口参数与非法值、环境文件引号编码、按 env 真实启动并 `curl /healthz` + 登录、幂等重装换端口、本地 mock 发布服务的真实下载与篡改包中止、`LEADSTACK_RELEASE_API` 解析、卸载保留数据 / `--purge` 删除、docker 内 systemd 单元渲染（`User=leadstack`、`EnvironmentFile`、`ProtectSystem=strict`）。
 
 踩过的坑（写测试时才会暴露）：
 
@@ -2267,7 +2288,7 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 - `--install-dir /tmp/new-dir` 这种**目录尚不存在**的情况：`-w "$dir"` 恒为 false，被误判成「必须 sudo」，于是非交互会话里直接报「sudo 需要密码」。改为 `writable_dir()`：向上找最近一个存在的祖先再判断可写性；
 - `install_service` 写环境文件前同样用 `-w "$ENV_DIR"` 判断，同样会误判「目录不可写，跳过凭证文件」，一并改成 `writable_dir()`。
 
-验收对应 `verify_install_control.sh` 第 10 节（8 项：6 个阶段标题、大小、校验结论、安装结论、总耗时、非 tty 无进度条残留、每阶段有结论行、dry-run 阶段序列）与 `verify_bootstrap.sh` 第 7 节（4 项：agent 脚本 dry-run 的 4 阶段与结论行）。
+验收对应 `scripts/verify_install_control.sh` 第 10 节（8 项：6 个阶段标题、大小、校验结论、安装结论、总耗时、非 tty 无进度条残留、每阶段有结论行、dry-run 阶段序列）与 `scripts/verify_bootstrap.sh` 第 7 节（8 项：dry-run 退出码、5 个阶段标题、每阶段结论行、latest 版本解析、控制端可达性自检 4 条——阶段存在、不可达时明确告知、给出 `--ca`/`--insecure` 建议、自检地址是 `<server>/healthz`）。
 - 干跑不撒谎：`--dry-run` 的第 4/5 阶段结论是「dry-run：只打印…动作」，不再沿用「✓ 已安装 / ✓ 已注册」。干跑的意义就是「看看它要做什么」，说要改系统却什么都没改，比没有输出更误导。`verify_install_control.sh` 有一条断言专门锁住这点（dry-run 输出不得出现「✓ 已安装/✓ 已注册」）。
 
 ### 64.6 CI 的 `go test -race` 闸门为什么曾经随机红
@@ -2277,4 +2298,202 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 根因：`internal/auth` 用 bcrypt cost=12 做密码哈希，而 api 包的测试里每个用例都要 `newTestEnv` + `login()`，整套下来有上百次 bcrypt 校验。竞态检测器会把 `x/crypto/blowfish` 的纯计算放大约 50–100 倍，实测单次登录从 ~200ms 涨到 3–4 秒；于是这个包在 2 核 runner 上会撞 `go test` 的 10 分钟包超时，表现为整步失败——和代码回归无关。
 
 修法（`internal/auth/password.go`）：成本改为可覆盖的 `LEADSTACK_BCRYPT_COST`（校验 4–31，非法值回落 12，默认仍是 **12**），api 包的 `TestMain` 把它设为 4。生产默认值不变；测试里 `make test-race` 从 ~9 分钟（且经常超时）降到 **77 秒**。`auth` 包有两条测试锁定语义（合法值生效、越界/非数字回落默认；哈希中嵌入的成本与配置一致）。
+
+---
+
+## 65. 接口与行为补充：错误语义、敏感字段、恢复状态与 agent 包资产
+
+> 本节记录已落地的契约细节。既有结论（§27、§33、§44、§55）的状态码与字段语义一律不改，这里只做**补充与收紧**：本轮的净变化只有两处——502 的适用面收窄（只留给真实远端失败），以及新增 **503 `unavailable`**（控制端本地能力缺失，见 §65.1）；其余都是把已有行为写清、把 `message` 写精确。
+
+### 65.1 错误响应统一带 `request_id`，502 只用于远端失败、503 用于本地能力缺失
+
+错误响应体形状固定（`internal/api/response.go` 的 `writeError`）：
+
+```json
+{"error":{"code":"remote_failure",
+          "message":"下载文件失败: dial tcp 10.0.0.9:22: connect: connection refused",
+          "request_id":"k3f9c1d2a4b7"}}
+```
+
+- `request_id` 与响应头 `X-Request-Id` 同值（由 `middlewareRequestID` 生成并回填，panic 兜底路径同样带）。键**始终存在**，取不到时是空字符串而不是缺省，前端据此降级；用户报障时报这个号，就能在日志里定位到那一次请求；
+- **502 `remote_failure`**：目标机侧的动作失败（连不上、命令非 0、远端脚本报错）统一由此码承担，`message` 固定为「`<动作>失败: <原因>`」。当前动作名与调用文件：
+
+  | 动作名 | 触发场景 | 文件 |
+  |---|---|---|
+  | 列出目录 / 打开 SFTP 会话 / 打开远端文件 / 下载文件 / 上传文件 / 写入远端文件 / 删除文件 / 删除远端文件 | 文件浏览与传输 | `internal/api/handlers_files.go` |
+  | 读取日志 / 读取进程列表 / 读取端口列表 / 准备远程执行通道 | 运维只读视图与通道建立 | `internal/api/handlers_remote.go` |
+  | 探测 / 刷新主机信息 | 服务器发现与信息采集 | `internal/api/handlers_servers.go` |
+  | SSH 采集 | SSH 主机信息刷新 | `internal/api/handlers_ssh.go` |
+  | 体检 | 接管体检脚本 | `internal/api/handlers_deploy_extra.go` |
+  | 下发升级指令 | Agent 自升级下发 | `internal/api/handlers_upgrade.go` |
+
+  统一入口是 `writeRemoteError`（`internal/api/handlers_files.go`）。其中「探测」「体检」两行还有一条**前置分支**：控制端自己没装配发布执行器时不是 502，而是下一条的 503——只有真的去操作目标机之后失败才算远端失败；
+- **503 `unavailable`**：控制端**自身**能力没就绪（装配/配置问题），不是目标机的错。典型是发布执行器没装配上：执行器接口断言失败，或执行器存在但执行端为空（哨兵 `errOrchestratorDisabled`，定义在 `internal/api/deploy_discover.go`）。`message` 直接说明**缺什么**，且**不套「`<动作>失败: `」前缀**——那个前缀的含义是「去查目标机」，用在这里会把人引到错误的方向。当前两处入口：
+
+  | 端点 | 503 文案（`code=unavailable`） | 同一端点的 502 场景 |
+  |---|---|---|
+  | `POST /api/v1/servers/{id}/discover`（`internal/api/handlers_servers.go`） | 发布执行器未启用，无法探测目标机 | 目标机不可达 / 探测命令失败 → 「探测失败: …」 |
+  | `POST /api/v1/servers/{id}/diagnose`（`internal/api/handlers_deploy_extra.go`） | 发布执行器未启用，无法体检 | 目标机不可达 / 体检脚本失败 → 「体检失败: …」 |
+
+  统一入口是 `writeUnavailable`（`internal/api/response.go`），固定 `code=unavailable`，响应体形状与其它错误一致、同样带 `request_id`；
+- **500 `internal`**：其余服务端内部错误，同样带 `request_id`；
+- 判定口径：参数非法仍是 400、权限不足 403、越界 404、资源冲突 409；**502 只承担「远端不可达 / 远端命令失败」**（不再被包装成 500，否则用户会以为控制端自己出问题）；**凡是控制端本地的配置或装配问题一律 503**，不要推给目标机——否则用户会拿着「体检失败」去目标机翻日志，一条线索都查不到。
+
+前端不再只弹「操作失败」：错误 toast 自动追加「请求编号 xxx」（`web/src/lib/errors.ts` 的 `errorMessage` / `withRequestId`，消息里已有该号时不重复追加）。
+
+### 65.2 409 的 `message` 透出精确原因
+
+状态码与 `code=conflict` 不变，改的是 `message`（`internal/api/api.go` 的 `conflictDetail`）：
+
+1. 先剥掉 store 包装的哨兵尾巴（`: conflict`）；
+2. 命中标志词（`已存在` / `已被占用` / `禁止删除` / `不能确认` / `仍被` / `仍有`）→ **直接用原因文本**，名字再短也照实透出；
+3. 否则按「字符数 ≥ 10」兜底；
+4. 都不满足才回退通用文案「资源已存在或冲突」。
+
+典型输出：`分组 a 已存在`、`分组 g-1 的新名称已被占用`、`应用 tuoluojiang 已存在（slug 必须唯一）`、`应用 app-1 仍有 2 条发布记录，禁止删除`、`凭证 cred-1 仍被 3 台服务器引用`、`告警 alert-1 当前状态为 firing，不能确认`、`用户 root 已存在`。前端因此可以直接把 `message` 展示给用户，不必再自己拼「名称重复」这类猜测文案。
+
+已知不一致（记录在案，尚未修）：`checks.name`、`alert_rules.name`、`alert_channels.name` 三张表**没有 UNIQUE 约束**，所以「检测项 / 告警规则 / 通知渠道 已存在」这类冲突在当前库里不可达——要真正命中得先补唯一索引或在创建前预检查。
+
+### 65.3 应用敏感字段按权限收敛（`env_keys` / `redacted`）
+
+`GET /apps`、`GET /apps/{id}`、`POST /apps`、`PATCH /apps/{id}` 共用同一份载荷（`internal/api/handlers_deploy.go` 的 `newAppPayload`）：
+
+| 字段 | 有 `deploy.write` 且范围 `all` | 其他情况 |
+|---|---|---|
+| `env_json` / `init_script` / `restart_cmd` | 原值 | `null` |
+| `redacted` | `false` | `true` |
+| `env_keys` | `env_json` 的键名（字母序，最多 64 个） | 同左（**键名不算秘密**，用于展示与编辑占位） |
+| `env_keys_truncated` | 键数超 64 时为 `true`（缺省不出现） | 同左 |
+
+- 敏感字段不可见时**仍返回 200**，不做 403/404——否则能靠状态码探测应用是否存在；
+- `env_keys` 始终出现：`env_json` 为 NULL、空对象或非法 JSON 时是 `[]`（不 500、不省略字段）；
+- 因此编辑应用必须先 `GET /apps/{id}` 取回原值再 `PATCH`：在没有 `deploy.write` 的会话里把 `env_json` 传来传去会把环境变量清空。审计里也不会出现 `env_json` 的明文值（`scripts/verify_authz.sh` 有断言锁住）。
+
+### 65.4 恢复状态只读接口 `GET /system/backup/restore-status`
+
+`POST /backups/restore` 只是**暂存**（202 `restart_required`），真正应用发生在下一次启动。为了让人知道「重启到底生效了没有」，补一个只读查询（`internal/api/handlers_backup.go` 的 `handleRestoreStatus`；权限 `backup.restore` + 全局范围，与上传同口径）：
+
+| 场景 | 响应 |
+|---|---|
+| 没有待应用的暂存 | `200 {"data":{"pending":false}}`（**不是 404**：前端靠它轮询「重启是否生效」） |
+| 有暂存 | `200 {"data":{"pending":true,"source":"…","schema_version":12,"archive_sha256_prefix":"072d85d0","staged_at":…,"verified_at":…,"hint":"…"}}` |
+
+- 读的是 `<data_dir>/.restore-pending/meta.json`：不读数据库、不加锁、不触发恢复；
+- `archive_sha256_prefix` 只给归档 sha256 的前 8 位，够人眼比对又不搬全量摘要；`verified_at`、`hint` 可能不出现（`omitempty`）；
+- 已有暂存时再次上传归档 → `409 conflict`，提示先重启应用或清理暂存目录；
+- 前端（`web/src/pages/BackupsPage.tsx`）在上传成功后每 5s 轮询一次，暂存卡片给出 linux / darwin / docker 三条重启命令（带复制按钮）；`pending` 由 `true` 变 `false` 时弹「恢复已完成（归档 <sha 前 8 位>）」。
+
+### 65.5 `POST /system/update/check` 增加 `agent_assets`
+
+响应新增 `agent_assets`：目标机 agent 包清单，供「服务器详情 → 升级 Agent」直接预填。
+
+```json
+{"assets":      [{"name":"leadstack_0.1.6_linux_amd64.tar.gz","url":"…","sha256":"…"}],
+ "agent_assets":[{"name":"leadstack-agent_0.1.6_linux_amd64.tar.gz","url":"…",
+                  "sha256":"…","os":"linux","arch":"amd64"}]}
+```
+
+- `assets` 语义**不变**：仍只含控制端包（`leadstack_*`，继续由 `classifyAsset` 过滤），避免「一键升级选到 agent 包」的老故障回归；`agent_assets` 只匹配 `leadstack-agent_<ver>_<os>_<arch>.tar.gz`；
+- 降级行为：`checksums.txt` 取不到 → 包照常返回、`sha256` 为空串（前端把该字段留空，且 sha256 未填时「开始升级」按钮不可点，必须手填或自行核对）；没有 agent 包、或首检失败 → 序列化为 `[]` 而不是 `null`，调用方不必判空；
+- 单测：`internal/api/update_asset_test.go`、`internal/api/api_test.go`。
+
+### 65.6 前端交互变更
+
+- **中止发布**：发布详情页对进行中的 run 提供「中止发布」（`web/src/pages/ReleaseDetailPage.tsx`），二次确认写明「已完成的 N 台不会回滚，剩余 pending 的会被取消」；成功后 toast「已中止 N 台」，N 取 `POST /releases/{id}/cancel` 响应里的 `canceled`（响应缺该字段时回落到操作前的 active 台数）。它与「取消」（关闭弹窗）严格区分措辞，避免让人以为能撤销已完成的服务器。
+
+  中止之后的**发布整体状态显示「取消」而不是红色「失败」**：状态徽标由 `ReleaseStatusBadge`（`web/src/components/DeployBadges.tsx`）按 `release.status` 渲染，`canceled` 是琥珀色（`s.0416` →「已取消」），`failed` 才是红色（`s.0301`）。这**不需要改前端代码**：页面上的台数统计取自每个 `run.status`（`ReleaseDetailPage.tsx` 的 `stats`），「重试失败项」入口看 `stats.failed > 0`、「回退」入口看 `stats.success > 0`，都与 `release.status` 无关；本轮只改了后端汇聚规则（见 §23）与对应的 e2e 断言。
+- **探测通道**：`tcp` / `http` / `ping` 检测项可在向导里选「控制端直连 / 由目标机 agent 代检」，落库为 `params.probe_via = "control" | "agent"`（`web/src/components/CheckFormDialog.tsx`）。后端只接受这两个值（大小写与空白归一，空串等于删除该键）；`process` / `script` 传该字段 → 400「只适用于 tcp/http/ping（process/script 本身就在目标机执行）」。`agent` 代检要求服务器是 agent 接入：执行通道不支持时检测项**直接判失败并给出原因，不静默回落控制端直连**（`internal/checker/probe.go`）。列表与服务器详情用「agent 代检」徽标标出（`web/src/components/CheckBadges.tsx`）。
+- **按授权分组选机**：发布向导与检测向导一律按 `group_ids.includes(groupId)` 过滤，旧的文本字段 `servers.group` 只做展示、不再参与过滤；计数文案固定为「已选 N 台 / 该分组共 M 台」，切换分组时把已选集合裁剪到该分组内，避免「列表里看不见的服务器被一并提交」。
+- **错误 toast**：`error` 级不自动消失、可关闭、可复制，容器 `role="alert"` + `aria-live="assertive"`（普通提示仍是 4s 自动消失）；文案自动追加请求编号（见 §65.1）。
+- **升级 Agent 入口**：`mode=agent` 的服务器详情页有「升级 Agent」弹窗，按 `os` / `arch` 从 `agent_assets` 预填 `version` / `url` / `sha256` 且允许手改；没有 `agent.upgrade` 权限时入口禁用并说明原因。
+
+### 65.7 对应的验收
+
+| 层次 | 落点 |
+|---|---|
+| Go 单测 | `internal/api/`（错误码与 `request_id`、409 文案、`agent_assets` 空数组、`env_keys` 截断）、`internal/checker/probe_via_test.go`、`internal/store/store_test.go`（`TestSummarizeReleaseStatusTerminalSemantics` 的 6 种 run 组合、`TestSummarizeReleaseStatusInFlight`） |
+| 脚本 e2e | `scripts/verify_authz.sh`（78 项：`env_keys`/`redacted` 收敛、列表不泄露、审计无明文、409 精确原因）、`scripts/verify_backup.sh`（45 项：恢复状态字段、重复上传 409、重启后 `pending=false`）、`scripts/verify_bootstrap.sh`（19 项：安装脚本阶段输出与控制端可达性自检）、`scripts/verify_deploy_v2.sh`（66 项：`healthcheck_path` 校验、`env_keys`、按授权分组选机）、`scripts/verify_deploy_rollout.sh`（35 项：1 台成功 + 1 台取消后发布必须收敛到 `canceled` 而不是 `failed`） |
+| 前端产物 | `internal/webui/dist/assets/` 里可 `grep` 到 `restore-status`、`中止`、`agent 代检`、`请求编号`、`该分组共` |
+
+> 上面四套脚本的断言数是实测值；13 套 `make test-e2e` 脚本合计 **544 项**（每套明细见 README「开发与验收」）。
+> `scripts/verify_upgrade.sh`（控制端自升级 20 项）不在主干闸门内，用 `make verify-upgrade` 单独跑、发版前必跑（见 §51.5）。
+
+## 66. 列表接口的范围过滤必须排在 LIMIT 之前
+
+§53.3 规定了「列表级只返回范围内对象」，但没规定这条规则与 `LIMIT` 的先后。顺序反了不会报错、不留日志、单测也很难自然覆盖——唯一症状是：受限用户在**数据确实存在**时看到一个空列表，然后开始怀疑自己的权限配置。本轮在 `/releases` 与 `/alerts` 各修掉一次，这里把顺序定为契约。
+
+### 66.1 范式
+
+> **列表接口只要带截断（`LIMIT` / 任何「取前 N 条」），范围过滤就必须与 `LIMIT` 在同一条 SQL 里，并且排在 `LIMIT` 之前。**
+
+反面教材是修前的 `/releases`：SQL 先 `ORDER BY created_at DESC, id DESC LIMIT ?` 取全局最新 N 条，handler 再逐条 `canAccessAnyServer` 判断、越界就 `continue`。看起来「过滤过了」，其实 **`LIMIT` 的名额已经被越界行吃掉了**：
+
+```go
+// 修前（错误形状）：先截断，再过滤
+rows := SELECT … FROM releases ORDER BY created_at DESC, id DESC LIMIT ?
+for _, rel := range releases {
+    if !a.canAccessAnyServer(r, releaseServers[rel.ID]) { continue } // 名额已消耗，扔了就没了
+}
+```
+
+后果链条很具体：用户范围内那条发布若排在全局第 6 位之后，SQL 只回 5 条、全被丢掉 → 接口返回 `data: []` → 前端渲染「你所授权分组与服务器范围内暂无发布记录。」（`web/src/i18n/zh-CN.ts` 的 `dashboard.recentReleasesScopedEmpty`，用在 `web/src/pages/DashboardPage.tsx`）→ **发布明明存在**。这类「假空列表」比 500 更难查：接口 200、日志无异常、权限也对，用户只能反复核对角色范围。
+
+`/alerts` 是同一形状，后果更重：`handleListAlerts` 曾把 `limit` 直接交给 `ListAlerts` 先截断，再按 `optionalServerVisible` 在内存里过滤。范围内那条更早的告警被截掉，页面显示「当前筛选条件下没有告警，试试放宽时间范围或清除筛选」（`web/src/i18n/zh-CN.ts` 的 `s.0717`）—— **真有故障却说没有告警**，是这套系统里代价最高的一种误报。
+
+正确形状（两处一致）：范围条件进 `WHERE`，参数排在 `LIMIT` 参数之前，`ORDER BY … LIMIT ?` 固定收尾。
+
+```go
+// 修后（正确形状）：范围条件与 LIMIT 同一条 SQL，且在前
+query += ` AND <范围条件>`
+args = append(args, scopeIDs…)      // 参数顺序也要排在 LIMIT 参数之前
+query += ` ORDER BY … LIMIT ?`
+args = append(args, limit)
+```
+
+### 66.2 两处落点
+
+**`GET /releases`**
+
+- `internal/store/deploy.go`：`ReleaseFilter.ServerIDs`（`internal/store/deploy.go:560`）——`nil` = 不限（全局范围）、空切片 = 范围为空；`:582` 在 `WHERE` 追加
+  `AND EXISTS (SELECT 1 FROM release_runs rr WHERE rr.release_id = releases.id AND rr.server_id IN (?,…))`，占位符按 `len(ServerIDs)` 生成、参数排在 `LIMIT` 参数之前，`:587` 才是 `ORDER BY created_at DESC, id DESC LIMIT ?`；`len == 0` 时不拼条件，**绝不会生成 `IN ()`**。
+- 为什么是 `EXISTS` 而不是 `JOIN release_runs`：一条发布有多条 run，`JOIN` 会把同一发布复制成多行，排序与 `LIMIT` 的语义随之被破坏，还得再 `DISTINCT` 兜回来。`EXISTS` 只回答「有没有一条 run 命中范围」，行的粒度不变。`release_runs` 上已有 `idx_release_runs_lookup(release_id, status)`，`EXISTS` 走该索引前缀，**没有新迁移**。
+- `internal/api/handlers_deploy.go`（`handleListReleases`，`:841`）：范围来自 `allowedServerIDList`（与告警概览同一可见性来源）；非全局且集合为空时**直接返回 200 空页**（带完整 `page` meta），不查库、不 404/403——空范围是「没有数据」，不是「越权」；`release_runs` 交集复核保留作**兜底**，覆盖「SQL 过滤被误删/改坏」与「请求中途范围变化」两种情况。
+
+**`GET /alerts`**
+
+- `internal/store/alerts.go`：`AlertFilter.ServerIDs`（`:483`）；`:524` 在 `To` 条件之后、`ORDER BY` 之前追加 `AND server_id IS NOT NULL AND server_id IN (?,…)`，`:529` 才是 `ORDER BY started_at DESC, id DESC LIMIT ?`。
+- `internal/api/handlers_alerts.go`（`handleListAlerts`，`:560`）：同样用 `allowedServerIDList`（定义在 `:743`）填 `filter.ServerIDs`，空范围早返回 200 空页；内存里的 `optionalServerVisible` 复核作为第二道防线保留（见 §66.3）。
+- 索引取舍是**已知且不需要动**的：`alerts` 没有 `server_id` 索引，查询形态是「范围内最新 N 条」，SQLite 走 `idx_alerts_started(started_at)` 有序扫描 + 逐行过滤 `server_id`；`alerts` 表量级（万级以内）下不值得为它加迁移。别再为此提「优化」。
+
+其余列表接口为什么没有这个问题：`/servers`、`/checks` 的查询本身没有 `LIMIT`（查出后在内存过滤，再按过滤后的集合切页），`/scheduled-tasks` 不分页。**但这不构成可以照抄的姿势**——一旦给它们加上 `LIMIT`，就得同时把范围条件挪进 SQL 并排在 `LIMIT` 之前。
+
+### 66.3 规则级告警：`server_id IS NULL` 只对全局范围可见
+
+- `alerts.server_id IS NULL` 表示**规则级告警**（由告警规则产生、不对应某一台服务器）。规则是全局策略（§53.3 第 3 条），所以这类告警**只对 `scope=all` 可见**，非全局角色一律看不到。
+- 因此 §66.2 里那句 `server_id IS NOT NULL` 是**刻意写的，不是笔误**。严格说它不改变结果（`NULL IN (…)` 永远不成立），但它把意图钉在查询里——修过滤顺序时最容易做的动作就是「为了多给点数据」把它删掉；删掉不是多给数据，是把别人分组的规则级告警泄露出去（越权读）。
+- 判定口径：
+
+| 告警的 `server_id` | 可见条件 |
+|---|---|
+| 有值 | 按该服务器的可见性判定：落在调用者范围内即可见 |
+| `NULL`（规则级） | 仅 `scope=all` 可见；任何非全局角色都不可见 |
+
+- 两道防线：SQL 的 `server_id IS NOT NULL`（挡住 `NULL` 行）+ handler 里的 `optionalServerVisible` 兜底（非全局时 `server_id` 为空直接丢弃）。第二道之所以保留，是因为「SQL 被改坏」与「请求中途范围变化」都真实发生过。
+- 回归断言：`internal/api/api_alerts_scope_test.go` 覆盖「非全局角色即使 `?limit=200` 也看不到规则级告警，管理员能看到」。
+
+### 66.4 对外可观测变化：游标语义从「全局窗口偏移」变成「过滤后集合偏移」
+
+- 分页实现：`cursor` 是不透明偏移量（`internal/api/audit.go` 的 `parsePage` / `encodeCursor`，`p:<offset>` 的 base64）；`fetchLimit = offset + limit + 1`（多取 1 条判断 `has_more`）；`window` 在结果上切出当前页。
+- **修前**：`offset` 落在**全局窗口**上，范围过滤发生在切片之后 ⇒ 范围用户可能拿到 `data: []` 或明显偏短的页，`has_more` / `next_cursor` 也不反映他自己范围内的剩余。
+- **修后**：`offset` 落在**范围过滤之后的集合**上 ⇒ 每页都是「我范围内第 `offset` 条起的 `limit` 条」，只有最后一页会短；`has_more` / `next_cursor` 反映的是范围内的剩余。
+- 这是**修正后的正确语义，不是回归**。客户端无需改动：`cursor` 本就不持久化、按偏移解释，换页重取即可；若某个外部脚本硬编码了「第 N 页一定满页」的假设，那它依赖的正是被修掉的错误语义。
+- 空范围：`200` + `data: []` + `page: {has_more:false, next_cursor:""}`，**不是** 403/404（§53.3 的 404 只用于对象级）。
+
+### 66.5 新增列表接口时的三问
+
+1. 这条 SQL 里有 `LIMIT`（或任何「取前 N 条」）吗？有 ⇒ 范围条件必须在**同一条** SQL 里、且排在 `LIMIT` **之前**，参数顺序同样如此。
+2. `allowedServerIDList` 的两种返回值分开处理了吗？`nil` = 全局不限（不加条件）；空切片 = 范围为空（直接 200 空页，不查库、不拼 `IN ()`）。
+3. 内存里那层复核是**兜底**还是**唯一防线**？若它是唯一防线，说明 `LIMIT` 排在了范围过滤前面，必须改 SQL。
+
+回归测试都构造了「范围内那条排在全局窗口之外」这个关键形态：`internal/store/store_test.go` 的 `TestListReleasesFiltersByServerBeforeLimit` / `TestListAlertsFiltersByServerBeforeLimit`；`internal/api/api_releases_scope_test.go` 的 `TestListReleasesScopeFilterAppliesBeforeLimit`；`internal/api/api_alerts_scope_test.go` 的 `TestListAlertsScopeFilterAppliesBeforeLimit` / `TestListAlertsEmptyScopeReturnsEmptyPage`。反向验证很直接：把 `filter.ServerIDs` 的赋值注释掉，两个 API 测试立刻失败并打印 `{"data":[],"page":{…}}`——正是线上那个「暂无数据」的形态。
 

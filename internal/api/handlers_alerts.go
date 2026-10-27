@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -612,6 +613,21 @@ func (a *API) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 资源范围下沉到 SQL：必须让 LIMIT 作用在「server_id ∩ 调用者范围」之后。
+	// 否则范围用户只看得到全局最新 N 条，自己那条更早的告警被截掉，前端显示
+	// 「暂无告警」——真有故障却告诉用户没事，是代价最高的一种误报。
+	// allowedServerIDList 返回 nil 表示全局范围（不加限制）；非全局时 SQL 里还会带上
+	// server_id IS NOT NULL，规则级告警只对全局角色可见（契约 §53.3，未改动）。
+	if ids := a.allowedServerIDList(r); ids != nil {
+		if len(ids) == 0 {
+			// 范围内没有任何服务器：直接回空页，不查库（也避免 SQL 出现 IN ()）。
+			_, _, meta := params.window(0)
+			writePagedList(w, params, []alertPayload{}, meta)
+			return
+		}
+		filter.ServerIDs = ids
+	}
+
 	alerts, err := a.st.ListAlerts(r.Context(), filter)
 	if err != nil {
 		a.internalError(w, r, err)
@@ -628,7 +644,10 @@ func (a *API) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	out := make([]alertPayload, 0, len(alerts))
 	for _, item := range alerts {
 		payload := a.toAlertPayload(item, names, nil)
-		// 资源范围：按告警所属服务器过滤；规则级告警仅全局范围可见（契约 §53.3）。
+		// 资源范围兜底：SQL 已按 server_id 过滤，这里再按同一可见性来源复核一次。
+		// 保留它不是冗余——它覆盖「SQL 过滤被误删/改坏」与「请求中途范围变化」，
+		// 尤其能保证规则级告警（server_id 为 NULL）在任何情况下都不会漏给非全局角色
+		// （契约 §53.3）。代价是一次内存判断。
 		if !a.optionalServerVisible(r, item.ServerID) {
 			continue
 		}
@@ -698,13 +717,43 @@ func (a *API) handleAckAlert(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAlertSummary 处理 GET /api/v1/alerts/summary。
+//
+// 资源范围（契约 A13/A14）：全局角色（scope=all）仍调用 AlertSummary，
+// 保证返回与改动前逐字段一致；受限角色只统计范围内服务器，ids 来自
+// allowedServers（与 optionalServerVisible 同一可见性来源，不另写判定）。
 func (a *API) handleAlertSummary(w http.ResponseWriter, r *http.Request) {
-	summary, err := a.st.AlertSummary(r.Context(), a.nowMS())
+	var (
+		summary store.AlertSummary
+		err     error
+	)
+	if ids := a.allowedServerIDList(r); ids != nil {
+		summary, err = a.st.AlertSummaryForServers(r.Context(), a.nowMS(), ids)
+	} else {
+		summary, err = a.st.AlertSummary(r.Context(), a.nowMS())
+	}
 	if err != nil {
 		a.internalError(w, r, err)
 		return
 	}
 	writeData(w, http.StatusOK, summary)
+}
+
+// allowedServerIDList 把资源范围集合展开成有序去重的服务器 ID 切片（供 SQL IN 使用）。
+// 返回 nil 表示不受限（scope=all）；返回非 nil 空切片表示范围内一台都没有。
+func (a *API) allowedServerIDList(r *http.Request) []string {
+	allowed := a.allowedServers(r)
+	if allowed == nil {
+		return nil
+	}
+	out := make([]string, 0, len(allowed))
+	for id := range allowed {
+		if id == "" {
+			continue
+		}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ------------------------------------------------ 辅助 ------------------------------------------------

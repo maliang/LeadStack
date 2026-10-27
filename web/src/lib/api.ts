@@ -20,19 +20,41 @@ export class ApiError extends Error {
   readonly code: string
   /** 后端 error.details（登录限流剩余次数、retry_after_s 等） */
   readonly details: Record<string, unknown> | null
+  /**
+   * 后端 error.request_id（与响应头 X-Request-Id 同值，无中间件时为空串 → 归一为 null）。
+   * 用途：T-13 的 errorMessage 在错误提示后追加「请求编号 xxx」（i18n 键 errors.requestId），
+   * 用户报障时可直接用它去后端日志里定位那一次请求。
+   */
+  readonly requestId: string | null
 
   constructor(
     status: number,
     code: string,
     message: string,
     details: Record<string, unknown> | null = null,
+    requestId: string | null = null,
   ) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
     this.details = details
+    this.requestId = requestId
   }
+}
+
+/**
+ * 从错误信封/响应头里取 request_id：优先 body 的 error.request_id（T-05 起所有错误体都带），
+ * 再退回响应头 X-Request-Id；都没有（或为空串）时返回 null，调用方不必再判空字符串。
+ */
+function pickRequestId(envelope: ErrorEnvelope | null, response: Response): string | null {
+  const fromBody = envelope?.error?.request_id
+  const candidate =
+    typeof fromBody === 'string' && fromBody.trim() !== ''
+      ? fromBody
+      : (response.headers.get('X-Request-Id') ?? '')
+  const trimmed = candidate.trim()
+  return trimmed === '' ? null : trimmed
 }
 
 /* ------------------------------------------------------------------ */
@@ -92,6 +114,8 @@ interface ErrorEnvelope {
     code?: string
     message?: string
     details?: Record<string, unknown> | null
+    /** 后端统一错误体的请求编号（T-05），与响应头 X-Request-Id 一致 */
+    request_id?: string
   }
 }
 
@@ -132,6 +156,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       envelope?.error?.code ?? 'http_error',
       envelope?.error?.message ?? t('s.0579', { '0': response.status }),
       toRecord(envelope?.error?.details),
+      pickRequestId(envelope, response),
     )
     if (response.status === 401 && auth) {
       clearToken()
@@ -208,6 +233,7 @@ async function requestMultipart<T>(
       envelope?.error?.code ?? 'http_error',
       envelope?.error?.message ?? t('s.0579', { '0': response.status }),
       toRecord(envelope?.error?.details),
+      pickRequestId(envelope, response),
     )
     if (response.status === 401 && auth) {
       clearToken()
@@ -278,6 +304,13 @@ export interface UpdateAsset {
   arch: string
   url: string
   size_bytes: number
+  /** 资产文件名（控制端产物可能不带；agent 产物一般带，如 leadstack-agent_0.1.3_linux_amd64.tar.gz） */
+  name?: string
+  /**
+   * 资产 sha256。控制端自升级产物（assets）通常不返回；
+   * agent 升级产物（agent_assets）必带 —— T-14 的升级弹窗要用它预填 sha256 输入框。
+   */
+  sha256?: string
 }
 
 export interface UpdateInfo {
@@ -290,6 +323,12 @@ export interface UpdateInfo {
   /** 该版本包含数据库迁移 */
   schema_changed: boolean
   assets: UpdateAsset[]
+  /**
+   * agent 产物清单（后端 UpdateInfo.agent_assets，按 os/arch 区分）。
+   * 用途：T-14 服务器详情页「升级 Agent」弹窗按 server.os/server.arch 预填 version/url/sha256。
+   * 老版本控制端不返回该字段，故为可选。
+   */
+  agent_assets?: UpdateAsset[]
   /** 当前平台/架构是否有可用产物（Windows 上恒为 false：不支持替换运行中的可执行文件） */
   upgradable: boolean
   /** 不能一键升级时的原因（如 Windows 平台限制），空表示无 */
@@ -946,6 +985,74 @@ export interface RestoreStagedResult {
 export interface BackupDownload {
   blob: Blob
   filename: string
+}
+
+/**
+ * GET /system/backup/restore-status（任务 T-12：备份页「已暂存」卡片轮询用）。
+ * pending=true 表示归档已暂存、等控制端重启后自动应用；
+ * 归档 sha256 后端只回前 8 位（archive_sha256_prefix），正好用于「恢复已完成（归档 xxxxxxxx）」。
+ */
+export interface SystemRestoreStatus {
+  pending: boolean
+  /** 暂存来源（upload=页面上传归档，auto=自动备份目录里的暂存文件），可能缺省 */
+  source?: string
+  schema_version?: number
+  /** 归档 sha256 前 8 位 */
+  archive_sha256_prefix?: string
+  /** 暂存时间（unix 秒） */
+  staged_at?: number
+  /** 暂存归档校验通过时间（unix 秒） */
+  verified_at?: number
+  /** 后端补充说明（可能缺省，前端不必直接展示） */
+  hint?: string
+}
+
+/** 归一化 restore-status：pending 缺省按 false（后端无暂存时只返回 {pending:false}）。 */
+export function normalizeSystemRestoreStatus(input: unknown): SystemRestoreStatus {
+  const raw = toRecord(input) ?? {}
+  return {
+    pending: toBool(raw.pending),
+    source: toText(raw.source) ?? undefined,
+    schema_version: toNumber(raw.schema_version) ?? undefined,
+    archive_sha256_prefix: toText(raw.archive_sha256_prefix) ?? undefined,
+    staged_at: toNumber(raw.staged_at) ?? undefined,
+    verified_at: toNumber(raw.verified_at) ?? undefined,
+    hint: toText(raw.hint) ?? undefined,
+  }
+}
+
+/**
+ * POST /servers/{id}/agent-upgrade（单台）与 POST /agents/upgrade（批量）的请求体，
+ * 对应后端 upgradeRequest{version,url,sha256,server_ids}。
+ * 这些字段就是 T-14 弹窗里要填的三项，可从 UpdateInfo.agent_assets 按 server.os/arch 预填。
+ */
+export interface AgentUpgradePayload {
+  /** 目标 agent 版本号，如 0.1.4 */
+  version: string
+  /** agent 产物的下载地址（必须是 agent 归档，填成控制端归档会被后端拒绝） */
+  url: string
+  /** 产物 sha256（后端强制校验） */
+  sha256: string
+  /** 仅批量接口使用；单台接口忽略该字段 */
+  server_ids?: string[]
+}
+
+/** agent 升级下发结果：HTTP 202 只代表指令已排队，不代表 agent 已升级成功。 */
+export interface AgentUpgradeResult {
+  server_id: string
+  ok: boolean
+  /** ok=false 时的原因（agent 离线、范围校验拒绝等） */
+  error: string | null
+}
+
+/** 归一化 agent 升级结果（后端 upgradeResult{server_id,ok,error}）。 */
+export function normalizeAgentUpgradeResult(input: unknown): AgentUpgradeResult {
+  const raw = toRecord(input) ?? {}
+  return {
+    server_id: toText(raw.server_id) ?? '',
+    ok: toBool(raw.ok),
+    error: toText(raw.error),
+  }
 }
 
 
@@ -2094,8 +2201,24 @@ export function normalizeNetworkConfig(input: unknown): NetworkConfig {
   }
 }
 
+/** 归一化单条升级产物（控制端 assets 与 agent_assets 共用同一形状）。 */
+function normalizeUpdateAsset(item: unknown): UpdateAsset {
+  const asset = toRecord(item) ?? {}
+  return {
+    os: toText(asset.os) ?? '',
+    arch: toText(asset.arch) ?? '',
+    url: toText(asset.url) ?? '',
+    size_bytes: toNumber(asset.size_bytes) ?? 0,
+    name: toText(asset.name) ?? undefined,
+    sha256: toText(asset.sha256) ?? undefined,
+  }
+}
+
 export function normalizeUpdateInfo(input: unknown): UpdateInfo {
   const raw = toRecord(input) ?? {}
+  // agent_assets 在老版本控制端上不存在：缺省时保留 undefined（而不是空数组），
+  // 让 T-14 能区分「后端没这个字段」和「后端返回了空清单」两种提示。
+  const agentAssetsRaw = raw.agent_assets
   return {
     current: toText(raw.current) ?? '',
     latest: toText(raw.latest),
@@ -2104,15 +2227,11 @@ export function normalizeUpdateInfo(input: unknown): UpdateInfo {
     release_url: toText(raw.release_url),
     notes: typeof raw.notes === 'string' ? raw.notes : null,
     schema_changed: toBool(raw.schema_changed),
-    assets: extractList(raw.assets, ['assets']).map((item) => {
-      const asset = toRecord(item) ?? {}
-      return {
-        os: toText(asset.os) ?? '',
-        arch: toText(asset.arch) ?? '',
-        url: toText(asset.url) ?? '',
-        size_bytes: toNumber(asset.size_bytes) ?? 0,
-      }
-    }),
+    assets: extractList(raw.assets, ['assets']).map(normalizeUpdateAsset),
+    agent_assets:
+      agentAssetsRaw === undefined || agentAssetsRaw === null
+        ? undefined
+        : extractList(agentAssetsRaw, ['agent_assets']).map(normalizeUpdateAsset),
     upgradable: toBool(raw.upgradable, true),
     upgrade_note: toText(raw.upgrade_note),
     checked_at: toNumber(raw.checked_at),
@@ -3201,6 +3320,39 @@ export const api = {
   updateBackupSettings(payload: BackupSettings): Promise<BackupSettings> {
     return request<unknown>('/backup-settings', { method: 'PATCH', body: payload }).then(
       normalizeBackupSettings,
+    )
+  },
+
+  /**
+   * GET /system/backup/restore-status → 暂存恢复状态（需 backup.restore 权限 + 全局范围）。
+   * 任务 T-12：备份页挂载后每 5s 轮询一次；pending 由 true 变 false 即视为「恢复已完成」。
+   */
+  systemRestoreStatus(): Promise<SystemRestoreStatus> {
+    return request<unknown>('/system/backup/restore-status').then(normalizeSystemRestoreStatus)
+  },
+
+  /* ---------------------- agent 升级（任务 T-14） ---------------------- */
+
+  /**
+   * POST /servers/{id}/agent-upgrade → 202 {server_id,ok,error?}（指令已排队，非升级成功）。
+   * 权限 agent.upgrade + 服务器须在角色范围内；越界返回 404 + code=not_found。
+   */
+  agentUpgrade(serverId: string, payload: AgentUpgradePayload): Promise<AgentUpgradeResult> {
+    return request<unknown>(`/servers/${encodeURIComponent(serverId)}/agent-upgrade`, {
+      method: 'POST',
+      body: payload,
+    }).then(normalizeAgentUpgradeResult)
+  },
+
+  /**
+   * POST /agents/upgrade（批量）→ 202 结果列表；请求体必须带 server_ids。
+   * T-14 只用单台接口，这里保留给「批量升级 agent」场景。
+   */
+  batchAgentUpgrade(
+    payload: AgentUpgradePayload & { server_ids: string[] },
+  ): Promise<AgentUpgradeResult[]> {
+    return request<unknown>('/agents/upgrade', { method: 'POST', body: payload }).then((raw) =>
+      extractList(raw, ['results', 'items']).map(normalizeAgentUpgradeResult),
     )
   },
 

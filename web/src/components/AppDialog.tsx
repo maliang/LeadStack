@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   api,
+  ApiError,
+  getToken,
+  normalizeApp,
   type AppItem,
   type AppProvider,
   type BaotaSiteType,
+  type CreateAppPayload,
 } from '../lib/api'
 import { errorMessage } from '../lib/errors'
 import { Button } from './Button'
@@ -85,6 +89,94 @@ function parseEnvText(text: string): { json: string | null; errorLine: number | 
   }
 }
 
+/** 编辑态详情：api.ts 的归一化会丢掉 redacted / env_keys，这里把它们一起带出来。 */
+interface AppDetail {
+  app: AppItem
+  /** true = 调用者看不到 env_json / init_script / restart_cmd 的值（后端已收敛为 null） */
+  redacted: boolean
+  /** env_json 的键名（字母序，最多 64 个） */
+  envKeys: string[]
+  envKeysTruncated: boolean
+}
+
+/** 服务端统一信封：成功 {"data":...}，失败 {"error":{"code","message","request_id"}}。 */
+interface AppEnvelope {
+  data?: unknown
+  error?: { code?: string; message?: string; request_id?: string }
+}
+
+/**
+ * 从错误信封/响应头取 request_id（与 api.ts 内部的 pickRequestId 同口径，那个函数未导出）。
+ * 拿到后交给 ApiError，errorMessage()（lib/errors.ts）就会在提示后自动追加「请求编号 xxx」，
+ * 与其它走 request() 的接口保持一致 —— 用户报障时能直接把这串 id 给后端定位日志。
+ */
+function requestIdOf(envelope: AppEnvelope | null, response: Response): string | null {
+  const fromBody = envelope?.error?.request_id
+  const candidate =
+    typeof fromBody === 'string' && fromBody.trim() !== ''
+      ? fromBody
+      : (response.headers.get('X-Request-Id') ?? '')
+  const trimmed = candidate.trim()
+  return trimmed === '' ? null : trimmed
+}
+
+/**
+ * GET /api/v1/apps/{id} 的详情（原始响应 + 归一化结果）。
+ *
+ * 为什么不直接用 api.app(id)：api.ts 是契约层（T-08 定稿、本任务禁止改动），它的
+ * normalizeApp 只挑已知字段，服务端返回的 `redacted` / `env_keys` 会被丢掉；而「受限角色
+ * 只显示键名」与「未改动的敏感字段不回传」必须靠这两个字段才做得对。请求本身仍走同一套
+ * /api/v1 前缀与 Bearer 令牌，模型部分复用已导出的 normalizeApp，不另写一套归一化。
+ *
+ * 错误契约与 request() 对齐：失败时抛 ApiError（带 status / code / request_id），
+ * 这样 errorMessage() 会自动补「请求编号 xxx」；401 则借统一层的请求触发登录失效处理
+ * （见下方 void api.apps()），不在组件里另写一套跳登录逻辑。
+ *
+ * 另外 SPEC R2：列表（GET /apps）在受限角色下对 env_json / init_script / restart_cmd
+ * 一律回 null，编辑时直接复用列表数据会把库里已有的值清空，所以编辑态必须再取一次详情。
+ */
+async function fetchAppDetail(id: string): Promise<AppDetail> {
+  const token = getToken()
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (token) headers.Authorization = `Bearer ${token}`
+  const response = await fetch(`/api/v1/apps/${encodeURIComponent(id)}`, { headers })
+  const text = await response.text()
+  let envelope: AppEnvelope | null = null
+  if (text) {
+    try {
+      envelope = JSON.parse(text) as AppEnvelope
+    } catch {
+      envelope = null
+    }
+  }
+  if (!response.ok) {
+    // 抛 ApiError（带 request_id）而不是普通 Error：errorMessage() 只在 ApiError 上补请求编号。
+    const apiError = new ApiError(
+      response.status,
+      envelope?.error?.code ?? 'http_error',
+      envelope?.error?.message ?? t('s.0579', { '0': response.status }),
+      null,
+      requestIdOf(envelope, response),
+    )
+    if (response.status === 401) {
+      // 会话失效：借一次统一层的请求触发 unauthorizedHandler（clearToken + 回登录页），
+      // 这里不重复实现 401 处理；触发失败也不影响本次错误照常抛出。
+      void api.apps().catch(() => {})
+    }
+    throw apiError
+  }
+  const payload = envelope?.data
+  const data = payload !== null && typeof payload === 'object' ? (payload as Record<string, unknown>) : {}
+  return {
+    app: normalizeApp(data),
+    redacted: data.redacted === true,
+    envKeys: Array.isArray(data.env_keys)
+      ? data.env_keys.filter((key): key is string => typeof key === 'string')
+      : [],
+    envKeysTruncated: data.env_keys_truncated === true,
+  }
+}
+
 /** 新建 / 编辑应用：部署方式、宝塔站点参数、部署参数（多版本 / 接管既有目录）。 */
 export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProps) {
   const { toast } = useToast()
@@ -111,6 +203,25 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
   const [envText, setEnvText] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** 敏感字段已被后端收敛（调用者无权限读值）→ 只展示 env_keys */
+  const [redacted, setRedacted] = useState(false)
+  const [envKeys, setEnvKeys] = useState<string[]>([])
+  const [envKeysTruncated, setEnvKeysTruncated] = useState(false)
+  /** 详情还没取回来时先禁用保存，避免用列表的精简值提交（SPEC R2） */
+  const [detailLoading, setDetailLoading] = useState(false)
+  /**
+   * 敏感字段是否被用户改过（diff 提交，PLAN 选型 8）。
+   * 用 ref 而不是 state：只需要在提交时读一次，且详情回填的异步回调里要看到最新值。
+   */
+  const envDirty = useRef(false)
+  const initScriptDirty = useRef(false)
+  const restartCmdDirty = useRef(false)
+  /**
+   * 详情请求序号：连续切换应用（或快速关掉再打开）时旧请求的回包可能后到，
+   * 用单调递增序号丢弃过期回包 —— cancelled 只覆盖「effect 清理」，序号额外覆盖
+   * 「清理前已发出、清理后仍返回」的多次请求，避免旧应用的敏感字段覆盖新应用。
+   */
+  const detailSeq = useRef(0)
 
   useEffect(() => {
     if (!open) return
@@ -153,7 +264,46 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
     setEnvText(envJsonToText(app?.env_json ?? null))
     setSaving(false)
     setError(null)
+    setRedacted(false)
+    setEnvKeys([])
+    setEnvKeysTruncated(false)
+    setDetailLoading(false)
+    envDirty.current = false
+    initScriptDirty.current = false
+    restartCmdDirty.current = false
   }, [open, app, preset])
+
+  // 编辑态先取详情再渲染：列表 payload 在受限角色下不含 env_json / init_script / restart_cmd
+  // （SPEC R2），直接复用列表值会在保存时把它们清空；同时拿 redacted / env_keys 决定显示方式。
+  useEffect(() => {
+    if (!open || !app) return
+    let cancelled = false
+    const seq = ++detailSeq.current
+    const stale = () => cancelled || seq !== detailSeq.current
+    setDetailLoading(true)
+    fetchAppDetail(app.id)
+      .then((detail) => {
+        if (stale()) return
+        setRedacted(detail.redacted)
+        setEnvKeys(detail.envKeys)
+        setEnvKeysTruncated(detail.envKeysTruncated)
+        // 只回填用户还没动过的字段，避免覆盖刚输入的内容
+        if (!envDirty.current) setEnvText(envJsonToText(detail.app.env_json))
+        if (!initScriptDirty.current) setInitScript(detail.app.init_script ?? '')
+        if (!restartCmdDirty.current) setRestartCmd(detail.app.restart_cmd ?? '')
+      })
+      .catch((caught: unknown) => {
+        if (stale()) return
+        // 详情取不到时保留列表值：敏感字段只要没被改动就不会提交，不会清空库里的值。
+        setError(errorMessage(caught, t('s.0238')))
+      })
+      .finally(() => {
+        if (!stale()) setDetailLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, app])
 
   const effectiveSlug = useMemo(() => (slugTouched ? slug : slugify(name)), [slug, slugTouched, name])
   const effectiveRoot = useMemo(() => (rootTouched ? root : ''), [root, rootTouched])
@@ -178,10 +328,11 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
         setError(t('apps.errorSitePort'))
         return
       }
-      if (healthcheckPath.trim() !== '' && !healthcheckPath.trim().startsWith('/')) {
-        setError(t('apps.errorHealthcheck'))
-        return
-      }
+    }
+    // 健康检查路径对所有部署模式都生效（后端两条通道共用），所以校验也提到 provider 之外。
+    if (healthcheckPath.trim() !== '' && !healthcheckPath.trim().startsWith('/')) {
+      setError(t('apps.errorHealthcheck'))
+      return
     }
     if ((deployMode === 'inplace' || deployMode === 'script') && !targetDir.trim().startsWith('/')) {
       setError(deployMode === 'script' ? t('apps.errorWorkdir') : t('apps.errorTargetDir'))
@@ -210,7 +361,7 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
     setSaving(true)
     setError(null)
     try {
-      const payload = {
+      const payload: CreateAppPayload = {
         name: name.trim(),
         slug: effectiveSlug,
         root: effectiveRoot.trim() || undefined,
@@ -219,19 +370,22 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
         site_name: provider === 'baota' ? siteName.trim() : undefined,
         site_port: provider === 'baota' ? Number(sitePort) : undefined,
         site_type: provider === 'baota' ? siteType : null,
-        healthcheck_path:
-          (provider === 'baota' || deployMode === 'script') && healthcheckPath.trim()
-            ? healthcheckPath.trim()
-            : null,
+        // 留空 = 未配置：显式空串才会把库里的值清成 NULL（服务端 PATCH：缺省=不变、""=清空）。
+        // 原来只有 baota/script 才提交真实值，release/inplace 一律置 null，路径永远存不进去（A1/A2）。
+        healthcheck_path: healthcheckPath.trim(),
         deploy_mode: deployMode,
-        target_dir: deployMode === 'inplace' ? targetDir.trim() : null,
+        // script 模式的工作目录同样是 target_dir（后端 script 分支会回落到 root），不能丢。
+        target_dir: deployMode === 'release' ? null : targetDir.trim(),
         keep_paths: deployMode === 'inplace' ? keepPaths.trim() || null : null,
         rollback_script: deployMode === 'script' ? rollbackScript : null,
-        restart_cmd: restartCmd.trim() || null,
-        healthcheck_port: parsedPort,
-        init_script: initScript.trim() || null,
-        env_json: parsedEnv.json,
+        // 留空且原本配了端口 → 0 表示清除（后端 healthcheck_port：0 有语义，null 只是「不改」）。
+        healthcheck_port: parsedPort ?? (editing && app?.healthcheck_port != null ? 0 : null),
       }
+      // 敏感字段走 diff 提交：编辑态只提交用户真正改过的字段。
+      // 收敛后（A8）受限角色的 env_json/init_script/restart_cmd 恒为 null，全量提交会把库里的值清空。
+      if (!editing || envDirty.current) payload.env_json = parsedEnv.json ?? ''
+      if (!editing || initScriptDirty.current) payload.init_script = initScript.trim()
+      if (!editing || restartCmdDirty.current) payload.restart_cmd = restartCmd.trim()
       if (editing && app) {
         await api.updateApp(app.id, payload)
         toast(t('s.0236', { '0': name.trim() }), 'success')
@@ -260,7 +414,7 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
           <Button variant="secondary" onClick={onClose} disabled={saving}>
             {t('s.0024')}
           </Button>
-          <Button type="submit" form="app-form" loading={saving}>
+          <Button type="submit" form="app-form" loading={saving} disabled={detailLoading}>
             {editing ? t('s.0128') : t('s.0242')}
           </Button>
         </>
@@ -395,18 +549,6 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
                     <option value="php">{t('apps.siteTypePhp')}</option>
                   </select>
                 </div>
-                <div>
-                  <label htmlFor="app-healthcheck" className={labelClass}>
-                    {t('apps.healthcheckPath')}
-                  </label>
-                  <input
-                    id="app-healthcheck"
-                    value={healthcheckPath}
-                    onChange={(event) => setHealthcheckPath(event.target.value)}
-                    placeholder="/healthz"
-                    className={inputClass + ' mt-1.5 font-mono text-xs'}
-                  />
-                </div>
               </div>
               <p className="text-xs leading-relaxed text-amber-900/90 dark:text-amber-200/90">
                 {t('apps.baotaDeployHint')}
@@ -510,31 +652,38 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
               <input
                 id="app-restart-cmd"
                 value={restartCmd}
-                onChange={(event) => setRestartCmd(event.target.value)}
+                onChange={(event) => {
+                  restartCmdDirty.current = true
+                  setRestartCmd(event.target.value)
+                }}
                 placeholder="systemctl restart nengtan-hub"
                 className={inputClass + ' mt-1.5 font-mono text-xs'}
               />
               <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                {t('apps.restartCmdHint')}
+                {redacted ? t('apps.envKeysOnly') : t('apps.restartCmdHint')}
               </p>
             </div>
-            {deployMode === 'script' ? (
-              <div>
-                <label htmlFor="app-script-healthcheck" className={labelClass}>
-                  {t('apps.healthcheckPath')}
-                </label>
-                <input
-                  id="app-script-healthcheck"
-                  value={healthcheckPath}
-                  onChange={(event) => setHealthcheckPath(event.target.value)}
-                  placeholder="/healthz"
-                  className={inputClass + ' mt-1.5 font-mono text-xs'}
-                />
+            {/* 健康检查路径与端口对 release / inplace / script 一视同仁（后端两条通道共用，A1） */}
+            <div>
+              <label htmlFor="app-healthcheck" className={labelClass}>
+                {t('apps.healthcheckPath')}
+              </label>
+              <input
+                id="app-healthcheck"
+                value={healthcheckPath}
+                onChange={(event) => setHealthcheckPath(event.target.value)}
+                placeholder="/healthz"
+                className={inputClass + ' mt-1.5 font-mono text-xs'}
+              />
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                {t('apps.healthcheckPathHint')}
+              </p>
+              {deployMode === 'script' ? (
                 <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
                   {t('apps.scriptHealthcheckHint')}
                 </p>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
             <div>
               <label htmlFor="app-healthcheck-port" className={labelClass}>
                 {t('apps.healthcheckPort')}
@@ -576,14 +725,17 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
                 <textarea
                   id="app-init-script"
                   value={initScript}
-                  onChange={(event) => setInitScript(event.target.value)}
+                  onChange={(event) => {
+                    initScriptDirty.current = true
+                    setInitScript(event.target.value)
+                  }}
                   rows={4}
                   spellCheck={false}
                   placeholder={'#!/bin/bash\nset -e\ncp .env.example .env'}
                   className={inputClass + ' mt-1.5 resize-y font-mono text-xs'}
                 />
                 <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                  {t('apps.initScriptHint')}
+                  {redacted ? t('apps.envKeysOnly') : t('apps.initScriptHint')}
                 </p>
               </div>
               {deployMode === 'script' ? (
@@ -609,17 +761,32 @@ export function AppDialog({ open, app, onClose, onSaved, preset }: AppDialogProp
                 <label htmlFor="app-env" className={labelClass}>
                   {t('apps.envVars')}
                 </label>
-                <textarea
-                  id="app-env"
-                  value={envText}
-                  onChange={(event) => setEnvText(event.target.value)}
-                  rows={4}
-                  spellCheck={false}
-                  placeholder={'DB_HOST=127.0.0.1\nDB_PORT=3306'}
-                  className={inputClass + ' mt-1.5 resize-y font-mono text-xs'}
-                />
+                {redacted ? (
+                  // 受限角色读不到环境变量的值（后端收敛为 null + env_keys），只展示键名，
+                  // 且这些字段只要没被改动就不会被提交，保存不会覆盖原有值。
+                  <div
+                    id="app-env"
+                    className="mt-1.5 whitespace-pre-wrap break-all rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs leading-relaxed text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                  >
+                    {envKeys.length > 0 ? envKeys.join('\n') : '—'}
+                    {envKeys.length > 0 && envKeysTruncated ? '\n…' : ''}
+                  </div>
+                ) : (
+                  <textarea
+                    id="app-env"
+                    value={envText}
+                    onChange={(event) => {
+                      envDirty.current = true
+                      setEnvText(event.target.value)
+                    }}
+                    rows={4}
+                    spellCheck={false}
+                    placeholder={'DB_HOST=127.0.0.1\nDB_PORT=3306'}
+                    className={inputClass + ' mt-1.5 resize-y font-mono text-xs'}
+                  />
+                )}
                 <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                  {t('apps.envHint')}
+                  {redacted ? t('apps.envKeysOnly') : t('apps.envHint')}
                 </p>
               </div>
             </div>

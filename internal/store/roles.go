@@ -144,7 +144,7 @@ func (s *Store) CreateRole(ctx context.Context, r *Role) error {
 			r.Key, r.Name, r.Description, string(permsJSON), r.ScopeMode, r.CreatedAt, r.UpdatedAt)
 		if err != nil {
 			if isUniqueViolation(err) {
-				return fmt.Errorf("创建角色 %s: %w", r.Name, ErrConflict)
+				return fmt.Errorf("角色 %s 已存在: %w", r.Name, ErrConflict)
 			}
 			return fmt.Errorf("创建角色 %s: %w", r.Name, err)
 		}
@@ -188,7 +188,7 @@ func (s *Store) UpdateRole(ctx context.Context, key string, upd RoleUpdate, nowM
 			args = append(args, key)
 			if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 				if isUniqueViolation(err) {
-					return fmt.Errorf("更新角色 %s: %w", key, ErrConflict)
+					return fmt.Errorf("角色 %s 的新名称已被占用: %w", key, ErrConflict)
 				}
 				return fmt.Errorf("更新角色 %s: %w", key, err)
 			}

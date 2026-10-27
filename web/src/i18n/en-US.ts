@@ -349,6 +349,15 @@ const enUS: Record<string, string> = {
   'network.fallback.reason': 'Fallback reason: {reason}',
   'network.fallback.hint': 'Fix the listen port or check the LEADSTACK_LISTEN environment variable, then restart the control plane.',
   'network.fallback.goSettings': 'Fix in settings',
+  // Ground truth for the dashboard "recent releases" block (an earlier comment had it backwards):
+  // GET /releases only requires deploy.read (internal/api/router.go:96); scope filtering happens in the
+  // store query — internal/api/handlers_deploy.go:865-916 puts allowedServerIDList into
+  // store.ReleaseFilter.ServerIDs and internal/store/deploy.go:578-586 filters with EXISTS ... release_runs,
+  // with LIMIT applied after filtering. So scoped roles do see their own releases.
+  // Three separate cases: no permission != empty within scope != request failed (§53.3).
+  'dashboard.recentReleasesFailed': 'Failed to load releases',
+  'dashboard.recentReleasesNoPermission': 'Your role cannot view releases (deploy.read is missing), so recent releases are hidden.',
+  'dashboard.recentReleasesScopedEmpty': 'No releases in the groups and servers you are authorized for.',
 
   'network.error.publicUrlCannotClear': 'To clear the public URL, use Reset to defaults',
   'network.title': 'Network & ports',
@@ -377,6 +386,9 @@ const enUS: Record<string, string> = {
   'network.resetDescription': 'Clear the console network settings and fall back to environment variables or built-in defaults.',
   'network.resetImpact': 'The listen address may change afterwards and a restart is usually still required; existing server ports are unaffected.',
   'network.loadFailed': 'Failed to load network settings',
+  // Gating lives in the card itself (see canManageNetwork in NetworkSettingsCard.tsx).
+  'network.needsGlobalScopeTitle': 'Network settings require global scope',
+  'network.needsGlobalScope': 'The listen address, public URL and default SSH port are control-plane global settings requiring the system.manage permission and global scope. Your role is limited to groups/servers, so no network configuration is read or submitted here — the page sends no /system/network request, and saving or resetting would be rejected too.',
   'network.error.listenRequired': 'Enter a listen address (host:port)',
   'network.error.listenFormat': 'Use host:port, e.g. 0.0.0.0:8080',
   'network.error.listenPort': 'Port must be an integer between 1 and 65535',
@@ -1898,5 +1910,59 @@ const enUS: Record<string, string> = {
   'users.title': 'Users',
   'users.username': 'Username',
   'users.you': 'you',
+
+  /* ------------------------------------------------------------------
+   * Shared frontend contract keys (task T-08; single writer of this file).
+   * Consumed by T-09–T-14 pages/components. Keep the same key set and order
+   * as zh-CN.ts and never hardcode UI copy in .tsx files.
+   * ------------------------------------------------------------------ */
+
+  // T-11: release detail "Cancel" → "Abort release" + confirmation (s.0024 stays "Cancel")
+  // Title/body follow SPEC R16 as the single source of truth.
+  'release.abort': 'Abort release',
+  'release.abortConfirmTitle': 'Abort the in-progress release',
+  'release.abortConfirmBody': 'The {count} servers that already finished are not rolled back; pending and running batches will be canceled and keep running the deployed version.',
+  'release.abortDone': 'Aborted {count} servers',
+
+  // T-09: app dialog health-check path + env vars for restricted roles
+  'apps.healthcheckPathHint': 'Leave empty to skip the check; when set, the control plane requests this path after deploying and rolls back on failure',
+  'apps.envKeysOnly': 'Key names only (your role cannot read the values; saving will not overwrite them)',
+
+  // T-12: backups restore loop (three restart commands + polling result)
+  'backups.restorePending': 'Restore staged; it is applied automatically after the control plane restarts',
+  'backups.restoreDone': 'Restore applied (archive {sha})',
+  // Backups and restore need global scope (backend RequireGlobalScope): group/server-scoped roles
+  // see only an explanation — neither the backup list nor the upload area is rendered or requested.
+  'backups.needsGlobalScopeTitle': 'Backups and restore require global scope',
+  'backups.needsGlobalScope':
+    'Backups, backup settings and whole-database restore all require global scope: this role is limited to groups or servers, so the backup list is unavailable and no backup or restore request is sent. Ask an administrator with global scope to work with backups in the console.',
+  'backups.restartCmdLinux': 'sudo systemctl restart leadstack',
+  'backups.restartCmdDarwin': 'sudo launchctl kickstart -k system/com.leadstack.control',
+  'backups.restartCmdDocker': 'docker restart leadstack',
+  'backups.restartCmdHint': 'Pick the command that matches how you installed the control plane, then restart it',
+  'backups.restartLabelLinux': 'Linux (systemd)',
+  'backups.restartLabelDarwin': 'macOS (launchd)',
+  'backups.restartLabelDocker': 'Docker',
+  'backups.copyCmd': 'Copy command',
+
+  // T-14: server detail "Upgrade agent" entry and dialog
+  'server.agentUpgrade': 'Upgrade agent',
+  'server.agentUpgradeTitle': 'Upgrade agent',
+  'server.agentUpgradeHint': 'The control plane sends an upgrade command: the agent downloads the new binary, verifies sha256 and restarts itself. Version / URL / sha256 are prefilled from the agent assets on the version page when available.',
+  'server.agentUpgradeSubmit': 'Send upgrade command',
+  'server.agentUpgradeNoPerm': 'Your role lacks the agent.upgrade permission, so agents cannot be upgraded',
+  'server.agentUpgradeDone': 'Upgrade to {version} sent to the agent',
+  'server.agentUpgradeManualHint': 'Your role cannot read update info from the control plane (requires system.manage on the global scope), so prefilling was skipped — fill in the version, URL and sha256 manually.',
+
+  // T-10: authorized-group picker (group_ids) with live counters
+  'picker.selectedCount': '{n} selected',
+  'picker.groupTotal': '{m} servers in this group',
+  'picker.authorizedGroup': 'Authorized group',
+  'picker.authorizedGroupHint': 'Filters by role-authorized groups (group_ids); when a server also reports a legacy group of the same name, the authorized group wins',
+
+  // T-13: error toast close/copy buttons and request id
+  'toast.copy': 'Copy',
+  'toast.close': 'Close',
+  'errors.requestId': 'Request ID {id}',
 }
 export default enUS

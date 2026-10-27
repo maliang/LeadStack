@@ -575,3 +575,169 @@ func TestJobFramesIgnoredWithoutRouter(t *testing.T) {
 	}
 	t.Fatal("未装配下发器时连接应保持可用")
 }
+
+// checksSummaryPayload 是 GET /checks/summary 的响应体。
+type checksSummaryPayload struct {
+	Total   int            `json:"total"`
+	Up      int            `json:"up"`
+	Down    int            `json:"down"`
+	Unknown int            `json:"unknown"`
+	Checks  []checkPayload `json:"checks"`
+}
+
+// getChecksSummary 查询检测项概览。
+func (e *testEnv) getChecksSummary(jwt string) checksSummaryPayload {
+	e.t.Helper()
+	status, raw := e.request(http.MethodGet, "/api/v1/checks/summary", jwt, nil)
+	if status != http.StatusOK {
+		e.t.Fatalf("查询 checks summary 失败: %d（body=%s）", status, raw)
+	}
+	var out struct {
+		Data checksSummaryPayload `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		e.t.Fatalf("解析 checks summary 失败: %v（body=%s）", err, raw)
+	}
+	return out.Data
+}
+
+// checksListIDs 返回 GET /checks 的 ID 列表。
+func (e *testEnv) checksListIDs(jwt string) []string {
+	e.t.Helper()
+	status, raw := e.request(http.MethodGet, "/api/v1/checks", jwt, nil)
+	if status != http.StatusOK {
+		e.t.Fatalf("查询检测项列表失败: %d（body=%s）", status, raw)
+	}
+	var out struct {
+		Data []checkPayload `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		e.t.Fatalf("解析检测项列表失败: %v（body=%s）", err, raw)
+	}
+	ids := make([]string, 0, len(out.Data))
+	for _, c := range out.Data {
+		ids = append(ids, c.ID)
+	}
+	return ids
+}
+
+// TestChecksSummaryScopedToVisibleChecks 覆盖 A12/A14：summary 必须先按资源范围过滤再计数，
+// 口径与 GET /checks 完全一致；全局角色返回与改动前逐字段一致。
+func TestChecksSummaryScopedToVisibleChecks(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	admin := env.login()
+	now := store.NowMS()
+
+	srvIn := env.createServerVia(admin, map[string]any{"name": "sum-in", "host": "10.20.0.1"})
+	srvOut := env.createServerVia(admin, map[string]any{"name": "sum-out", "host": "10.20.0.2"})
+	groupID := env.createGroupVia(admin, "汇总范围组")
+	env.setGroupMembers(admin, groupID, []string{srvIn.ID})
+
+	roleKey := env.createRoleVia(admin, "汇总只读", []string{"server.read", "check.read"},
+		map[string]any{"mode": "groups", "group_ids": []string{groupID}, "server_ids": []string{}})
+	env.createUserVia(admin, "sumviewer", "SumPass-123", roleKey)
+	scoped := env.loginAs(t, "sumviewer", "SumPass-123")
+
+	inOnly := env.createCheckVia(admin, map[string]any{
+		"name": "范围内", "kind": "tcp", "target": "127.0.0.1:2201", "interval_s": 30,
+		"server_ids": []string{srvIn.ID},
+	})
+	both := env.createCheckVia(admin, map[string]any{
+		"name": "跨范围", "kind": "tcp", "target": "127.0.0.1:2202", "interval_s": 30,
+		"params": map[string]any{"fail_threshold": 2}, "server_ids": []string{srvIn.ID, srvOut.ID},
+	})
+	outOnly := env.createCheckVia(admin, map[string]any{
+		"name": "范围外", "kind": "tcp", "target": "127.0.0.1:2203", "interval_s": 30,
+		"server_ids": []string{srvOut.ID},
+	})
+	noTarget := env.createCheckVia(admin, map[string]any{
+		"name": "无目标", "kind": "ping", "target": "127.0.0.1", "interval_s": 30,
+		"server_ids": []string{},
+	})
+
+	// 状态：inOnly → up；both（范围内那台）→ down（连续失败达阈值 2）；其余 unknown。
+	if err := env.st.UpsertCheckState(ctx, inOnly.ID, srvIn.ID, true, now); err != nil {
+		t.Fatalf("写入状态失败: %v", err)
+	}
+	for i, ts := range []int64{now - 2000, now - 1000} {
+		if err := env.st.UpsertCheckState(ctx, both.ID, srvIn.ID, false, ts); err != nil {
+			t.Fatalf("写入状态失败(%d): %v", i, err)
+		}
+	}
+
+	// 全局角色：全量，与改动前一致（A14）。
+	adminSummary := env.getChecksSummary(admin)
+	adminListIDs := env.checksListIDs(admin)
+	if adminSummary.Total != 4 || len(adminSummary.Checks) != 4 || len(adminListIDs) != 4 {
+		t.Fatalf("全局角色应看到全部 4 个检测项：summary=%d checks=%d list=%d",
+			adminSummary.Total, len(adminSummary.Checks), len(adminListIDs))
+	}
+	if adminSummary.Up != 1 || adminSummary.Down != 1 || adminSummary.Unknown != 2 {
+		t.Fatalf("全局角色计数不正确: %+v", adminSummary)
+	}
+	if adminSummary.Up+adminSummary.Down+adminSummary.Unknown != adminSummary.Total {
+		t.Fatalf("up/down/unknown 之和必须等于 total: %+v", adminSummary)
+	}
+	if adminSummary.Total != len(adminListIDs) {
+		t.Fatalf("total 必须与列表条数一致：total=%d list=%d", adminSummary.Total, len(adminListIDs))
+	}
+
+	// 受限角色：checks[] 只含范围内目标，计数与列表同口径（A12）。
+	scopedSummary := env.getChecksSummary(scoped)
+	scopedListIDs := env.checksListIDs(scoped)
+	if scopedSummary.Total != 2 || len(scopedSummary.Checks) != 2 {
+		t.Fatalf("受限角色应只看到 2 个检测项，实际 %+v", scopedSummary)
+	}
+	if scopedSummary.Total != len(scopedListIDs) {
+		t.Fatalf("受限角色 total 必须与列表条数一致：total=%d list=%d",
+			scopedSummary.Total, len(scopedListIDs))
+	}
+	scopedIDs := map[string]bool{}
+	for _, c := range scopedSummary.Checks {
+		scopedIDs[c.ID] = true
+		if !containsString(c.ServerIDs, srvIn.ID) {
+			t.Fatalf("受限角色的 checks[] 出现范围外检测项: %+v", c.ServerIDs)
+		}
+	}
+	if !scopedIDs[inOnly.ID] || !scopedIDs[both.ID] {
+		t.Fatalf("范围内检测项缺失: %+v", scopedIDs)
+	}
+	if scopedIDs[outOnly.ID] || scopedIDs[noTarget.ID] {
+		t.Fatalf("范围外/无目标检测项不应出现: %+v", scopedIDs)
+	}
+	if scopedSummary.Up != 1 || scopedSummary.Down != 1 || scopedSummary.Unknown != 0 {
+		t.Fatalf("受限角色计数不正确: %+v", scopedSummary)
+	}
+	if scopedSummary.Up+scopedSummary.Down+scopedSummary.Unknown != scopedSummary.Total {
+		t.Fatalf("受限角色 up/down/unknown 之和必须等于 total: %+v", scopedSummary)
+	}
+	if len(scopedListIDs) != len(scopedSummary.Checks) {
+		t.Fatalf("summary 与列表条数不一致：summary=%d list=%d",
+			len(scopedSummary.Checks), len(scopedListIDs))
+	}
+
+	// 范围内一台服务器都没有 → 200 全 0，checks 必须是 []（不是 null）。
+	emptyGroup := env.createGroupVia(admin, "空范围组")
+	emptyRole := env.createRoleVia(admin, "空范围只读", []string{"server.read", "check.read"},
+		map[string]any{"mode": "groups", "group_ids": []string{emptyGroup}, "server_ids": []string{}})
+	env.createUserVia(admin, "emptyviewer", "EmptyPass-123", emptyRole)
+	emptyJWT := env.loginAs(t, "emptyviewer", "EmptyPass-123")
+
+	status, raw := env.request(http.MethodGet, "/api/v1/checks/summary", emptyJWT, nil)
+	if status != http.StatusOK {
+		t.Fatalf("空范围查询 summary 期望 200，实际 %d（body=%s）", status, raw)
+	}
+	if !strings.Contains(string(raw), `"checks":[]`) {
+		t.Fatalf("空范围 checks 必须序列化为 []：%s", raw)
+	}
+	var zero struct {
+		Data checksSummaryPayload `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &zero); err != nil {
+		t.Fatalf("解析空范围 summary 失败: %v（body=%s）", err, raw)
+	}
+	if zero.Data.Total != 0 || zero.Data.Up != 0 || zero.Data.Down != 0 || zero.Data.Unknown != 0 {
+		t.Fatalf("空范围统计应全 0，实际 %+v", zero.Data)
+	}
+}
