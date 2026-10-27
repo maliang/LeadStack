@@ -796,6 +796,7 @@ sudo systemctl start leadstack
 | `LEADSTACK_LOGIN_IP_LIMIT` | `20` | 同一 IP 在窗口内的登录请求上限（0=关闭） |
 | `LEADSTACK_LOGIN_IP_WINDOW` | `1m` | IP 限流窗口 |
 | `LEADSTACK_TRUSTED_PROXIES` | 空（不信任任何代理头） | 可信反向代理 CIDR/IP 列表，逗号分隔；配置后才解析 `X-Forwarded-For` |
+| `LEADSTACK_BCRYPT_COST` | `12` | 新密码的 bcrypt 成本（4–31）。**仅供测试与极低算力环境**：调低会削弱密码抗暴力破解能力 |
 
 > ⚠️ `master.key` 丢失 → 已存凭证无法解密；`backup.pass` 丢失 → 备份永久无法解密。两者都要与数据目录一并备份，且**分开保管**。
 

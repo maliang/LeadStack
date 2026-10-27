@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -28,6 +29,13 @@ import (
 	"github.com/maliang/leadstack/internal/store"
 	"github.com/maliang/leadstack/pkg/protocol"
 )
+
+// TestMain 把 bcrypt 成本降到 4：默认 cost=12 在 -race 下每次登录要 1-3 秒，
+// 而 api 包有上百次登录，整套会拖到 10 分钟超时，让竞态闸门变成随机失败。
+func TestMain(m *testing.M) {
+	_ = os.Setenv(auth.EnvBcryptCost, "4")
+	os.Exit(m.Run())
+}
 
 // testAdminPassword 是测试用的管理员密码。
 const testAdminPassword = "TestPassword-123"

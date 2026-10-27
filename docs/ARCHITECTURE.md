@@ -2268,3 +2268,13 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 - `install_service` 写环境文件前同样用 `-w "$ENV_DIR"` 判断，同样会误判「目录不可写，跳过凭证文件」，一并改成 `writable_dir()`。
 
 验收对应 `verify_install_control.sh` 第 10 节（8 项：6 个阶段标题、大小、校验结论、安装结论、总耗时、非 tty 无进度条残留、每阶段有结论行、dry-run 阶段序列）与 `verify_bootstrap.sh` 第 7 节（4 项：agent 脚本 dry-run 的 4 阶段与结论行）。
+- 干跑不撒谎：`--dry-run` 的第 4/5 阶段结论是「dry-run：只打印…动作」，不再沿用「✓ 已安装 / ✓ 已注册」。干跑的意义就是「看看它要做什么」，说要改系统却什么都没改，比没有输出更误导。`verify_install_control.sh` 有一条断言专门锁住这点（dry-run 输出不得出现「✓ 已安装/✓ 已注册」）。
+
+### 64.6 CI 的 `go test -race` 闸门为什么曾经随机红
+
+现象：`vit / build / test` job 的 `go test -race（闸门：internal/api 与 internal/store）` 步骤在不同提交上偶发失败，失败提交与上个成功提交之间**没有任何 Go 代码差异**。
+
+根因：`internal/auth` 用 bcrypt cost=12 做密码哈希，而 api 包的测试里每个用例都要 `newTestEnv` + `login()`，整套下来有上百次 bcrypt 校验。竞态检测器会把 `x/crypto/blowfish` 的纯计算放大约 50–100 倍，实测单次登录从 ~200ms 涨到 3–4 秒；于是这个包在 2 核 runner 上会撞 `go test` 的 10 分钟包超时，表现为整步失败——和代码回归无关。
+
+修法（`internal/auth/password.go`）：成本改为可覆盖的 `LEADSTACK_BCRYPT_COST`（校验 4–31，非法值回落 12，默认仍是 **12**），api 包的 `TestMain` 把它设为 4。生产默认值不变；测试里 `make test-race` 从 ~9 分钟（且经常超时）降到 **77 秒**。`auth` 包有两条测试锁定语义（合法值生效、越界/非数字回落默认；哈希中嵌入的成本与配置一致）。
+

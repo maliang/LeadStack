@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/maliang/leadstack/internal/store"
 )
 
@@ -229,5 +231,49 @@ func TestLoadOrCreateSecret(t *testing.T) {
 	}
 	if !bytes.Equal(first, second) {
 		t.Fatal("密钥应持久化并在重启后保持不变")
+	}
+}
+
+// TestBcryptCostOverride 锁定 LEADSTACK_BCRYPT_COST 的语义：
+// 合法值生效（测试用它把 -race 下的 api 包从数分钟压到秒级），非法值一律回落默认 12。
+func TestBcryptCostOverride(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		want int
+	}{
+		{name: "未设置用默认", env: "", want: 12},
+		{name: "合法低值", env: "4", want: 4},
+		{name: "带空白", env: " 6 ", want: 6},
+		{name: "超上限回落", env: "31+", want: 12},
+		{name: "低于下限回落", env: "3", want: 12},
+		{name: "非数字回落", env: "fast", want: 12},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(EnvBcryptCost, tc.env)
+			if got := activeBcryptCost(); got != tc.want {
+				t.Fatalf("activeBcryptCost() = %d，期望 %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHashPasswordUsesConfiguredCost 验证哈希里嵌入的成本与配置一致（登录校验靠它）。
+func TestHashPasswordUsesConfiguredCost(t *testing.T) {
+	t.Setenv(EnvBcryptCost, "4")
+	hash, err := HashPassword("TestPassword-123")
+	if err != nil {
+		t.Fatalf("生成哈希失败: %v", err)
+	}
+	cost, err := bcrypt.Cost([]byte(hash))
+	if err != nil {
+		t.Fatalf("解析成本失败: %v", err)
+	}
+	if cost != 4 {
+		t.Fatalf("哈希成本 = %d，期望 4", cost)
+	}
+	if !VerifyPassword(hash, "TestPassword-123") {
+		t.Fatal("低成本哈希应仍能校验通过")
 	}
 }

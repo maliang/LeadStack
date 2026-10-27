@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
@@ -13,6 +15,26 @@ import (
 
 // bcryptCost 与 x/crypto/bcrypt 的取值区间一致；12 是安全性/耗时的常用折中。
 const bcryptCost = 12
+
+// EnvBcryptCost 可覆盖新密码的 bcrypt 成本（4–31），仅供测试与极低算力环境使用。
+//
+// 默认 12：单次校验约 200–300ms，是安全性与登录耗时的折中。
+// 测试里设为 4 可把整个 api 包的 -race 运行从数分钟压到秒级——否则 100 多次登录
+// 在竞态检测器下会拖到超时，让 go test -race 闸门变成"随机失败"。
+const EnvBcryptCost = "LEADSTACK_BCRYPT_COST"
+
+// activeBcryptCost 返回本次哈希使用的成本：环境变量合法则用之，否则回落到默认值。
+func activeBcryptCost() int {
+	raw := strings.TrimSpace(os.Getenv(EnvBcryptCost))
+	if raw == "" {
+		return bcryptCost
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < bcrypt.MinCost || n > bcrypt.MaxCost {
+		return bcryptCost
+	}
+	return n
+}
 
 // MaxPasswordBytes 是 bcrypt 能处理的密码上限，超出会直接报错。
 const MaxPasswordBytes = 72
@@ -33,7 +55,7 @@ func HashPassword(password string) (string, error) {
 	if len(password) > MaxPasswordBytes {
 		return "", fmt.Errorf("密码哈希: 密码长度 %d 超过上限 %d 字节", len(password), MaxPasswordBytes)
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), activeBcryptCost())
 	if err != nil {
 		return "", fmt.Errorf("生成密码哈希: %w", err)
 	}
