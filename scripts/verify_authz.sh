@@ -489,9 +489,14 @@ AD_DUAL_LAST="$(printf '%s' "$AD_DUAL" | jq -r '.data.last_result.server_id // e
 # 与「创建顺序 S1,S2」无关（按创建顺序比大约 50% 概率随机红）。
 AD_DUAL_SIDS="$(printf '%s' "$AD_DUAL" | jq -r '.data.server_ids | sort | join(",")')"
 AD_DUAL_SIDS_EXPECT="$(printf '%s\n%s\n' "$S1" "$S2" | LC_ALL=C sort | paste -sd, -)"
-[ "$AD_DUAL_AVAIL" = "75" ] && [ "$AD_DUAL_RESULTS" = "4" ] \
-  && pass "管理员统计仍是全局口径（availability_24h=75、results_24h=4）" \
-  || fail "管理员统计被范围影响：availability_24h=${AD_DUAL_AVAIL}、results_24h=${AD_DUAL_RESULTS}（应为 75/4）"
+# availability 与 results_24h 分成两条断言：两者是不同的口径（可用率 vs 结果条数），
+# 挤在一个 && 里失败时只说「统计被范围影响」，分不清是哪个被裁了。
+[ "$AD_DUAL_AVAIL" = "75" ] \
+  && pass "管理员 availability_24h 仍是全局口径（75）" \
+  || fail "管理员 availability_24h 被范围影响：${AD_DUAL_AVAIL}（应为 75）"
+[ "$AD_DUAL_RESULTS" = "4" ] \
+  && pass "管理员 results_24h 仍是全局口径（4）" \
+  || fail "管理员 results_24h 被范围影响：${AD_DUAL_RESULTS}（应为 4）"
 # last_result 不钉死 S2：两个目标在同一次 /run 里并发探测，谁最后写入由调度决定（S1/S2 都可能）。
 # 「越权点可观测」的正向证据改由确定成立的统计承担——管理员 results_24h=4 远大于受限用户的 2。
 case "$AD_DUAL_LAST" in
@@ -509,6 +514,82 @@ SC_DET_AVAIL="$(printf '%s' "$SC_DUAL_DETAIL" | jq -r '.data.availability_24h')"
 [ "$SC_DET_IDS" = "$S1" ] && [ "$SC_DET_LAST" = "$S1" ] && [ "$SC_DET_AVAIL" = "50" ] \
   && pass "详情接口与列表同口径裁剪（server_ids/last_result/availability_24h 一致）" \
   || fail "详情与列表口径不一致：server_ids=${SC_DET_IDS}、last_result=${SC_DET_LAST}、availability_24h=${SC_DET_AVAIL}"
+
+# ---- GET /checks/{id}/results 的范围断言（此前 e2e 覆盖为零）-------------------
+# 该端点是「检测项可见 ≠ 结果可见」的典型越权面：检测项因为「一台可达就可见」对组范围
+# 用户可见，但它的结果分属不同服务器。旧实现只过 checkVisible 就把整条时间线返回，
+# 组外服务器的 server_id/server_name/message 全泄。把范围过滤改成恒真（等价 OR 1=1）
+# 时下面几条必须红，否则这个端点的 e2e 等于没有。
+#
+# 夹具沿用上面的双目标检测项：S1 在组内（结果 2 条：受限用户那次失败 + 管理员那次成功），
+# S2 在组外（结果 2 条成功），全局 4 条 / 75%。
+AD_RESULTS="$(api GET "/api/v1/checks/${DUAL_ID}/results?limit=1000" "" "$ADMIN")"
+AD_RESULTS_N="$(printf '%s' "$AD_RESULTS" | jq -r '.data | length' 2>/dev/null)"
+AD_RESULTS_SIDS_EXPECT="$(printf '%s\n%s\n' "$S1" "$S2" | LC_ALL=C sort | paste -sd, -)"
+AD_RESULTS_SIDS="$(printf '%s' "$AD_RESULTS" | jq -r '[.data[].server_id] | unique | sort | join(",")' 2>/dev/null)"
+if [ "$AD_RESULTS_N" = "4" ] && [ "$AD_RESULTS_SIDS" = "$AD_RESULTS_SIDS_EXPECT" ]; then
+  pass "管理员 /results 拿到两台目标共 4 条结果（server_ids=${AD_RESULTS_SIDS}）"
+else
+  fail "管理员 /results 口径不对：${AD_RESULTS_N} 条、server_ids=${AD_RESULTS_SIDS:-空}（应为 4 条、${AD_RESULTS_SIDS_EXPECT}）"
+fi
+
+SC_RESULTS="$(api GET "/api/v1/checks/${DUAL_ID}/results?limit=1000" "" "$SCOPED")"
+SC_RESULTS_N="$(printf '%s' "$SC_RESULTS" | jq -r '.data | length' 2>/dev/null)"
+SC_RESULTS_SIDS="$(printf '%s' "$SC_RESULTS" | jq -r '[.data[].server_id] | unique | join(",")' 2>/dev/null)"
+if [ "$SC_RESULTS_N" = "2" ] && [ "$SC_RESULTS_SIDS" = "$S1" ]; then
+  pass "组范围用户 /results 只有组内服务器的行（2 条、server_id=${S1}）"
+else
+  fail "组范围用户 /results 混入组外服务器的行：${SC_RESULTS_N} 条、server_ids=${SC_RESULTS_SIDS:-空}（应为 2 条、仅 ${S1}）"
+fi
+# server_name 是二次泄露点：SQL 若只裁 server_id、名字仍从全量索引回填，行数对但名字照泄。
+# 期望名字从管理员视角取（夹具在第 4 节建的 prod-a / prod-b），不写死字面量——
+# 写死的话夹具一改名，下面的子串扫描就会静默失效（断言还在，但什么也没查）。
+S1_NAME="$(printf '%s' "$AD_RESULTS" | jq -r --arg s "$S1" \
+  '[.data[] | select(.server_id == $s) | .server_name] | map(select(length > 0)) | unique | .[0] // empty' 2>/dev/null)"
+S1_NAME="${S1_NAME:-prod-a}"
+S2_NAME="$(printf '%s' "$AD_RESULTS" | jq -r --arg s "$S2" \
+  '[.data[] | select(.server_id == $s) | .server_name] | map(select(length > 0)) | unique | .[0] // empty' 2>/dev/null)"
+S2_NAME="${S2_NAME:-prod-b}"
+SC_RESULTS_NAMES="$(printf '%s' "$SC_RESULTS" | jq -r '[.data[].server_name] | unique | join(",")' 2>/dev/null)"
+[ "$SC_RESULTS_NAMES" = "$S1_NAME" ] \
+  && pass "组范围用户 /results 的 server_name 只有组内那台（${S1_NAME}）" \
+  || fail "组范围用户 /results 的 server_name 不止组内那台：${SC_RESULTS_NAMES:-空}（应为 ${S1_NAME}）"
+
+# 逐字段核对「响应体里不出现组外服务器的身份」：用 bash 模式匹配而不是 grep -q，
+# 因为 set -o pipefail 下 grep -q 提前退出会让左侧 printf 吃 SIGPIPE(141)，
+# 管道整体被判失败，命中反而被读成「没命中」。
+S2_IDENT_LEAK=""
+case "$SC_RESULTS" in *"$S2"*) S2_IDENT_LEAK="server_id=${S2}" ;; esac
+case "$SC_RESULTS" in *"$S2_NAME"*) S2_IDENT_LEAK="${S2_IDENT_LEAK:+${S2_IDENT_LEAK}、}server_name=${S2_NAME}" ;; esac
+[ -z "$S2_IDENT_LEAK" ] \
+  && pass "组范围用户 /results 响应体不含组外服务器的 server_id 与 server_name（扫 ${S2} / ${S2_NAME}）" \
+  || fail "组范围用户 /results 响应体泄露组外服务器：${S2_IDENT_LEAK}"
+
+# message 是第三个泄露点：组外探测的失败原因/输出会带出目标机上跑的东西。
+# 这里不能对 S2 的消息文本做子串匹配——本次两台目标都是成功探测，message 都是
+# 「TCP 连接成功」，这串文本在 S1 的行里同样存在，子串断言会「稳定地报假红」。
+# 改成按行绑定：组范围用户拿到的 message 集合必须与「管理员视角下 S1 的 message 集合」
+# 完全一致。范围过滤被去掉时会多出组外的行，集合立刻不等。
+AD_S1_MSGS="$(printf '%s' "$AD_RESULTS" | jq -r --arg s "$S1" \
+  '[.data[] | select(.server_id == $s) | .message] | sort | join("|")' 2>/dev/null)"
+SC_MSGS="$(printf '%s' "$SC_RESULTS" | jq -r '[.data[].message] | sort | join("|")' 2>/dev/null)"
+SC_MSG_N="$(printf '%s' "$SC_RESULTS" | jq -r '[.data[] | select(.message != "")] | length' 2>/dev/null)"
+if [ -n "$AD_S1_MSGS" ] && [ "$SC_MSGS" = "$AD_S1_MSGS" ]; then
+  pass "组范围用户 /results 的 message 与组内服务器一致（非空消息 ${SC_MSG_N} 条，含组外痕迹即红）"
+else
+  fail "组范围用户 /results 的 message 集合偏离组内服务器：${SC_MSGS:-空}（应为 ${AD_S1_MSGS:-空}）"
+fi
+
+# ?server_id=<组外> 必须与「越界读」同口径 404/not_found（契约 §53.3）：
+# 返回 200 空数组会承认「这台存在但没结果」，返回 403 直接承认「这台存在」。
+OUT_SID_CODE="$(code GET "/api/v1/checks/${DUAL_ID}/results?server_id=${S2}" "" "$SCOPED")"
+OUT_SID_BODY="$(api GET "/api/v1/checks/${DUAL_ID}/results?server_id=${S2}" "" "$SCOPED")"
+OUT_SID_ERR="$(printf '%s' "$OUT_SID_BODY" | jq -r '.error.code // empty' 2>/dev/null)"
+if [ "$OUT_SID_CODE" = "404" ] && [ "$OUT_SID_ERR" = "not_found" ]; then
+  pass "组范围用户带 ?server_id=<组外> 查结果 → 404/not_found（非 200 空数组、非 403）"
+else
+  fail "组外 server_id 查结果应 404/not_found，实际 ${OUT_SID_CODE}/${OUT_SID_ERR:-空}（body=${OUT_SID_BODY}）"
+fi
 
 # ---------------------------------------------------------------- 11. 审计脱敏占位符
 step "11. 审计 detail 对 env_json 显式落 __masked（A15）"

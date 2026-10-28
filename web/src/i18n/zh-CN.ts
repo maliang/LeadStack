@@ -351,8 +351,9 @@ const zhCN: Record<string, string> = {
   'network.fallback.goSettings': '去设置页修正',
   // 仪表盘「最近发布」的事实口径（注释曾经写反过，这里按后端实现重写）：
   // GET /releases 只校验 deploy.read（internal/api/router.go:96），范围过滤在**后端 SQL 里**做——
-  // internal/api/handlers_deploy.go:865-916 把 allowedServerIDList 塞进 store.ReleaseFilter.ServerIDs，
-  // internal/store/deploy.go:578-586 用 EXISTS ... release_runs 过滤，LIMIT 作用在过滤之后，
+  // internal/api/handlers_deploy.go:874-882 把 allowedServerIDList 塞进 store.ReleaseFilter.ServerIDs，
+  // internal/store/deploy.go:583-591 用 EXISTS ... release_runs 过滤（EXISTS 子查询本身在 :587），
+  // LIMIT 作用在过滤之后，
   // 所以组范围角色能看到自己范围内的发布；只有「没有 deploy.read」时才真的没有数据。
   // 三句话必须分开：没有权限 ≠ 范围内没有记录 ≠ 请求失败（契约 §53.3）。
   'dashboard.recentReleasesFailed': '发布记录加载失败',

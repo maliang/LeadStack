@@ -351,9 +351,10 @@ const enUS: Record<string, string> = {
   'network.fallback.goSettings': 'Fix in settings',
   // Ground truth for the dashboard "recent releases" block (an earlier comment had it backwards):
   // GET /releases only requires deploy.read (internal/api/router.go:96); scope filtering happens in the
-  // store query — internal/api/handlers_deploy.go:865-916 puts allowedServerIDList into
-  // store.ReleaseFilter.ServerIDs and internal/store/deploy.go:578-586 filters with EXISTS ... release_runs,
-  // with LIMIT applied after filtering. So scoped roles do see their own releases.
+  // store query — internal/api/handlers_deploy.go:874-882 puts allowedServerIDList into
+  // store.ReleaseFilter.ServerIDs and internal/store/deploy.go:583-591 filters with EXISTS ... release_runs
+  // (the EXISTS subquery itself is at :587), with LIMIT applied after filtering. So scoped roles do see
+  // their own releases.
   // Three separate cases: no permission != empty within scope != request failed (§53.3).
   'dashboard.recentReleasesFailed': 'Failed to load releases',
   'dashboard.recentReleasesNoPermission': 'Your role cannot view releases (deploy.read is missing), so recent releases are hidden.',
