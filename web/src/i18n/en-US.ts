@@ -1284,7 +1284,6 @@ const enUS: Record<string, string> = {
   's.0642': '{0} hours',
   's.0643': '{0} days',
   's.0644': 'Failed to load; try again later',
-  'accent.green': 'Green',
   's.0645': 'Blue',
   's.0646': 'Indigo',
   's.0647': 'Cyan',

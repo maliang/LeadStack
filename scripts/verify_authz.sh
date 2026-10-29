@@ -710,6 +710,71 @@ HAS_UPD="$(sget "$UPD" '.data.has_update')"
 [ "$HAS_UPD" = "true" ] && pass "has_update=true（v9.9.9 > 当前版本）" \
   || fail "has_update 应为 true，实际 ${HAS_UPD}"
 
+# ---------------------------------------------------------------- 16. i18n 绝对断言
+step "16. i18n 绝对断言：六色键逐条存在、文案不重名、死键已清（t15）"
+# 为什么必须写成「绝对」断言：一致性口径（两语言键数相等 + 键集合相同）只能证明
+# 两份文件互相同步，不能证明任何一个键真的存在 —— 两种语言同时删掉同一个键时它
+# 依然全绿，appearance.accent.green 的裸键事故正是这样漏过去的。
+ZH_I18N="$ROOT/web/src/i18n/zh-CN.ts"
+EN_I18N="$ROOT/web/src/i18n/en-US.ts"
+ACCENT_VALUES="green blue indigo cyan emerald violet"
+
+i18n_has_key() { # <file> <key> → 0 = 键存在（空值也算存在）
+  awk -v pfx="  '$2':" '
+    index($0, pfx) == 1 { found = 1; exit }
+    END { exit(found ? 0 : 1) }' "$1"
+}
+i18n_value() { # <file> <key> → 打印该键文案（去首尾引号与行尾逗号）
+  awk -v pfx="  '$2':" -v q="'" '
+    index($0, pfx) == 1 {
+      v = substr($0, length(pfx) + 1)
+      sub(/,[[:space:]]*$/, "", v)
+      sub(/^[[:space:]]+/, "", v)
+      if (substr(v, 1, 1) == q) v = substr(v, 2)
+      n = length(v)
+      if (n > 0 && substr(v, n, 1) == q) v = substr(v, 1, n - 1)
+      print v
+      exit
+    }' "$1"
+}
+
+for I18N_PAIR in "zh-CN:zh-CN.ts" "en-US:en-US.ts"; do
+  I18N_LANG="${I18N_PAIR%%:*}"
+  I18N_FILE="$ROOT/web/src/i18n/${I18N_PAIR#*:}"
+  I18N_MISSING=""
+  for ACCENT_VALUE in $ACCENT_VALUES; do
+    i18n_has_key "$I18N_FILE" "appearance.accent.${ACCENT_VALUE}" \
+      || I18N_MISSING="${I18N_MISSING} appearance.accent.${ACCENT_VALUE}"
+  done
+  if [ -z "$I18N_MISSING" ]; then
+    pass "${I18N_LANG} 六条 appearance.accent.* 键逐条存在（green/blue/indigo/cyan/emerald/violet）"
+  else
+    fail "${I18N_LANG} 缺少主题色键：${I18N_MISSING# }（文件 web/src/i18n/${I18N_PAIR#*:}）"
+  fi
+done
+
+for I18N_PAIR in "zh-CN:zh-CN.ts" "en-US:en-US.ts"; do
+  I18N_LANG="${I18N_PAIR%%:*}"
+  I18N_FILE="$ROOT/web/src/i18n/${I18N_PAIR#*:}"
+  I18N_GREEN="$(i18n_value "$I18N_FILE" 'appearance.accent.green')"
+  I18N_EMERALD="$(i18n_value "$I18N_FILE" 'appearance.accent.emerald')"
+  if [ -n "$I18N_GREEN" ] && [ -n "$I18N_EMERALD" ] && [ "$I18N_GREEN" != "$I18N_EMERALD" ]; then
+    pass "${I18N_LANG} 主题色文案不重名：green=${I18N_GREEN}、emerald=${I18N_EMERALD}"
+  else
+    fail "${I18N_LANG} 主题色文案重名或为空：green='${I18N_GREEN}'、emerald='${I18N_EMERALD}'（文件 web/src/i18n/${I18N_PAIR#*:}）"
+  fi
+done
+
+for I18N_PAIR in "zh-CN:zh-CN.ts" "en-US:en-US.ts"; do
+  I18N_LANG="${I18N_PAIR%%:*}"
+  I18N_FILE="$ROOT/web/src/i18n/${I18N_PAIR#*:}"
+  if i18n_has_key "$I18N_FILE" 'accent.green'; then
+    fail "${I18N_LANG} 仍残留死键 'accent.green'='$(i18n_value "$I18N_FILE" 'accent.green')'（文件 web/src/i18n/${I18N_PAIR#*:}；已无代码引用，应删除）"
+  else
+    pass "${I18N_LANG} 已无 'accent.green' 死键（label 统一走 appearance.accent.*）"
+  fi
+done
+
 # ---------------------------------------------------------------- 汇总
 echo
 if [ "$FAIL" -eq 0 ]; then
