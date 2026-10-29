@@ -93,6 +93,10 @@ type API struct {
 	activeListen     string
 	updates          *updateChecker
 	upgrader         *upgrader
+	// upgradeRestart 是「写标记 → swap → watchdog → exec」阶段的注入点，仅单测使用。
+	// 生产路径恒为 nil（走 applyAndRestart）：真实执行会把测试进程自己换成新二进制，
+	// 用例需要把它截断在「备份完成之后、替换二进制之前」。
+	upgradeRestart func(job *upgradeJob, backupInfo *BackupInfo, newExe string, schemaChanged bool, execArgs []string)
 	listenOverride   string
 	fallbackReason   string
 	termTickets      sync.Map // ticket → *terminalTicket

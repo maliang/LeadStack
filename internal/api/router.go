@@ -229,6 +229,8 @@ func (a *API) Router() http.Handler {
 			r.With(permSystem, a.RequireGlobalScope).Get("/system/update", a.handleGetUpdate)
 			r.With(permSystem, a.RequireGlobalScope).Post("/system/update/check", a.handleCheckUpdate)
 			r.With(permSystem, a.RequireGlobalScope).Post("/system/update/apply", a.handleApplyUpdate)
+			// 上传自助升级：管理员直接上传解压后的控制端二进制，与 apply 共用同一条升级链路。
+			r.With(permSystem, a.RequireGlobalScope).Post("/system/update/upload", a.handleUploadUpdate)
 			r.With(permSystem, a.RequireGlobalScope).Get("/system/update/status", a.handleUpdateStatus)
 			r.With(permSystem, a.RequireGlobalScope).Get("/system/network", a.handleGetNetwork)
 			r.With(permSystem, a.RequireGlobalScope).Put("/system/network", a.handlePutNetwork)

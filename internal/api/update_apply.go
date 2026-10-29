@@ -142,28 +142,14 @@ func (a *API) runUpgrade(job *upgradeJob, asset UpdateAsset, schemaChanged bool,
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
-	fail := func(phase string, err error) {
-		a.upgrader.setPhase(job, phase)
-		a.upgrader.finish(job, err)
-		a.logger.Warn("升级中止", "phase", phase, "err", err, "job_id", job.JobID)
-		a.auditSystem("system.upgrade_start",
-			fmt.Sprintf(`{"from":%q,"to":%q,"job_id":%q,"aborted":true,"phase":%q,"error":%q}`,
-				job.FromVersion, job.TargetVersion, job.JobID, phase, err.Error()))
-	}
+	fail := func(phase string, err error) { a.failUpgrade(job, phase, err) }
 
 	// 1) 强制备份：失败即中止，绝不替换二进制（硬约束）。
-	a.upgrader.setPhase(job, "backup")
-	if a.backups == nil {
-		fail("backup", errors.New("备份模块未启用，无法在升级前备份"))
-		return
-	}
-	backupInfo, err := a.backups.Create(ctx, true)
+	backupInfo, err := a.prepareUpgradeBackup(ctx, job)
 	if err != nil {
-		fail("backup", fmt.Errorf("升级前备份失败（已中止升级）：%w", err))
+		fail("backup", err)
 		return
 	}
-	a.upgrader.setBackupFile(job, backupInfo.Name)
-	a.logger.Info("升级前备份完成", "backup", backupInfo.Name, "size_bytes", backupInfo.SizeBytes)
 
 	// 2) 下载 + 校验 sha256。
 	a.upgrader.setPhase(job, "download")
@@ -185,6 +171,58 @@ func (a *API) runUpgrade(job *upgradeJob, asset UpdateAsset, schemaChanged bool,
 		fail("extract", err)
 		return
 	}
+
+	// 4)~6) 写升级标记 → A/B 替换 → spawn watchdog → exec。
+	a.restartUpgrade(job, backupInfo, newExe, schemaChanged, execArgs)
+}
+
+// failUpgrade 结束一次失败的升级：置 phase、落 job 终态、写日志与审计。
+//
+// 下载路径与上传路径共用，保证两条链路的失败语义（审计字段、日志文案）一致。
+func (a *API) failUpgrade(job *upgradeJob, phase string, err error) {
+	a.upgrader.setPhase(job, phase)
+	a.upgrader.finish(job, err)
+	a.logger.Warn("升级中止", "phase", phase, "err", err, "job_id", job.JobID)
+	a.auditSystem("system.upgrade_start",
+		fmt.Sprintf(`{"from":%q,"to":%q,"job_id":%q,"aborted":true,"phase":%q,"error":%q}`,
+			job.FromVersion, job.TargetVersion, job.JobID, phase, err.Error()))
+}
+
+// prepareUpgradeBackup 执行「升级前强制备份」：失败即中止，绝不替换二进制（硬约束）。
+//
+// 返回的 *BackupInfo 会写进 watchdog 的升级标记，回退时据此恢复数据。
+func (a *API) prepareUpgradeBackup(ctx context.Context, job *upgradeJob) (*BackupInfo, error) {
+	a.upgrader.setPhase(job, "backup")
+	if a.backups == nil {
+		return nil, errors.New("备份模块未启用，无法在升级前备份")
+	}
+	backupInfo, err := a.backups.Create(ctx, true)
+	if err != nil {
+		return nil, fmt.Errorf("升级前备份失败（已中止升级）：%w", err)
+	}
+	a.upgrader.setBackupFile(job, backupInfo.Name)
+	a.logger.Info("升级前备份完成", "backup", backupInfo.Name, "size_bytes", backupInfo.SizeBytes)
+	return backupInfo, nil
+}
+
+// restartUpgrade 进入「写标记 → swap → spawn watchdog → exec」收尾阶段。
+//
+// 单独抽一层是为了给单测留注入点：真实执行会把测试进程自己换成新二进制，
+// 用例通过 a.upgradeRestart 把执行截断在备份之后（生产路径钩子恒为 nil）。
+func (a *API) restartUpgrade(job *upgradeJob, backupInfo *BackupInfo, newExe string, schemaChanged bool, execArgs []string) {
+	if a.upgradeRestart != nil {
+		a.upgradeRestart(job, backupInfo, newExe, schemaChanged, execArgs)
+		return
+	}
+	a.applyAndRestart(job, backupInfo, newExe, schemaChanged, execArgs)
+}
+
+// applyAndRestart 写升级标记 → A/B 替换 → spawn watchdog → exec。
+//
+// 下载路径（runUpgrade）与上传路径（runUploadUpgrade）共用本函数：phase 名称、
+// 日志文案、失败回滚行为对两条链路必须逐字一致（verify_upgrade.sh 依赖 phase 序列）。
+func (a *API) applyAndRestart(job *upgradeJob, backupInfo *BackupInfo, newExe string, schemaChanged bool, execArgs []string) {
+	fail := func(phase string, err error) { a.failUpgrade(job, phase, err) }
 
 	// 4) 写升级标记（watchdog 与新进程自检共用）。
 	a.upgrader.setPhase(job, "prepare")

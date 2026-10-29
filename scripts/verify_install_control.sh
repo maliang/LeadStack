@@ -271,6 +271,109 @@ else
 	pass "dry-run 的结论措辞与「未改动系统」一致"
 fi
 
+# ---------------------------------------------------------------- 11. 同目录本地来源
+step "11. 同目录本地来源（脚本与二进制/归档在同一目录时跳过下载）"
+# release 包解压后 install-control.sh 与 leadstack 就在同一目录，用户断网也要能装。
+# 把「脚本 + 二进制」复制到独立临时目录：脚本按 $0 的 dirname 探测同目录。
+# --base-url 指向 127.0.0.1:1（必然连不上）——装成功即证明全程零联网。
+LOCAL_BASE="$BASE_DIR/local"
+LOCAL_BIN_DIR="$LOCAL_BASE/bin-dir"
+LOCAL_ARC_DIR="$LOCAL_BASE/arc-dir"
+mkdir -p "$LOCAL_BIN_DIR" "$LOCAL_ARC_DIR"
+cp "$SCRIPT" "$LOCAL_BIN_DIR/install-control.sh"
+cp "$SCRIPT" "$LOCAL_ARC_DIR/install-control.sh"
+cp bin/leadstack "$LOCAL_BIN_DIR/leadstack"
+chmod +x "$LOCAL_BIN_DIR/leadstack"
+SRC_SUM="$(shasum -a 256 bin/leadstack | awk '{print $1}')"
+
+LI_INSTALL="$BASE_DIR/li/bin"
+LI_ENV="$BASE_DIR/li/etc"
+LI_DATA="$BASE_DIR/li/data"
+run_local() { # run_local <含 install-control.sh 的目录> [参数...]
+	local _dir="$1"; shift
+	sh "$_dir/install-control.sh" --install-dir "$LI_INSTALL" --env-dir "$LI_ENV" --data-dir "$LI_DATA" "$@"
+}
+sum_of() { shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'; }
+
+DIRBIN_LOG="$BASE_DIR/local-dirbin.log"
+run_local "$LOCAL_BIN_DIR" --no-service --port 19513 --base-url http://127.0.0.1:1 > "$DIRBIN_LOG" 2>&1
+DIRBIN_RC=$?
+[ "$DIRBIN_RC" -eq 0 ] && pass "同目录二进制安装成功（--base-url 不可达 → 零联网）" \
+	|| fail "同目录安装失败（rc=${DIRBIN_RC}）：$(tail -3 "$DIRBIN_LOG" | tr '\n' ' ')"
+grep -q "检测到同目录的 leadstack" "$DIRBIN_LOG" && grep -q "跳过下载" "$DIRBIN_LOG" \
+	&& pass "输出声明「检测到同目录…跳过下载」" \
+	|| fail "未声明同目录来源：$(grep -m1 '二进制来源' "$DIRBIN_LOG")"
+grep -q "(2/6) 获取控制端二进制（本地文件）" "$DIRBIN_LOG" \
+	&& pass "阶段 2 标题按来源显示「本地文件」" || fail "阶段 2 标题未按来源区分"
+grep -q "使用同目录二进制（跳过下载）" "$DIRBIN_LOG" \
+	&& pass "阶段 2 结论为「使用同目录二进制」" || fail "阶段 2 结论措辞不符"
+[ "$(sum_of "$LI_INSTALL/leadstack")" = "$SRC_SUM" ] \
+	&& pass "装出的二进制与同目录源 sha256 逐字相同" \
+	|| fail "装出的二进制与源不一致：$(sum_of "$LI_INSTALL/leadstack") vs ${SRC_SUM}"
+"$LI_INSTALL/leadstack" --version >/dev/null 2>&1 && pass "同目录装出的二进制可执行" || fail "同目录装出的二进制无法运行"
+
+# --from-file 优先级最高：同目录明明有 leadstack，也必须装 --from-file 指定的那一份
+FROM_SRC="$BASE_DIR/from-file-leadstack"
+if [ -f bin/leadstack-agent ]; then cp bin/leadstack-agent "$FROM_SRC"; else cp bin/leadstack "$FROM_SRC"; fi
+# 兜底：万一两份字节相同就追加标记，保证能分辨「装的是哪一份」
+if [ "$(sum_of "$FROM_SRC")" = "$SRC_SUM" ]; then printf 'leadstack-verify-from-file-marker' >> "$FROM_SRC"; fi
+FROM_SUM="$(sum_of "$FROM_SRC")"
+FROM_LOG="$BASE_DIR/local-fromfile.log"
+run_local "$LOCAL_BIN_DIR" --no-service --port 19514 --base-url http://127.0.0.1:1 --from-file "$FROM_SRC" > "$FROM_LOG" 2>&1
+FROM_RC=$?
+if [ "$FROM_RC" -eq 0 ] && [ "$(sum_of "$LI_INSTALL/leadstack")" = "$FROM_SUM" ] && [ "$FROM_SUM" != "$SRC_SUM" ]; then
+	pass "--from-file 压过同目录探测（装的是指定那份）"
+else
+	fail "--from-file 未压过同目录探测（rc=${FROM_RC}，装出 $(sum_of "$LI_INSTALL/leadstack")）"
+fi
+grep -qF "使用本地文件 ${FROM_SRC}" "$FROM_LOG" && pass "阶段 2 结论点名 --from-file 的路径" || fail "阶段 2 未点名 from-file 路径"
+if grep -q "二进制来源：同目录" "$FROM_LOG"; then
+	fail "--from-file 时仍声明「二进制来源：同目录」"
+else
+	pass "--from-file 时不再报告同目录来源（优先级生效）"
+fi
+
+# 同目录归档：只有 leadstack_<ver>_<os>_<arch>.tar.gz 时同样能装
+ARC_NAME="leadstack_0.1.99_${OS}_${ARCH}.tar.gz"
+ARC_PKG="$BASE_DIR/arc-pkg"; mkdir -p "$ARC_PKG"
+cp bin/leadstack "$ARC_PKG/leadstack"
+tar -czf "$LOCAL_ARC_DIR/$ARC_NAME" -C "$ARC_PKG" leadstack
+ARC_SUM="$(sum_of "$LOCAL_ARC_DIR/$ARC_NAME")"
+ARC_LOG="$BASE_DIR/local-archive.log"
+run_local "$LOCAL_ARC_DIR" --no-service --port 19515 --base-url http://127.0.0.1:1 > "$ARC_LOG" 2>&1
+ARC_RC=$?
+if [ "$ARC_RC" -eq 0 ] && grep -qF "使用同目录归档 ${ARC_NAME}" "$ARC_LOG"; then
+	pass "同目录归档安装成功（${ARC_NAME}）"
+else
+	fail "同目录归档安装失败（rc=${ARC_RC}）：$(tail -3 "$ARC_LOG" | tr '\n' ' ')"
+fi
+grep -q "未找到 checksums.txt，跳过校验" "$ARC_LOG" \
+	&& pass "无 checksums.txt 时只告警跳过校验、不中止" || fail "缺 checksums.txt 的处理不符合预期"
+[ "$(sum_of "$LI_INSTALL/leadstack")" = "$SRC_SUM" ] \
+	&& pass "归档内的二进制被正确装出（sha256 与源相同）" \
+	|| fail "归档装出的二进制不一致：$(sum_of "$LI_INSTALL/leadstack")"
+
+# 有 checksums.txt 且匹配 → 校验通过
+printf '%s  %s\n' "$ARC_SUM" "$ARC_NAME" > "$LOCAL_ARC_DIR/checksums.txt"
+ARC_OK_LOG="$BASE_DIR/local-archive-ok.log"
+run_local "$LOCAL_ARC_DIR" --no-service --port 19515 --base-url http://127.0.0.1:1 > "$ARC_OK_LOG" 2>&1
+grep -q "sha256 校验通过" "$ARC_OK_LOG" \
+	&& pass "同目录 checksums.txt 匹配时校验通过" || fail "同目录 checksums.txt 未参与校验"
+
+# 归档被篡改（checksums.txt 仍是旧哈希）→ 中止且不覆盖已装二进制
+BEFORE_ARC_SUM="$(sum_of "$LI_INSTALL/leadstack")"
+printf 'corrupted' >> "$LOCAL_ARC_DIR/$ARC_NAME"
+BAD_ARC_LOG="$BASE_DIR/local-archive-badsum.log"
+run_local "$LOCAL_ARC_DIR" --no-service --port 19515 --base-url http://127.0.0.1:1 > "$BAD_ARC_LOG" 2>&1
+BAD_ARC_RC=$?
+if [ "$BAD_ARC_RC" -ne 0 ] && grep -q "校验和不匹配" "$BAD_ARC_LOG"; then
+	pass "同目录归档被篡改 → 校验和不匹配并中止（rc=${BAD_ARC_RC}）"
+else
+	fail "篡改的同目录归档未被拦截（rc=${BAD_ARC_RC}）：$(tail -3 "$BAD_ARC_LOG" | tr '\n' ' ')"
+fi
+[ "$(sum_of "$LI_INSTALL/leadstack")" = "$BEFORE_ARC_SUM" ] \
+	&& pass "校验失败时未覆盖已安装二进制" || fail "校验失败仍覆盖了已装二进制"
+
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"

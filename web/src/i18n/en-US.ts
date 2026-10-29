@@ -338,6 +338,18 @@ const enUS: Record<string, string> = {
   'update.settingsDescription': 'Check for and install control-plane updates. Automatic backup before, automatic rollback on failure.',
   'update.openDetails': 'View upgrade details',
 
+  // Upgrade from a local file (POST /system/update/upload): lets an air-gapped control plane
+  // replace its own binary. The size gate mirrors the backend (<1MB / >200MB rejected); the
+  // front end only rejects early for instant feedback — the server stays authoritative.
+  'update.uploadAction': 'Upgrade from file…',
+  'update.uploadConfirmTitle': 'Confirm upgrade from local file',
+  'update.uploadConfirmBody': 'This replaces the running control plane (v{current}) with {file} ({size}). A backup is taken automatically before upgrading, and rolled back automatically if it fails.',
+  'update.uploadProgress': 'Uploading… {pct}%',
+  'update.uploadCancelled': 'Upload cancelled',
+  'update.uploadTooSmall': 'File is too small ({size}): anything below {min} is usually not a control-plane binary — pick the decompressed leadstack executable.',
+  'update.uploadTooLarge': 'File is too large ({size}): the limit is {max} — make sure you did not select an archive or a data directory.',
+  'update.uploadFileHint': 'The decompressed leadstack binary (no extension or .bin), 1 MB – 200 MB. Its version is validated before replacing anything.',
+
   'network.honestNotice': 'Changing the listen address requires a control-plane restart. If the new port is taken or cannot be bound, the service automatically falls back to the environment value, the default, or a temporary port, and prints the actual address in the startup log — so a bad value will not lock you out. After restarting, trust “Effective” below or the log.',
   'network.escape.title': 'Cannot open the console?',
   'network.escape.description': 'If the new port fails to start and the console is unreachable, there is no need to reinstall: fix the setting offline on the server with the command below, then start temporarily with `--listen` to get back in.',
@@ -429,6 +441,7 @@ const enUS: Record<string, string> = {
   'appearance.accent.blue': 'Blue',
   'appearance.accent.cyan': 'Cyan',
   'appearance.accent.emerald': 'Emerald',
+  'appearance.accent.green': 'Green',
   'appearance.accent.indigo': 'Indigo',
   'appearance.accent.violet': 'Violet',
   'appearance.accentHint': 'Used for buttons, selections and charts.',

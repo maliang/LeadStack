@@ -38,7 +38,9 @@ export const FONT_SIZE_PX: Record<FontSizePref, number> = {
 }
 
 export const ACCENTS: { value: Accent; label: string; color: string }[] = [
-  { value: 'green', label: t('accent.green'), color: '#16a34a' },
+  // label 统一走 appearance.accent.*，与设置页摘要（SettingsPage 里 t(`appearance.accent.${prefs.accent}`)）
+  // 和色板按钮的 title/aria-label 同一口径，避免同一种颜色在两处叫不同名字。
+  { value: 'green', label: t('appearance.accent.green'), color: '#16a34a' },
   { value: 'blue', label: t('s.0645'), color: '#2563eb' },
   { value: 'indigo', label: t('s.0646'), color: '#4f46e5' },
   { value: 'cyan', label: t('s.0647'), color: '#0891b2' },

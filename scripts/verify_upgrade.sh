@@ -253,6 +253,90 @@ fi
 NOAUTH="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/v1/system/update")"
 [ "$NOAUTH" = "401" ] && pass "未带 token 访问更新接口返回 401" || fail "未鉴权未被拒绝（HTTP ${NOAUTH}）"
 
+# ---------------------------------------------------------------- 7. 上传二进制升级
+step "7. 上传二进制升级（POST /api/v1/system/update/upload）"
+# 造一个比当前运行版本（v0.0.2）更高的版本：上传接口要过「魔数 → --version → 版本比较」全关。
+UP_EXE="$WORK/upload-0.1.99"
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=0.1.99" -o "$UP_EXE" ./cmd/leadstack 2>&1 | head -3
+if [ -x "$UP_EXE" ]; then
+  pass "已构建上传用的 0.1.99（当前运行 v0.0.2）"
+else
+  fail "构建 0.1.99 失败"; exit 1
+fi
+UP_SHA="$(shasum -a 256 "$UP_EXE" | awk '{print $1}')"
+
+# 负向 1：普通文本文件 → 400「不是可执行文件」
+# 必须 ≥1 MiB：小于下限会先撞 413，验不到魔数那一关。
+TXT_FILE="$WORK/not-a-binary.txt"
+awk 'BEGIN{for(i=0;i<40000;i++) printf "this is plain text line %d, not an executable\n", i}' > "$TXT_FILE"
+TXT_CODE="$(curl -s -o "$WORK/upload-txt.json" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer ${TOKEN}" -F "file=@${TXT_FILE}" "${BASE}/api/v1/system/update/upload")"
+TXT_MSG="$(jq -r '.error.message // empty' "$WORK/upload-txt.json" 2>/dev/null)"
+if [ "$TXT_CODE" = "400" ] && printf '%s' "$TXT_MSG" | grep -q "不是可执行文件"; then
+  pass "文本文件被拒（400）：${TXT_MSG:0:34}"
+else
+  fail "文本文件未被拒（HTTP ${TXT_CODE}）：${TXT_MSG:0:60}"
+fi
+
+# 负向 2：与当前版本相同 → 400「不高于当前版本」（复用第 0 步构建的 v0.0.2）
+SAME_CODE="$(curl -s -o "$WORK/upload-same.json" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer ${TOKEN}" -F "file=@$WORK/new/leadstack" "${BASE}/api/v1/system/update/upload")"
+SAME_MSG="$(jq -r '.error.message // empty' "$WORK/upload-same.json" 2>/dev/null)"
+if [ "$SAME_CODE" = "400" ] && printf '%s' "$SAME_MSG" | grep -q "不高于当前版本"; then
+  pass "同版本被拒（400）：${SAME_MSG:0:48}"
+else
+  fail "同版本未被拒（HTTP ${SAME_CODE}）：${SAME_MSG:0:60}"
+fi
+
+# 正例 + 负向 3：两个上传同时发出 —— begin() 是互斥的，必有一个撞上「已有升级正在进行」。
+# 用并发而不是「先后发」：先后发时第一条可能已经 exec 完，窗口就没了。
+rm -f "$EXE.prev"
+curl -s -o "$WORK/up-a.json" -w '%{http_code}' -X POST -H "Authorization: Bearer ${TOKEN}" \
+  -F "file=@${UP_EXE}" -F "allow_major=false" "${BASE}/api/v1/system/update/upload" > "$WORK/up-a.code" &
+UP_A_PID=$!
+curl -s -o "$WORK/up-b.json" -w '%{http_code}' -X POST -H "Authorization: Bearer ${TOKEN}" \
+  -F "file=@${UP_EXE}" -F "allow_major=false" "${BASE}/api/v1/system/update/upload" > "$WORK/up-b.code" &
+UP_B_PID=$!
+wait "$UP_A_PID" 2>/dev/null; wait "$UP_B_PID" 2>/dev/null
+CODE_A="$(tr -d '[:space:]' < "$WORK/up-a.code")"
+CODE_B="$(tr -d '[:space:]' < "$WORK/up-b.code")"
+CODES="$(printf '%s\n' "$CODE_A" "$CODE_B" | sort | tr '\n' ' ' | sed 's/ $//')"
+[ "$CODES" = "202 409" ] && pass "并发上传恰好一个受理(202)、一个被拒(409)" \
+  || fail "并发上传结果异常（${CODE_A}/${CODE_B}）"
+
+if [ "$CODE_A" = "202" ]; then WIN_JSON="$WORK/up-a.json"; BUSY_JSON="$WORK/up-b.json"; BUSY_CODE="$CODE_B"
+else WIN_JSON="$WORK/up-b.json"; BUSY_JSON="$WORK/up-a.json"; BUSY_CODE="$CODE_A"; fi
+UP_JOB="$(jq -r '.data.job_id // empty' "$WIN_JSON" 2>/dev/null)"
+UP_PHASE="$(jq -r '.data.status.phase // empty' "$WIN_JSON" 2>/dev/null)"
+if [ "$UP_JOB" != "" ] && [ "$UP_PHASE" != "" ]; then
+  pass "受理响应含 job id 与 status（job=${UP_JOB:0:8}…，phase=${UP_PHASE}）"
+else
+  fail "受理响应缺 job id/status：$(head -c 160 "$WIN_JSON")"
+fi
+BUSY_MSG="$(jq -r '.error.message // empty' "$BUSY_JSON" 2>/dev/null)"
+if [ "$BUSY_CODE" = "409" ] && printf '%s' "$BUSY_MSG" | grep -q "已有升级正在进行"; then
+  pass "升级进行中再传被拒（409）：${BUSY_MSG:0:22}"
+else
+  fail "并发保护文案不符（HTTP ${BUSY_CODE}）：${BUSY_MSG:0:60}"
+fi
+
+# 等重启：/system/info 的 version 变成上传版本，且落盘的新二进制就是上传的那份
+NEW_VER=""
+for _ in $(seq 1 150); do
+  INFO="$(curl -s --max-time 2 -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/system/info")"
+  NEW_VER="$(printf '%s' "$INFO" | jq -r '.data.version // empty' 2>/dev/null)"
+  [ "$NEW_VER" = "0.1.99" ] && break
+  sleep 0.5
+done
+if [ "$NEW_VER" = "0.1.99" ]; then
+  pass "/system/info 版本已变为 0.1.99（exec 自升级生效）"
+else
+  fail "上传升级后版本未变化（当前 ${NEW_VER:-无响应}）"; tail -15 "$WORK/lead.log" | sed 's/^/      /'
+fi
+[ -x "$EXE" ] && [ "$(shasum -a 256 "$EXE" | awk '{print $1}')" = "$UP_SHA" ] \
+  && pass "新二进制已就位且与上传文件 sha256 相同" || fail "新二进制与上传文件不一致"
+[ -f "$EXE.prev" ] && pass "旧二进制已保留为 .prev" || fail "上传升级缺少 .prev 备份"
+
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"

@@ -338,6 +338,17 @@ const zhCN: Record<string, string> = {
   'update.settingsDescription': '检查控制端新版本并一键升级；升级前自动备份，失败自动回退。',
   'update.openDetails': '查看升级详情',
 
+  // 本地上传升级（POST /system/update/upload）：受限网络下没有外网也能换二进制。
+  // 大小闸门与后端同口径（<1MB / >200MB 拒），但前端这层只是即时反馈，后端仍是权威。
+  'update.uploadAction': '从本地文件升级…',
+  'update.uploadConfirmTitle': '确认用本地文件升级',
+  'update.uploadConfirmBody': '即将用 {file}（{size}）替换当前运行的控制端 v{current}。升级前会自动备份，失败会自动回退。',
+  'update.uploadProgress': '正在上传… {pct}%',
+  'update.uploadCancelled': '已取消上传',
+  'update.uploadTooSmall': '文件太小（{size}）：小于 {min} 的通常不是控制端二进制，请选择解压后的 leadstack 可执行文件。',
+  'update.uploadTooLarge': '文件太大（{size}）：上限 {max}，请确认没有把归档包或数据目录一起选进来。',
+  'update.uploadFileHint': '解压后的 leadstack 二进制（无扩展名或 .bin），1 MB – 200 MB；上传后会先校验版本再替换，不会动其他文件。',
+
   'network.honestNotice': '修改监听地址需重启控制端才生效。若新端口被占用或不可绑定，服务会自动回退到环境变量 / 默认 / 临时端口，并在启动日志中打印实际监听地址——所以即使改错了也不会彻底失联。重启后请以本页「当前生效」或日志为准。',
   'network.escape.title': '打不开控制台时怎么办？',
   'network.escape.description': '如果新端口起不来、控制台打不开，不需要重装：用下面的离线命令在服务器上直接修正设置，再用 `--listen` 临时启动进入控制台。',
@@ -432,7 +443,10 @@ const zhCN: Record<string, string> = {
   'appearance.accent': '主题色',
   'appearance.accent.blue': '蓝色',
   'appearance.accent.cyan': '青色',
-  'appearance.accent.emerald': '绿色',
+  // green 是默认主题色（prefs.DEFAULT_PREFERENCES.accent），必须与其余五色一样有名字，
+  // 否则设置页的 t(`appearance.accent.${prefs.accent}`) 会把裸键直接渲染给用户。
+  'appearance.accent.emerald': '翠绿',
+  'appearance.accent.green': '绿色',
   'appearance.accent.indigo': '靛蓝',
   'appearance.accent.violet': '紫色',
   'appearance.accentHint': '用于按钮、选中态与图表的强调色。',

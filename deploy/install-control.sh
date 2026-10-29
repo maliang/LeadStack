@@ -35,7 +35,8 @@
 #           LEADSTACK_RELEASE_API（解析 latest 的地址，镜像/自测用）
 #
 # 特性：幂等（重复执行=升级，先停服务再换二进制）、可卸载、端口自定义、
-#       下载后强制 sha256 校验、失败信息明确、使用 sudo 前先检测（绝不静默 sudo）。
+#       下载后强制 sha256 校验、失败信息明确、使用 sudo 前先检测（绝不静默 sudo）、
+#       同目录有 leadstack（或 leadstack_<ver>_<os>_<arch>.tar.gz）时自动跳过下载。
 # =============================================================================
 set -eu
 
@@ -118,6 +119,8 @@ LeadStack 控制端一键安装
   --version V         版本号，默认 latest
   --base-url URL      发布包下载前缀，默认 GitHub Releases
   --from-file PATH    使用本地二进制安装（离线 / 自测）
+                      （不指定时：脚本同目录若有 leadstack 或
+                        leadstack_<版本>_<平台>.tar.gz，会自动跳过下载）
   --public-url URL    目标机回连地址（反代/公网访问时必填）
   --trusted-proxies  可信反代 CIDR，逗号分隔，例如 127.0.0.1/32,10.0.0.0/8
   --install-dir DIR   二进制目录，默认 /usr/local/bin
@@ -535,11 +538,98 @@ stop_service_before_upgrade() {
 	fi
 }
 
-# 取二进制：解析版本、下载归档到临时目录（设置 SRC_BIN / ARCHIVE / ARCHIVE_URL / TMPDIR_DL）
+# ---------------------------------------------------------------------------
+# 同目录本地文件探测：release 包解压后，二进制/归档与脚本就在一起
+# ---------------------------------------------------------------------------
+# 优先级：--from-file > 同目录 leadstack > 同目录 leadstack_<ver>_<os>_<arch>.tar.gz > 下载。
+# 只在「脚本从文件运行」时探测自身目录；curl | sh 场景 $0 是 sh，退化为当前目录。
+# 探测失败（目录取不到 / 没有可用文件）时 BIN_SOURCE 保持 download，行为与原来完全一致。
+LOCAL_DIR=""
+LOCAL_BIN=""
+LOCAL_ARCHIVE=""
+LOCAL_KIND=""
+BIN_SOURCE="download"
+TMPDIR_DL=""
+
+detect_local_source() {
+	[ -n "$LOCAL_KIND" ] && return 0        # 已经探测过
+	[ -n "$FROM_FILE" ] && return 0         # --from-file 优先级最高
+	_ld_self="$0"
+	case "${_ld_self##*/}" in
+		sh|bash|dash|ash|ksh|zsh)
+			_ld_dir=$(pwd 2>/dev/null || true) ;;
+		*)
+			if [ -n "$_ld_self" ] && [ -f "$_ld_self" ]; then
+				_ld_dir=$(cd "$(dirname "$_ld_self")" 2>/dev/null && pwd || true)
+			else
+				_ld_dir=$(pwd 2>/dev/null || true)
+			fi
+			;;
+	esac
+	[ -n "$_ld_dir" ] && [ -d "$_ld_dir" ] || { unset _ld_self _ld_dir; return 0; }
+	LOCAL_DIR="$_ld_dir"
+
+	if [ -f "${LOCAL_DIR}/${BIN_NAME}" ] && [ -x "${LOCAL_DIR}/${BIN_NAME}" ]; then
+		LOCAL_BIN="${LOCAL_DIR}/${BIN_NAME}"
+		LOCAL_KIND="dir_bin"
+		BIN_SOURCE="dir_bin"
+		unset _ld_self _ld_dir
+		return 0
+	fi
+
+	# 取第一个匹配的归档（版本号任意，平台必须匹配当前 uname 结果）
+	for _ld_item in "${LOCAL_DIR}/${BIN_NAME}_"*"_${OS}_${ARCH}.tar.gz"; do
+		[ -f "$_ld_item" ] || continue
+		LOCAL_ARCHIVE="$_ld_item"
+		LOCAL_KIND="dir_archive"
+		BIN_SOURCE="dir_archive"
+		break
+	done
+	unset _ld_self _ld_dir _ld_item
+	return 0
+}
+
+# 临时目录（下载与解包共用）；EXIT 时清理
+ensure_tmpdir_dl() {
+	[ -n "${TMPDIR_DL:-}" ] && [ -d "${TMPDIR_DL:-}" ] && return 0
+	TMPDIR_DL=$(mktemp -d "${TMPDIR:-/tmp}/leadstack-install.XXXXXX") \
+		|| die "无法创建临时目录（TMPDIR=${TMPDIR:-/tmp}）"
+	# shellcheck disable=SC2064
+	trap 'rm -rf "${TMPDIR_DL:-}"' EXIT INT TERM
+	return 0
+}
+
+# 取二进制：--from-file / 同目录本地文件 / 下载归档
+# （设置 SRC_BIN / BIN_SOURCE / ARCHIVE / ARCHIVE_URL / TMPDIR_DL）
 fetch_binary() {
 	if [ -n "$FROM_FILE" ]; then
 		[ -f "$FROM_FILE" ] || die "--from-file 指定的文件不存在：$FROM_FILE"
 		SRC_BIN="$FROM_FILE"
+		BIN_SOURCE="from_file"
+		return 0
+	fi
+
+	# 同目录探测：有本地二进制/归档就不联网（--dry-run 同样只报告来源，不读内容）
+	detect_local_source
+	if [ "$LOCAL_KIND" = "dir_bin" ]; then
+		_bin_bytes=""
+		if [ -r "$LOCAL_BIN" ]; then
+			_bin_bytes=$(wc -c < "$LOCAL_BIN" 2>/dev/null || true)
+			_bin_bytes=$(printf '%s' "$_bin_bytes" | tr -d '[:space:]')
+		fi
+		log "检测到同目录的 ${BIN_NAME}（$(human_size "${_bin_bytes:-0}")），跳过下载：${LOCAL_BIN}"
+		SRC_BIN="$LOCAL_BIN"
+		unset _bin_bytes
+		return 0
+	fi
+	if [ "$LOCAL_KIND" = "dir_archive" ]; then
+		ARCHIVE="${LOCAL_ARCHIVE##*/}"
+		if [ "$VERSION" = "latest" ]; then
+			VERSION_LABEL="<同目录归档>"
+		else
+			VERSION_LABEL="$VERSION"
+		fi
+		log "检测到同目录归档 ${ARCHIVE}，跳过下载：${LOCAL_ARCHIVE}"
 		return 0
 	fi
 
@@ -565,9 +655,7 @@ fetch_binary() {
 		return 0
 	fi
 
-	TMPDIR_DL=$(mktemp -d "${TMPDIR:-/tmp}/leadstack-install.XXXXXX")
-	# shellcheck disable=SC2064
-	trap 'rm -rf "${TMPDIR_DL:-}"' EXIT INT TERM
+	ensure_tmpdir_dl
 
 	log "地址：${ARCHIVE_URL}"
 	download_retry "$ARCHIVE_URL" "${TMPDIR_DL}/${ARCHIVE}" || die "下载控制端二进制失败
@@ -583,15 +671,37 @@ fetch_binary() {
 
 # 校验 sha256 并解包（设置 SRC_BIN 与 SHA_VERIFIED）
 verify_and_extract() {
-	[ -n "$FROM_FILE" ] && return 0
+	case "$BIN_SOURCE" in
+		from_file|dir_bin) return 0 ;;   # 本地二进制无需下载与解包
+	esac
 	[ "$DRY_RUN" -eq 1 ] && return 0
+
+	# 解包目标临时目录；归档来源决定「校验和从哪来」（同目录归档不联网）
+	ensure_tmpdir_dl
+	if [ "$BIN_SOURCE" = "dir_archive" ]; then
+		_arc_path="$LOCAL_ARCHIVE"
+	else
+		_arc_path="${TMPDIR_DL}/${ARCHIVE}"
+	fi
 
 	SHA_VERIFIED=0
 	log "校验 sha256"
-	if download_optional "${BASE_URL}/v${VERSION_LABEL}/checksums.txt" "${TMPDIR_DL}/checksums.txt"; then
-		_want=$(awk -v f="$ARCHIVE" '$2 == f || $2 == "*"f {print $1}' "${TMPDIR_DL}/checksums.txt" | head -n 1)
+	_sum_file=""
+	if [ "$BIN_SOURCE" = "dir_archive" ]; then
+		if [ -f "${LOCAL_DIR}/checksums.txt" ]; then
+			_sum_file="${LOCAL_DIR}/checksums.txt"
+		else
+			warn "未找到 checksums.txt，跳过校验（同目录没有 checksums.txt，无法核对 ${ARCHIVE} 的 sha256）"
+		fi
+	elif download_optional "${BASE_URL}/v${VERSION_LABEL}/checksums.txt" "${TMPDIR_DL}/checksums.txt"; then
+		_sum_file="${TMPDIR_DL}/checksums.txt"
+	else
+		warn "未找到 checksums.txt，跳过 sha256 校验"
+	fi
+	if [ -n "$_sum_file" ]; then
+		_want=$(awk -v f="$ARCHIVE" '$2 == f || $2 == "*"f {print $1}' "$_sum_file" | head -n 1)
 		if [ -n "$_want" ]; then
-			_got=$(sha256_of "${TMPDIR_DL}/${ARCHIVE}") || _got=""
+			_got=$(sha256_of "$_arc_path") || _got=""
 			if [ -z "$_got" ]; then
 				warn "系统缺少 sha256sum/shasum/openssl，跳过校验"
 			elif [ "$_want" != "$_got" ]; then
@@ -603,12 +713,10 @@ verify_and_extract() {
 		else
 			warn "checksums.txt 中没有 ${ARCHIVE} 的记录，跳过校验"
 		fi
-	else
-		warn "未找到 checksums.txt，跳过 sha256 校验"
 	fi
 
 	log "解压 ${ARCHIVE}"
-	tar -xzf "${TMPDIR_DL}/${ARCHIVE}" -C "$TMPDIR_DL" || die "解压失败：${ARCHIVE}（文件可能不完整）"
+	tar -xzf "$_arc_path" -C "$TMPDIR_DL" || die "解压失败：${ARCHIVE}（文件可能不完整）"
 	_src="${TMPDIR_DL}/${BIN_NAME}"
 	if [ ! -f "$_src" ]; then
 		_src=$(find "$TMPDIR_DL" -type f -name "${BIN_NAME}" ! -name "*.tar.gz" | head -n 1)
@@ -906,10 +1014,13 @@ do_install() {
 	STEP_TOTAL=6
 	STEP_ALL_T0=$(date +%s)
 
+	# 同目录探测要赶在阶段 1 之前：它决定「需不需要下载工具」与 2/6 的来源措辞
+	detect_local_source
+
 	# ---- 1/6 环境 ----
 	step "检查权限、平台与下载工具"
 	detect_privilege
-	if [ -z "$FROM_FILE" ]; then
+	if [ -z "$FROM_FILE" ] && [ -z "$LOCAL_KIND" ]; then
 		detect_download_tool
 	fi
 	log "安装 LeadStack 控制端：os=${OS} arch=${ARCH} version=${VERSION}"
@@ -917,6 +1028,7 @@ do_install() {
 	log "  数据目录：${DATA_DIR}"
 	log "  安装目录：${INSTALL_DIR}"
 	if [ -n "$PUBLIC_URL" ]; then log "  对外地址：${PUBLIC_URL}"; fi
+	if [ -n "$LOCAL_DIR" ] && [ -n "$LOCAL_KIND" ]; then log "  二进制来源：同目录 ${LOCAL_DIR}"; fi
 	if [ "$NO_SERVICE" -eq 1 ]; then log "  服务注册：跳过（--no-service）"; fi
 	if [ "$DRY_RUN" -eq 1 ]; then log "  模式：dry-run（只打印动作，不改动系统）"; fi
 	stop_service_before_upgrade
@@ -930,10 +1042,14 @@ do_install() {
 	step_ok "环境就绪（${_priv}${PROGRESS_ARG:+，下载显示进度}）"
 
 	# ---- 2/6 取二进制 ----
-	if [ -n "$FROM_FILE" ]; then
+	if [ -n "$FROM_FILE" ] || [ "$BIN_SOURCE" = "dir_bin" ] || [ "$BIN_SOURCE" = "dir_archive" ]; then
 		step "获取控制端二进制（本地文件）"
 		fetch_binary
-		step_ok "使用本地文件 ${FROM_FILE}"
+		case "$BIN_SOURCE" in
+			dir_bin)     step_ok "使用同目录二进制（跳过下载）" ;;
+			dir_archive) step_ok "使用同目录归档 ${ARCHIVE}" ;;
+			*)           step_ok "使用本地文件 ${FROM_FILE}" ;;
+		esac
 	else
 		step "下载控制端二进制"
 		fetch_binary
@@ -947,7 +1063,7 @@ do_install() {
 	# ---- 3/6 校验与解包 ----
 	step "校验与解包"
 	verify_and_extract
-	if [ -n "$FROM_FILE" ]; then
+	if [ "$BIN_SOURCE" = "from_file" ] || [ "$BIN_SOURCE" = "dir_bin" ]; then
 		step_skip "本地文件无需下载与解包"
 	elif [ "$DRY_RUN" -eq 1 ]; then
 		step_ok "dry-run：只打印校验与解包动作"

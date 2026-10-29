@@ -107,6 +107,12 @@ interface RequestOptions {
   signal?: AbortSignal
   /** 返回完整信封（用于分页 page 字段） */
   rawPayload?: boolean
+  /**
+   * body 是 FormData 时置 true：不设 Content-Type（必须由浏览器生成带 boundary 的值，
+   * 手写 application/json 或 application/x-www-form-urlencoded 都会让后端解析 multipart 失败），
+   * 且 body 原样透传而不 JSON.stringify。
+   */
+  formData?: boolean
 }
 
 interface ErrorEnvelope {
@@ -120,9 +126,9 @@ interface ErrorEnvelope {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, auth = true, signal } = options
+  const { method = 'GET', body, auth = true, signal, formData = false } = options
   const headers: Record<string, string> = { Accept: 'application/json' }
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  if (body !== undefined && !formData) headers['Content-Type'] = 'application/json'
   const token = getToken()
   if (auth && token) headers.Authorization = `Bearer ${token}`
 
@@ -131,7 +137,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     response = await fetch(`${API_PREFIX}${path}`, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : formData ? (body as FormData) : JSON.stringify(body),
       signal,
     })
   } catch (error) {
@@ -198,54 +204,114 @@ async function requestPaged<T>(
   return { items: itemsRaw.map(normalize), page }
 }
 
-/** multipart 上传（制品上传用）：与 request 相同的信封与 401 处理。 */
+/**
+ * multipart 上传（制品上传用）：信封与 401 处理完全复用 request，只是把 body 换成 FormData。
+ * 早期这里是一份 fetch 的复制品，加 formData 选项后没有理由再养两份错误处理。
+ */
 async function requestMultipart<T>(
   path: string,
   form: FormData,
   options: { auth?: boolean } = {},
 ): Promise<T> {
-  const { auth = true } = options
-  const headers: Record<string, string> = { Accept: 'application/json' }
-  const token = getToken()
-  if (auth && token) headers.Authorization = `Bearer ${token}`
+  return request<T>(path, { method: 'POST', body: form, formData: true, auth: options.auth })
+}
 
-  let response: Response
-  try {
-    response = await fetch(`${API_PREFIX}${path}`, { method: 'POST', headers, body: form })
-  } catch {
-    throw new ApiError(0, 'network_error', t('s.0578'))
-  }
-
-  const text = await response.text()
-  let payload: unknown = null
-  if (text) {
-    try {
-      payload = JSON.parse(text)
-    } catch {
-      payload = null
+/**
+ * POST /system/update/upload —— 用本地二进制升级控制端（multipart：file、allow_major）。
+ *
+ * 为什么不用 request()：fetch 读不到上传进度（fetch 的 Request.upload 没有 progress 事件），
+ * 而离线升级包几十 MB，没有百分比用户只会以为界面卡死。这里用 XMLHttpRequest 的
+ * upload.onprogress 拿百分比，错误信封 / 401 处理 / request_id 提取与 request() 逐条对齐。
+ * 取消（signal.abort 或调用方自己的 controller.abort）以 AbortError 拒绝——调用方据此
+ * 弹「已取消上传」并且**不进入轮询**，否则会把一个没提交的 job 当成进行中的升级。
+ */
+export function uploadUpdate(
+  file: File,
+  options: { allowMajor?: boolean; onProgress?: (pct: number) => void; signal?: AbortSignal } = {},
+): Promise<{ job_id: string | null; status: UpdateStatus }> {
+  const { allowMajor = false, onProgress, signal } = options
+  return new Promise((resolve, reject) => {
+    const abortError = () => new DOMException('upload aborted', 'AbortError')
+    if (signal?.aborted) {
+      reject(abortError())
+      return
     }
-  }
 
-  if (!response.ok) {
-    const envelope = payload as ErrorEnvelope | null
-    const apiError = new ApiError(
-      response.status,
-      envelope?.error?.code ?? 'http_error',
-      envelope?.error?.message ?? t('s.0579', { '0': response.status }),
-      toRecord(envelope?.error?.details),
-      pickRequestId(envelope, response),
-    )
-    if (response.status === 401 && auth) {
-      clearToken()
-      unauthorizedHandler?.()
+    const form = new FormData()
+    form.append('file', file, file.name)
+    // 后端只认字符串 "true"（t6：字段 allow_major 可选 "true"），false 时也要显式给值。
+    form.append('allow_major', allowMajor ? 'true' : 'false')
+
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${API_PREFIX}/system/update/upload`, true)
+    xhr.setRequestHeader('Accept', 'application/json')
+    const token = getToken()
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+
+    let settled = false
+    const onAbort = () => xhr.abort()
+    /** 终态只结算一次：abort 之后 onerror/onload 仍可能补发事件。 */
+    const settle = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      fn()
     }
-    throw apiError
-  }
 
-  if (payload !== null && typeof payload === 'object' && 'data' in payload) {
-    return (payload as { data: T }).data
-  }
-  return payload as T
+    xhr.upload.onprogress = (event: ProgressEvent) => {
+      if (!event.lengthComputable || event.total <= 0) return
+      const pct = Math.round((event.loaded / event.total) * 100)
+      onProgress?.(Math.max(0, Math.min(100, pct)))
+    }
+
+    xhr.onerror = () => settle(() => reject(new ApiError(0, 'network_error', t('s.0578'))))
+    xhr.ontimeout = () => settle(() => reject(new ApiError(0, 'network_error', t('s.0578'))))
+    xhr.onabort = () => settle(() => reject(abortError()))
+
+    xhr.onload = () => {
+      const text = xhr.responseText
+      let payload: unknown = null
+      if (text) {
+        try {
+          payload = JSON.parse(text)
+        } catch {
+          payload = null
+        }
+      }
+
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const envelope = payload as ErrorEnvelope | null
+        const headerId = (xhr.getResponseHeader('X-Request-Id') ?? '').trim()
+        const bodyId = (envelope?.error?.request_id ?? '').trim()
+        const apiError = new ApiError(
+          xhr.status,
+          envelope?.error?.code ?? 'http_error',
+          envelope?.error?.message ?? t('s.0579', { '0': xhr.status }),
+          toRecord(envelope?.error?.details),
+          (bodyId !== '' ? bodyId : headerId) || null,
+        )
+        settle(() => {
+          if (xhr.status === 401) {
+            clearToken()
+            unauthorizedHandler?.()
+          }
+          reject(apiError)
+        })
+        return
+      }
+
+      settle(() => {
+        // 202 的 data 是 {job_id, status:{...}}（与 /system/update/apply 完全同形）；
+        // 老版本若直接返回 job 快照也能读，交 normalizeUpdateStatus 拆这层。
+        const envelope = toRecord(payload) ?? {}
+        const data = toRecord(envelope.data) ?? envelope
+        resolve({ job_id: toText(data.job_id ?? data.jobId), status: normalizeUpdateStatus(data) })
+      })
+    }
+
+    signal?.addEventListener('abort', onAbort)
+    xhr.send(form)
+  })
 }
 
 /* ------------------------------------------------------------------ */
@@ -2264,12 +2330,18 @@ function normalizeUpdatePhase(value: unknown): UpdatePhase {
 }
 
 export function normalizeUpdateStatus(input: unknown): UpdateStatus {
-  const raw = toRecord(input) ?? {}
+  const payload = toRecord(input) ?? {}
+  // 后端有两种形状，job 快照的字段不一定在顶层：
+  //  - GET /system/update/status → {current_version, running, job:{job_id,phase,…}, pending_state, history}
+  //    （internal/api/update_apply.go: handleUpdateStatus 里 payload["job"] = job）
+  //  - POST /system/update/{apply,upload} 的 202 → {job_id, status:{job_id,phase,…}}
+  // 不先拆这一层时 phase 恒为空 → 归一成 idle，进度面板永远停在第一步（真实缺陷，非理论问题）。
+  const raw = toRecord(payload.job) ?? toRecord(payload.status) ?? payload
   return {
     job_id: toText(raw.job_id ?? raw.jobId),
     phase: normalizeUpdatePhase(raw.phase ?? raw.stage ?? raw.state),
     target_version: toText(raw.target_version),
-    current_version: toText(raw.current_version),
+    current_version: toText(raw.current_version) ?? toText(payload.current_version),
     message: toText(raw.message),
     error: toText(raw.error),
     rolled_back: toBool(raw.rolled_back ?? raw.rollback),
@@ -2509,6 +2581,17 @@ export const api = {
   /** GET /system/update/status —— 升级进度（2s 轮询） */
   updateStatus(): Promise<UpdateStatus> {
     return request<unknown>('/system/update/status').then(normalizeUpdateStatus)
+  },
+
+  /**
+   * POST /system/update/upload —— 用本地二进制升级（离线/受限网络场景）。
+   * 202 后与 applyUpdate 同形，前端拿 job_id + status 直接切到既有 job phase 轮询。
+   */
+  uploadUpdate(
+    file: File,
+    options?: { allowMajor?: boolean; onProgress?: (pct: number) => void; signal?: AbortSignal },
+  ): Promise<{ job_id: string | null; status: UpdateStatus }> {
+    return uploadUpdate(file, options)
   },
 
   /** GET /healthz —— 不经过 /api/v1，用于升级重启期间探测服务恢复 */
