@@ -97,10 +97,10 @@ type API struct {
 	// 生产路径恒为 nil（走 applyAndRestart）：真实执行会把测试进程自己换成新二进制，
 	// 用例需要把它截断在「备份完成之后、替换二进制之前」。
 	upgradeRestart func(job *upgradeJob, backupInfo *BackupInfo, newExe string, schemaChanged bool, execArgs []string)
-	listenOverride   string
-	fallbackReason   string
-	termTickets      sync.Map // ticket → *terminalTicket
-	agentTerms       sync.Map // sessionID → *agentTermSession
+	listenOverride string
+	fallbackReason string
+	termTickets    sync.Map // ticket → *terminalTicket
+	agentTerms     sync.Map // sessionID → *agentTermSession
 	// backupWake 用于「设置变更后立即重排定时备份」，容量 1 的非阻塞信号。
 	backupWake chan struct{}
 	// authzCache / authzGen 缓存角色权限与资源范围（契约 §52.4），
