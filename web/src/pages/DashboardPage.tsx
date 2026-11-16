@@ -1,66 +1,47 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  api,
-  type BatchAction,
-  type BatchResponse,
-  type Server,
-  type ServerFilters,
-} from '../lib/api'
+import { api, type Server } from '../lib/api'
 import { useNow, usePolling } from '../lib/hooks'
 import { useReleaseRuns } from '../lib/useReleaseRuns'
 import { errorMessage } from '../lib/errors'
-import { formatClockTime, formatRelativeTime, formatUptime } from '../lib/format'
-import { AddServerWizard } from '../components/AddServerWizard'
-import { LocalServerDialog } from '../components/LocalServerDialog'
+import { formatRelativeTime, formatUptime } from '../lib/format'
 import { NetworkFallbackBanner } from '../components/NetworkFallbackBanner'
-import { BatchActionBar } from '../components/BatchActionBar'
-import { BatchResultDialog } from '../components/BatchResultDialog'
 import { Button } from '../components/Button'
-import { EmptyState } from '../components/EmptyState'
+import { InlineLoading } from '../components/Loading'
 import {
   AlertTriangleIcon,
   BellIcon,
   ChevronRightIcon,
   FolderIcon,
   OfflineIcon,
-  PlusIcon,
   PulseIcon,
   RefreshIcon,
   ServerIcon,
   ShieldCheckIcon,
-
 } from '../components/Icons'
-import { InlineLoading } from '../components/Loading'
-import { ServerFiltersBar } from '../components/ServerFiltersBar'
-import { DeleteServerDialog, EditServerDialog } from '../components/ServerDialogs'
-import { ServerTable } from '../components/ServerTable'
 import { ReleaseStatusBadge } from '../components/DeployBadges'
+import { ModeBadge, StatusBadge } from '../components/StatusBadge'
 import { StatCard } from '../components/StatCard'
-import { TagsDialog } from '../components/TagsDialog'
-import { useToast } from '../components/Toast'
 import { useAuth } from '../lib/auth'
 
 import { t } from '../i18n'
-interface BatchState {
-  open: boolean
-  title: string
-  loading: boolean
-  error: string | null
-  response: BatchResponse | null
-}
 
+/** 总览页最多列出多少台「需要关注」的机器。 */
+const ATTENTION_LIMIT = 6
+
+/**
+ * 总览页：只回答「现在整体怎么样」。
+ *
+ * 与「服务器」页的分工见 web/src/pages/ServersPage.tsx 顶部注释——
+ * 这两者此前都渲染本组件（`/` 与 `/servers` 指向同一个 element），
+ * 于是点哪个菜单都一模一样、也看不出该去哪儿做增删改。
+ */
 export default function DashboardPage() {
-  const { toast } = useToast()
   const { can, scope } = useAuth()
-  const [filters, setFilters] = useState<ServerFilters>({})
-  const [groupId, setGroupId] = useState('')
-  const filterKey = JSON.stringify(filters)
 
-  const serversQuery = usePolling(() => api.servers(filters), 10_000, true, filterKey)
+  // 总览不提供筛选，请求不带条件；服务器页才有筛选/批量操作。
+  const serversQuery = usePolling(() => api.servers({}), 10_000)
   const infoQuery = usePolling(api.systemInfo, 10_000)
-  const groupsQuery = usePolling(api.groups, 10_000)
-  const serverGroupsQuery = usePolling(api.serverGroups, 30_000)
   const checksSummaryQuery = usePolling(api.checksSummary, 10_000)
   const alertsSummaryQuery = usePolling(api.alertsSummary, 10_000)
   // 「最近发布」读 GET /releases（internal/api/router.go:96 只校验 deploy.read，**不要求**全局范围）：
@@ -89,31 +70,15 @@ export default function DashboardPage() {
   )
   const now = useNow()
 
-  const [wizardOpen, setWizardOpen] = useState(false)
-  const [localOpen, setLocalOpen] = useState(false)
-  const [renaming, setRenaming] = useState<Server | null>(null)
-  const [deleting, setDeleting] = useState<Server | null>(null)
-  const [tagEditing, setTagEditing] = useState<Server | null>(null)
-  const [tagSaving, setTagSaving] = useState(false)
-  const [tagError, setTagError] = useState<string | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [batch, setBatch] = useState<BatchState | null>(null)
-  const [batchNames, setBatchNames] = useState<Record<string, string>>({})
   const [refreshing, setRefreshing] = useState(false)
 
   const servers = serversQuery.data ?? []
-  const visibleServers = groupId
-    ? servers.filter((server) => server.group_ids.includes(groupId))
-    : servers
   const info = infoQuery.data
   const totalCount = info?.server_count ?? servers.length
   const onlineCount = info?.online_count ?? servers.filter((s) => s.status === 'online').length
   const offlineCount = Math.max(totalCount - onlineCount, 0)
   const onlineRate =
     totalCount > 0 ? `${Math.round((onlineCount / totalCount) * 100)}%` : t('s.0991')
-  const hasFilters = Boolean(
-    filters.group || filters.tag || filters.status || filters.mode || groupId,
-  )
 
   const checkSummary = checksSummaryQuery.data
   const checkCounts = {
@@ -133,31 +98,8 @@ export default function DashboardPage() {
     info: alertSummary?.by_severity?.info ?? 0,
   }
 
-  const tagOptions = useMemo(() => {
-    const tags = new Set<string>()
-    for (const server of servers) for (const tag of server.tags) tags.add(tag)
-    return [...tags].sort((a, b) => a.localeCompare(b, 'zh-CN'))
-  }, [servers])
-
-  const groupOptions = useMemo(
-    () => (groupsQuery.data ?? []).map((group) => group.name),
-    [groupsQuery.data],
-  )
-
-  const selectedServers = useMemo(
-    () => servers.filter((server) => selected.has(server.id)),
-    [servers, selected],
-  )
-
-  // 轮询后自动丢弃已不存在的选中项
-  useEffect(() => {
-    setSelected((previous) => {
-      if (previous.size === 0) return previous
-      const ids = new Set(servers.map((server) => server.id))
-      const next = new Set([...previous].filter((id) => ids.has(id)))
-      return next.size === previous.size ? previous : next
-    })
-  }, [servers])
+  // 「需要关注」= 非在线（离线/未知）。在线机器在总览里没有可操作的事，交给服务器页。
+  const attention = servers.filter((server) => server.status !== 'online')
 
   const refreshAll = async () => {
     setRefreshing(true)
@@ -165,58 +107,12 @@ export default function DashboardPage() {
       await Promise.all([
         serversQuery.refresh(),
         infoQuery.refresh(),
-        groupsQuery.refresh(),
         checksSummaryQuery.refresh(),
         alertsSummaryQuery.refresh(),
         releasesQuery.refresh(),
       ])
     } finally {
       setRefreshing(false)
-    }
-  }
-
-  const handleChanged = () => {
-    void serversQuery.refresh()
-    void infoQuery.refresh()
-    void groupsQuery.refresh()
-    void checksSummaryQuery.refresh()
-    void alertsSummaryQuery.refresh()
-    void releasesQuery.refresh()
-  }
-
-  const runBatch = async (title: string, action: BatchAction, params?: Record<string, unknown>) => {
-    const targets = selectedServers
-    if (targets.length === 0) return
-    setBatchNames(Object.fromEntries(targets.map((server) => [server.id, server.name])))
-    setBatch({ open: true, title, loading: true, error: null, response: null })
-    try {
-      const response = await api.batch({ ids: targets.map((server) => server.id), action, params })
-      setBatch((current) => (current ? { ...current, loading: false, response } : current))
-    } catch (caught) {
-      setBatch((current) =>
-        current
-          ? { ...current, loading: false, error: errorMessage(caught, t('s.0992')) }
-          : current,
-      )
-    } finally {
-      if (action === 'delete') setSelected(new Set())
-      handleChanged()
-    }
-  }
-
-  const handleSaveTags = async (tags: string[]) => {
-    if (!tagEditing) return
-    setTagSaving(true)
-    setTagError(null)
-    try {
-      await api.updateServer(tagEditing.id, { tags })
-      toast(t('s.0993', { '0': tagEditing.name }), 'success')
-      setTagEditing(null)
-      handleChanged()
-    } catch (caught) {
-      setTagError(errorMessage(caught, t('s.0994')))
-    } finally {
-      setTagSaving(false)
     }
   }
 
@@ -230,7 +126,7 @@ export default function DashboardPage() {
             {t('s.0995')}
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            {t('s.0996')}
+            {t('dashboard.subtitle')}
             {info ? t('s.0997', { '0': info.version }) : ''}
           </p>
         </div>
@@ -243,27 +139,21 @@ export default function DashboardPage() {
           >
             {t('s.0689')}
           </Button>
-          {can('enroll.manage') ? (
-            <Button
-              variant="secondary"
-              onClick={() => setLocalOpen(true)}
-              icon={<ServerIcon className="h-4 w-4" />}
-            >
-              {t('localServer.entry')}
-            </Button>
-          ) : null}
-          {can('server.write') ? (
-          <Button onClick={() => setWizardOpen(true)} icon={<PlusIcon className="h-4 w-4" />}>
-            {t('s.0029')}
-          </Button>
-          ) : null}
+          <Link
+            to="/servers"
+            className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500"
+          >
+            {t('dashboard.viewServers')}
+            <ChevronRightIcon className="h-4 w-4" />
+          </Link>
         </div>
       </div>
 
       {serversQuery.error ? (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
           <span>
-            {t('s.0998')}{serversQuery.error}
+            {t('s.0998')}
+            {serversQuery.error}
             {servers.length > 0 ? t('s.0999') : ''}
           </span>
           <Button size="sm" variant="secondary" onClick={refreshAll}>
@@ -529,155 +419,66 @@ export default function DashboardPage() {
         </div>
       </section>
 
-
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t('s.0087')}</h2>
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                {visibleServers.length}
-                {hasFilters ? t('s.1024') : ''}
-              </span>
-            </div>
-            <ServerFiltersBar
-              filters={filters}
-              groups={groupsQuery.data ?? []}
-              tags={tagOptions}
-              onChange={setFilters}
-              serverGroups={serverGroupsQuery.data ?? []}
-              groupId={groupId}
-              onGroupIdChange={setGroupId}
-            />
+          <div className="flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300">
+              <AlertTriangleIcon className="h-4 w-4" />
+            </span>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              {t('dashboard.attentionTitle')}
+            </h2>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+              {attention.length}
+            </span>
           </div>
-          <p className="text-xs text-slate-400 dark:text-slate-500">
-            {serversQuery.updatedAt
-              ? t('s.0949', { '0': formatClockTime(serversQuery.updatedAt) })
-              : t('s.0425')}
-          </p>
+          <Link
+            to="/servers"
+            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+          >
+            {t('dashboard.viewServers')}
+            <ChevronRightIcon className="h-3.5 w-3.5" />
+          </Link>
         </div>
-
-        {can('server.write') ? (
-        <BatchActionBar
-          selected={selectedServers}
-          pending={batch?.loading ?? false}
-          groupOptions={groupOptions}
-          onClear={() => setSelected(new Set())}
-          onTest={() => void runBatch(t('s.0281'), 'test-connection')}
-          onRefreshInfo={() => void runBatch(t('s.0282'), 'refresh-host-info')}
-          onAddTags={(tags) => {
-            if (tags.length === 0) {
-              toast(t('s.1025'), 'error')
-              return
-            }
-            void runBatch(t('s.0547'), 'add-tags', { tags })
-          }}
-          onSetGroup={(group) => void runBatch(t('s.1026'), 'set-group', { group })}
-          onDelete={() => void runBatch(t('s.0513'), 'delete')}
-        />
-        ) : null}
 
         {serversQuery.loading && serversQuery.data === null ? (
           <InlineLoading label={t('s.1027')} />
-        ) : visibleServers.length === 0 ? (
-          hasFilters ? (
-            <EmptyState
-              icon={<ServerIcon className="h-6 w-6" />}
-              title={t('s.1028')}
-              description={t('s.1029')}
-              actionLabel={t('s.0525')}
-              onAction={() => {
-                setFilters({})
-                setGroupId('')
-              }}
-            />
-          ) : (
-            <EmptyState
-              icon={<ServerIcon className="h-6 w-6" />}
-              title={t('s.1030')}
-              description={t('s.1031')}
-              actionLabel={t('s.1032')}
-              onAction={() => setWizardOpen(true)}
-            />
-          )
+        ) : attention.length === 0 ? (
+          <p className="px-4 py-6 text-center text-sm text-emerald-600 dark:text-emerald-400">
+            {t('dashboard.allOnline')}
+          </p>
         ) : (
-          <ServerTable
-            canEdit={can('server.write')}
-            canDelete={can('server.delete')}
-            servers={visibleServers}
-            now={now}
-            selected={selected}
-            onToggle={(id) =>
-              setSelected((previous) => {
-                const next = new Set(previous)
-                if (next.has(id)) next.delete(id)
-                else next.add(id)
-                return next
-              })
-            }
-            onToggleAll={(checked) =>
-              setSelected(checked ? new Set(visibleServers.map((server) => server.id)) : new Set())
-            }
-            onEdit={(server) => setRenaming(server)}
-            onDelete={(server) => setDeleting(server)}
-            onEditTags={(server) => {
-              setTagError(null)
-              setTagEditing(server)
-            }}
-          />
+          <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+            {attention.slice(0, ATTENTION_LIMIT).map((server: Server) => (
+              <li key={server.id}>
+                <Link
+                  to={`/servers/${server.id}`}
+                  className="flex flex-wrap items-center gap-2 px-4 py-2.5 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                >
+                  <StatusBadge status={server.status} />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800 dark:text-slate-100">
+                    {server.name}
+                  </span>
+                  <ModeBadge mode={server.mode} />
+                  <span className="w-40 truncate text-xs text-slate-500 dark:text-slate-400">
+                    {server.port && server.port > 0 ? `${server.host}:${server.port}` : server.host}
+                  </span>
+                  <span className="w-24 text-right text-xs text-slate-400 dark:text-slate-500">
+                    {server.last_seen_at ? formatRelativeTime(server.last_seen_at) : '—'}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
         )}
+        {attention.length > ATTENTION_LIMIT ? (
+          <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+            {t('dashboard.attentionMore', { '0': attention.length - ATTENTION_LIMIT })}
+          </p>
+        ) : null}
       </section>
 
-      <p className="text-xs text-slate-400 dark:text-slate-500">
-        {t('s.1033')}
-      </p>
-
-      <AddServerWizard
-        open={wizardOpen}
-        onClose={() => setWizardOpen(false)}
-        onFinished={handleChanged}
-        onUseLocal={() => {
-          setWizardOpen(false)
-          setLocalOpen(true)
-        }}
-      />
-      <LocalServerDialog
-        open={localOpen}
-        onClose={() => setLocalOpen(false)}
-        onChanged={handleChanged}
-      />
-      <EditServerDialog
-        server={renaming}
-        onClose={() => setRenaming(null)}
-        onSaved={handleChanged}
-      />
-      <DeleteServerDialog
-        server={deleting}
-        onClose={() => setDeleting(null)}
-        onDeleted={handleChanged}
-      />
-      <TagsDialog
-        open={tagEditing !== null}
-        title={t('s.0544')}
-        description={tagEditing ? t('s.1034', { '0': tagEditing.name }) : undefined}
-        initialTags={tagEditing?.tags ?? []}
-        loading={tagSaving}
-        error={tagError}
-        onClose={() => {
-          setTagEditing(null)
-          setTagError(null)
-        }}
-        onSubmit={(tags) => void handleSaveTags(tags)}
-      />
-      <BatchResultDialog
-        open={batch?.open ?? false}
-        title={batch?.title ?? ''}
-        loading={batch?.loading ?? false}
-        error={batch?.error ?? null}
-        response={batch?.response ?? null}
-        nameOf={(id) => batchNames[id] ?? id}
-        onClose={() => setBatch(null)}
-      />
+      <p className="text-xs text-slate-400 dark:text-slate-500">{t('s.1033')}</p>
     </div>
   )
 }

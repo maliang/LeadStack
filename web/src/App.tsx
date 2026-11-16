@@ -15,6 +15,7 @@ import CredentialsPage from './pages/CredentialsPage'
 import GroupsPage from './pages/GroupsPage'
 import RolesPage from './pages/RolesPage'
 import DashboardPage from './pages/DashboardPage'
+import ServersPage from './pages/ServersPage'
 import ImportPage from './pages/ImportPage'
 import LoginPage from './pages/LoginPage'
 import ReleasesPage from './pages/ReleasesPage'
@@ -42,7 +43,7 @@ export default function App() {
               }
             >
               <Route index element={<DashboardPage />} />
-              <Route path="/servers" element={<DashboardPage />} />
+              <Route path="/servers" element={<ServersPage />} />
               <Route path="/servers/:id" element={<ServerDetailPage />} />
               <Route path="/checks" element={<ChecksPage />} />
               <Route path="/alerts" element={<AlertsPage />} />

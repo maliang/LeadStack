@@ -88,7 +88,8 @@ page.on('pageerror', (err) => console.error('[pageerror]', String(err).slice(0, 
 // ---------- 3. 逐页截图 ----------
 const shots = [
   // 前端使用 HashRouter：深链接形如 /#/roles（直接访问 /roles 会落到首页）。
-  { file: 'dashboard.png', path: '/#/', title: '总览：服务器状态、检测与告警概览', fullPage: true },
+  { file: 'dashboard.png', path: '/#/', title: '总览：整体健康度与需要关注的变化', fullPage: true },
+  { file: 'servers.png', path: '/#/servers', title: '服务器：筛选、批量操作、分组与标签', fullPage: true },
   { file: 'server-detail.png', path: `/#/servers/${featured.id}`, title: '服务器详情：指标曲线与主机信息', fullPage: true },
   { file: 'checks.png', path: '/#/checks', title: '检测项：五类探测与结果时间线', fullPage: true },
   { file: 'alerts.png', path: '/#/alerts', title: '告警：进行中 / 已确认 / 已恢复', fullPage: true },
