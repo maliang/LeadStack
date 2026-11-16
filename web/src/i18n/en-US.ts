@@ -349,6 +349,7 @@ const enUS: Record<string, string> = {
   'update.uploadTooSmall': 'File is too small ({size}): anything below {min} is usually not a control-plane binary — pick the decompressed leadstack executable.',
   'update.uploadTooLarge': 'File is too large ({size}): the limit is {max} — make sure you did not select an archive or a data directory.',
   'update.uploadFileHint': 'The decompressed leadstack binary (no extension or .bin), 1 MB – 200 MB. Its version is validated before replacing anything.',
+  'update.uploadWorksOffline': 'A failed update check does not block a local upgrade: the file is validated (version and size) before it replaces anything.',
 
   'network.honestNotice': 'Changing the listen address requires a control-plane restart. If the new port is taken or cannot be bound, the service automatically falls back to the environment value, the default, or a temporary port, and prints the actual address in the startup log — so a bad value will not lock you out. After restarting, trust “Effective” below or the log.',
   'network.escape.title': 'Cannot open the console?',

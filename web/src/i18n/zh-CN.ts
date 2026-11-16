@@ -348,6 +348,7 @@ const zhCN: Record<string, string> = {
   'update.uploadTooSmall': '文件太小（{size}）：小于 {min} 的通常不是控制端二进制，请选择解压后的 leadstack 可执行文件。',
   'update.uploadTooLarge': '文件太大（{size}）：上限 {max}，请确认没有把归档包或数据目录一起选进来。',
   'update.uploadFileHint': '解压后的 leadstack 二进制（无扩展名或 .bin），1 MB – 200 MB；上传后会先校验版本再替换，不会动其他文件。',
+  'update.uploadWorksOffline': '检查更新失败不影响本地升级：选好文件后会先校验版本与大小，再替换并重启。',
 
   'network.honestNotice': '修改监听地址需重启控制端才生效。若新端口被占用或不可绑定，服务会自动回退到环境变量 / 默认 / 临时端口，并在启动日志中打印实际监听地址——所以即使改错了也不会彻底失联。重启后请以本页「当前生效」或日志为准。',
   'network.escape.title': '打不开控制台时怎么办？',

@@ -351,7 +351,14 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
   const failed = phase === 'failed' || phase === 'rolled_back'
   const succeeded = phase === 'success' || Boolean(recoveredVersion)
   const disabled = upgradeDisabled || info?.upgrade_enabled === false
-  const notUpgradable = info?.upgradable === false
+  // 「本平台没有可用升级包」只有在「检查本身成功」时才是事实：
+  // 检查失败（受限网络 / GitHub 不可达）时后端返回的是零值 UpdateInfo（assets 为空、
+  // upgradable=false、error 非空），把它当成「平台不支持」会把唯一可用的通道——
+  // 本地上传——一起关掉（线上实测缺陷：内网机器点不了「从本地文件升级」）。
+  // upgrade_note 非空才是平台层面的硬阻断（如 Windows 无法替换运行中的可执行文件）。
+  const platformBlocked = Boolean(info?.upgrade_note)
+  const checkFailed = Boolean(info?.error)
+  const notUpgradable = !platformBlocked && !checkFailed && info?.upgradable === false
   // uploading 也算「进行中」：上传途中再点「立即升级」会并发起第二条升级链，后端虽然会 409，但前端不该给这个机会。
   const canApply = Boolean(
     info?.has_update && info.latest && !disabled && !notUpgradable && !running && !succeeded && !uploading,
@@ -362,7 +369,7 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
    * 注意这里**不**要求 info.has_update——恰恰相反，受限网络下查不到更新时，
    * 本地上传才是唯一可用的升级通道，所以 info 为空也放行，让后端做权威校验。
    */
-  const canUpload = allowed && !notUpgradable && !disabled && !running && !succeeded && !applying && !uploading
+  const canUpload = allowed && !platformBlocked && !disabled && !running && !succeeded && !applying && !uploading
 
   const intervalText = useMemo(() => {
     if (!info?.check_interval) return t('update.intervalDefault')
@@ -520,10 +527,13 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
               {t('update.uploadFileHint')}
             </span>
           </div>
-          {notUpgradable ? (
+          {platformBlocked ? (
             <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
               {info?.upgrade_note || t('update.notUpgradable')}
             </p>
+          ) : null}
+          {checkFailed && !platformBlocked ? (
+            <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">{t('update.uploadWorksOffline')}</p>
           ) : null}
           {/*
             不把 accept 设成一两个 MIME：解压后的 leadstack 二进制在 macOS/Linux 上往往没有扩展名
