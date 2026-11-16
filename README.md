@@ -152,26 +152,34 @@ sudo sh install-control.sh --from-file ./leadstack --port 8080
 
 它做的事：下载对应平台的发布包 → 校验 `checksums.txt` 里的 sha256（不匹配就中止，不覆盖已有二进制）→
 安装到 `/usr/local/bin/leadstack` → 生成 `0600` 的环境文件 `/etc/leadstack/leadstack.env` →
-注册并启动服务（Linux systemd / macOS launchd）→ 打印访问地址与初始密码。
+注册并启动服务（Linux systemd / macOS launchd）→ **顺手把这台机器的 agent 也装好并纳管** →
+打印访问地址与初始密码。
 
-安装过程会**逐步打印进度**，下载十几 MB 期间不会长时间空屏（共 6 个阶段，每阶段有 ✓ 与耗时）：
+也就是说：装完控制端，你的控制台里已经有一台「本机」在线，不需要再去「接入本机」复制命令。
+不想要这一步就加 `--no-local-agent`（想自己装 agent、或这台机器不该被监控时用）。
+
+安装过程会**逐步打印进度**，下载十几 MB 期间不会长时间空屏（共 7 个阶段，每阶段有 ✓ 与耗时）：
 
 ```text
-[leadstack-install] (1/6) 检查权限、平台与下载工具
+[leadstack-install] (1/7) 检查权限、平台与下载工具
 [leadstack-install]    ✓ 环境就绪（需要时用 sudo，下载显示进度）（<1s）
 
-[leadstack-install] (2/6) 下载控制端二进制
+[leadstack-install] (2/7) 下载控制端二进制
 #####                                                                      5.6%
 [leadstack-install]    ✓ 已下载 6.7 MB（版本 0.1.5）（4s）
 
-[leadstack-install] (3/6) 校验与解包
+[leadstack-install] (3/7) 校验与解包
 [leadstack-install] sha256 校验通过：072d85d055ad039c326fa7a1c1cb7281c38d2679501c28bea8afea48cbeb1685
 [leadstack-install]    ✓ sha256 校验通过，已解出 leadstack（3s）
 
 ...
-[leadstack-install] (6/6) 健康检查
+[leadstack-install] (6/7) 健康检查
 [leadstack-install]    ✓ http://127.0.0.1:8080/healthz 已返回 ok（1s）
-[leadstack-install] 安装完成（总耗时 12s）。
+
+[leadstack-install] (7/7) 接入本机（自动安装 agent）
+[leadstack-install]    ✓ 本机 agent 已安装并注册 systemd 服务 leadstack-agent（已上线）（9s）
+[leadstack-install] 安装完成（总耗时 21s）。
+[leadstack-install]   本机接入：已自动完成（这台上已装 agent，控制台「服务器」里能看到本机在线）
 ```
 
 下载进度条只在交互终端显示（`curl … | sudo sh` 也算交互终端，照样能看到）；
@@ -182,7 +190,9 @@ sudo sh install-control.sh --from-file ./leadstack --port 8080
 | `--port N` | 监听端口（默认 8080）。**这就是「一键安装时指定端口」的入口** |
 | `--bind ADDR` | 监听地址（默认 `127.0.0.1` 仅本机；对外用 `0.0.0.0`） |
 | `--listen ADDR:PORT` | 直接给完整监听地址，优先级高于 `--bind`/`--port` |
-| `--admin-password P` | 指定初始管理员密码（留空则随机生成并只打印一次） |
+| `--admin-password P` | 指定初始管理员密码（留空则自动生成 20 位随机密码，直接打印在安装汇总里并写进环境文件） |
+| `--no-local-agent` | 不自动接入本机（默认会把 agent 装到本机并纳管） |
+| `--agent-from-file PATH` | 本机 agent 用本地二进制安装（离线机器用） |
 | `--public-url URL` | 目标机回连地址，**反代/公网访问时必填**（否则生成的安装命令是内网地址） |
 | `--trusted-proxies CIDR` | 可信反代列表，逗号分隔；配了才会采信 `X-Forwarded-For` 记录真实 IP |
 | `--version V` | 安装指定版本（默认 `latest`，自动解析最新 release） |
@@ -193,8 +203,9 @@ sudo sh install-control.sh --from-file ./leadstack --port 8080
 安装之后改端口有两种方式：重跑脚本带新 `--port`（服务会自动重启），或编辑
 `/etc/leadstack/leadstack.env` 里的 `LEADSTACK_LISTEN` 后 `systemctl restart leadstack`。
 
-验收脚本：`make verify-install`（或 `bash scripts/verify_install_control.sh`，48 项；其中 5 项容器内 systemd 单元渲染需要本机 Docker）——覆盖端口参数校验、
-按端口真实监听、篡改包必须中止、幂等重装、卸载保留数据、环境文件引号编码，以及 Linux systemd 单元渲染（有 docker 时）。
+验收脚本：`make verify-install`（或 `bash scripts/verify_install_control.sh`，**83 项**；其中 9 项需要本机 Docker，会真的在容器里装一遍并等 agent 上线）——覆盖端口参数校验、
+按端口真实监听、篡改包必须中止、幂等重装、卸载保留数据、环境文件引号编码、自动接入本机的各条分支（`--no-local-agent` / `--no-service` / dry-run / 已有安装不造密码）、
+Linux systemd 单元渲染，以及容器内「安装 → agent 注册服务 → 状态 online」的完整链路（有 docker 时）。
 
 **B. 源码构建（开发或自建）**
 
@@ -735,7 +746,7 @@ sudo systemctl start leadstack
 
 > 完整 runbook（含发布流程、兼容性承诺、跨版本升级、常见坑）见 **[docs/UPGRADE.md](docs/UPGRADE.md)**。
 
-> **发版前必跑 `make verify-upgrade`**（`scripts/verify_upgrade.sh`，20 项）：在本地 mock GitHub Releases 上
+> **发版前必跑 `make verify-upgrade`**（`scripts/verify_upgrade.sh`，29 项）：在本地 mock GitHub Releases 上
 > 真实走一遍「检查更新 → 备份 → 换二进制 → 新版本崩溃 → watchdog 回退」。它不在 `make test-e2e` 的主干闸门里
 > ——那套验收要替换运行中的二进制并依赖 watchdog 的 10 秒级时序，对负载敏感、容易 flaky，所以单独跑。
 
@@ -886,7 +897,7 @@ make test           # Go 测试
 make fmt-check      # gofmt 闸门
 make test-race      # 竞态检测（api + store）
 make test-e2e       # 端到端验收（13 个脚本，逐段断言）
-make verify-upgrade # 控制端自升级验收（20 项，单独跑；不在 test-e2e 闸门内，发版前必跑）
+make verify-upgrade # 控制端自升级验收（29 项，单独跑；不在 test-e2e 闸门内，发版前必跑）
 make dev            # 开发模式（另开 make web-dev 走前端热更新）
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check   # Docker 构建 + 容器内健康检查 + 备份校验
@@ -913,13 +924,13 @@ bash scripts/verify_install_control.sh  # 控制端一键安装：端口、下�
 
 每套脚本的断言数（`make test-e2e` 各脚本末尾「通过 N 项」累加，实测值）：bootstrap 19、servers 34、
 checks 31、alerts 36、deploy 33、deploy_v2 66、deploy_script 24、deploy_rollout 35、baota 28、backup 45、
-ops 67、authz 78、install_control 48，**合计 544 项**；其中 install_control 的 5 项容器内 systemd 单元渲染
-需要本机 Docker，没有 Docker 时这 5 项跳过（合计 539 项）。
+ops 67、authz 100、install_control 83，**合计 601 项**；其中 install_control 的第 13 节（9 项）要在 docker 里
+真装一遍控制端并等 agent 上线，没有 Docker 或容器内装不上 curl 时这 9 项跳过（合计 592 项）。
 
 **控制端自升级单独跑**：
 
 ```bash
-make verify-upgrade   # = bash scripts/verify_upgrade.sh（20 项，前置 make build）
+make verify-upgrade   # = bash scripts/verify_upgrade.sh（29 项，前置 make build）
 ```
 
 它覆盖「检查更新 → 备份失败中止 → 正常升级 → 新版本一启动就崩溃 → watchdog 自动回退 → 开关与权限」，
@@ -949,7 +960,7 @@ make verify-upgrade   # = bash scripts/verify_upgrade.sh（20 项，前置 make 
 
 ## 状态
 
-功能已完整交付，**十三套验收脚本共 544 项断言**（`make test-e2e`；统计口径为各脚本末尾「通过 N 项」累加，
-其中 5 项容器内 systemd 单元渲染需要本机 Docker，没有 Docker 时是 539 项；另有 `make verify-upgrade`
-单独跑的控制端自升级 20 项，不计入这个总数）。已知环境限制：
+功能已完整交付，**十三套验收脚本共 601 项断言**（`make test-e2e`；统计口径为各脚本末尾「通过 N 项」累加，
+其中 9 项在 docker 里真装一遍控制端，没有 Docker 时是 592 项；另有 `make verify-upgrade`
+单独跑的控制端自升级 29 项，不计入这个总数）。已知环境限制：
 macOS 公证 / Windows 代码签名需证书；钉钉/飞书/Slack/Telegram/邮件需你的真实凭据才能验证实际投递。

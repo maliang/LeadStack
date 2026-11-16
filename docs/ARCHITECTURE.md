@@ -1590,7 +1590,7 @@ GET  /system/update/status                        -> 进度与结果
 - 保留手动触发（`workflow_dispatch`，可指定 version）。
 - `schema_changed` 的判定来源：发布前对比迁移目录 `internal/store/migrations/` 在上一 tag 与本 tag 之间是否有新增文件，写入 release body 的机器可读标记 `<!-- schema_changed: true -->`。
 
-### 51.5 验收（`scripts/verify_upgrade.sh`，20 项；`make verify-upgrade`）
+### 51.5 验收（`scripts/verify_upgrade.sh`，29 项；`make verify-upgrade`）
 
 > 这套验收**故意不在 `make test-e2e` 主干闸门内**：它要真实替换运行中的二进制，并依赖 watchdog 的 10 秒级自查回退时序，对机器负载敏感——放进主干闸门容易出现「代码没动却 CI 红」（本仓库已因 bcrypt 成本撞过 `go test` 包超时，同一类假红）。**发版前必跑 `make verify-upgrade`**；主干 13 套闸门（`E2E_SCRIPTS`）里不含它。
 
@@ -2267,7 +2267,9 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 
 ### 64.4 验收
 
-`scripts/verify_install_control.sh`（48 项，`make verify-install`；其中 5 项是容器内 systemd 单元渲染，本机没有可用的 docker 时跳过）：端口参数与非法值、环境文件引号编码、按 env 真实启动并 `curl /healthz` + 登录、幂等重装换端口、本地 mock 发布服务的真实下载与篡改包中止、`LEADSTACK_RELEASE_API` 解析、卸载保留数据 / `--purge` 删除、docker 内 systemd 单元渲染（`User=leadstack`、`EnvironmentFile`、`ProtectSystem=strict`）。
+`scripts/verify_install_control.sh`（**83 项**，`make verify-install`；其中 9 项需要本机 docker，没有可用 docker 时跳过）：端口参数与非法值、环境文件引号编码、按 env 真实启动并 `curl /healthz` + 登录、幂等重装换端口、本地 mock 发布服务的真实下载与篡改包中止、`LEADSTACK_RELEASE_API` 解析、卸载保留数据 / `--purge` 删除、docker 内 systemd 单元渲染（`User=leadstack`、`EnvironmentFile`、`ProtectSystem=strict`）、第 7 阶段自动接入本机的分支判定与生成密码（第 12 节），以及容器内「装控制端 → 自动装 agent → 注册服务 → 等到 online」的真跑（第 13 节）。
+
+第 13 节能跑起来靠一个仓库内的小工具：`scripts/testdata/fakebin/systemctl`（`daemon-reload` / `enable [--now]` / `start|restart|stop` / `is-active` / `status`）。debian-slim 里没有 systemd，而「安装 → agent 上线」这整条链路的价值恰恰在于**服务真的被拉起**，所以用一个把 `ExecStart=` 与 `EnvironmentFile=` 解出来直接 `exec` 的替身去代替 PID 1；`is-active` 用 `/run/fake-<unit>.pid` + `kill -0` 判断，因此幂等重装能识别出「已在运行」。替身里两处必须注意：unit 名要统一补 `.service`（否则 `enable x.service` 与 `is-active x` 写出的 pid 文件名不一致，幂等判定失效）；启动命令要用 `eval "exec $_exec"`（否则 `${LEADSTACK_AGENT_TOKEN}` 这类变量不会被展开）。
 
 踩过的坑（写测试时才会暴露）：
 
@@ -2301,6 +2303,31 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 修法（`internal/auth/password.go`）：成本改为可覆盖的 `LEADSTACK_BCRYPT_COST`（校验 4–31，非法值回落 12，默认仍是 **12**），api 包的 `TestMain` 把它设为 4。生产默认值不变；测试里 `make test-race` 从 ~9 分钟（且经常超时）降到 **77 秒**。`auth` 包有两条测试锁定语义（合法值生效、越界/非数字回落默认；哈希中嵌入的成本与配置一致）。
 
 ---
+
+### 64.7 安装即纳管本机（第 7 阶段）
+
+装完控制端还去控制台点「接入本机」、再复制一条 curl 到终端执行——这中间人要做三件事，而脚本本来就能做。所以 `install-control.sh` 多了第 7 阶段：**装完控制端，顺手把这台机器的 agent 也装好、绑好令牌、等到在线**。
+
+判定顺序（`install_local_agent`）是「越后面越需要真做」：
+
+| 条件 | 结论文案 | 为什么排这个位置 |
+|---|---|---|
+| `--no-local-agent` | 指定了 `--no-local-agent`，跳过自动接入 | 用户显式拒绝，最高优先 |
+| `--no-service` | no-service 未注册服务，跳过自动接入 | agent 靠系统服务托管，没服务等于装了个不跑的东西 |
+| `--dry-run` | dry-run：只打印自动接入动作 | **必须早于健康检查**：dry-run 不跑探活，`HEALTH_OK` 恒 0，放后面会被显示成「跳过」 |
+| 健康检查未通过 | 控制端未就绪，跳过自动接入 | 后面要登录 API，服务没起来做什么都白搭 |
+| 缺 curl | 缺少 curl，跳过自动接入 | 官方 install.sh 用 curl 拉二进制 |
+| agent 服务已 active | 本机 agent 已在运行，跳过 | 重复执行=升级，不能重复建台 |
+
+真做的时候复用**官方 agent 安装脚本**（控制端 `//go:embed` 的 `/install.sh`），而不是在控制端脚本里再写一份 systemd/launchd 逻辑：
+
+- agent 的单元文件、`EnvironmentFile` 权限、离线 `--from-file`、`--ca`/`--insecure` 这些细节只存在一处，改一处两边同步，不会「控制端装的 agent」和「手动装的 agent」行为不一样；
+- 令牌怎么来：先登录 `POST /api/v1/auth/login`；已存在 `host=127.0.0.1 & mode=agent` 的服务器就 `POST /api/v1/enroll-tokens` 带 `server_id` 预绑定（不新建台），否则 `POST /api/v1/servers/local` 一次拿到服务器 + 令牌；
+- 装完最多等 45 秒（每 2 秒查一次 `GET /api/v1/servers`），等到 `status=online` 才打「本机接入：已自动完成」。
+
+**顺带治「装完密码就丢了」**：没给 `--admin-password` 时脚本自动生成 20 位密码，写进 0600 环境文件并在汇总里打印（此前随机密码只在首次启动日志打印一次，用户装完就找不到）。两个约束：`--dry-run` 不生成（否则汇总会说谎「已写入」）；数据目录里已有 `leadstack.db` 时不生成（升级场景凭空造密码只会让人以为「密码是这个」却登不进去）。
+
+`gen_password` 的写法有个坑值得记：不能用 `tr -dc A-Za-z0-9 </dev/urandom | cut -c1-20` —— `cut` 要等 EOF 才输出，而 `/dev/urandom` 永无 EOF，在没装 openssl 的最小镜像（debian-slim）上会把安装**卡死**（表现为容器一直不返回）。改成 `dd bs=256 count=1` 让输入有界，再用 `head -c 20`；64 字节只有约 15 个字母数字字符，256 字节才稳定 20 位。
 
 ## 65. 接口与行为补充：错误语义、敏感字段、恢复状态与 agent 包资产
 
@@ -2416,8 +2443,8 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 | 脚本 e2e | `scripts/verify_authz.sh`（78 项：`env_keys`/`redacted` 收敛、列表不泄露、审计无明文、409 精确原因）、`scripts/verify_backup.sh`（45 项：恢复状态字段、重复上传 409、重启后 `pending=false`）、`scripts/verify_bootstrap.sh`（19 项：安装脚本阶段输出与控制端可达性自检）、`scripts/verify_deploy_v2.sh`（66 项：`healthcheck_path` 校验、`env_keys`、按授权分组选机）、`scripts/verify_deploy_rollout.sh`（35 项：1 台成功 + 1 台取消后发布必须收敛到 `canceled` 而不是 `failed`） |
 | 前端产物 | `internal/webui/dist/assets/` 里可 `grep` 到 `restore-status`、`中止`、`agent 代检`、`请求编号`、`该分组共` |
 
-> 上面四套脚本的断言数是实测值；13 套 `make test-e2e` 脚本合计 **544 项**（每套明细见 README「开发与验收」）。
-> `scripts/verify_upgrade.sh`（控制端自升级 20 项）不在主干闸门内，用 `make verify-upgrade` 单独跑、发版前必跑（见 §51.5）。
+> 上面四套脚本的断言数是实测值；13 套 `make test-e2e` 脚本合计 **601 项**（每套明细见 README「开发与验收」）。
+> `scripts/verify_upgrade.sh`（控制端自升级 29 项）不在主干闸门内，用 `make verify-upgrade` 单独跑、发版前必跑（见 §51.5）。
 
 ## 66. 列表接口的范围过滤必须排在 LIMIT 之前
 

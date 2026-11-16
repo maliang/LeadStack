@@ -33,6 +33,7 @@ cleanup() {
 	[ -n "$MOCK_PID" ] && kill "$MOCK_PID" 2>/dev/null
 	# 兜底：清理任何指向本次临时目录的 leadstack 进程（kill 子 shell 不会杀掉其子进程）
 	pkill -f "$BASE_DIR" 2>/dev/null
+	rm -rf "$ROOT/bin/verify-linux"
 	wait 2>/dev/null
 	rm -rf "$BASE_DIR"
 }
@@ -139,7 +140,10 @@ LOGIN_CODE="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:
 	-H 'Content-Type: application/json' -d '{"username":"admin","password":"verify-install-pass"}' 2>/dev/null)"
 [ "$LOGIN_CODE" = "200" ] && pass "指定密码可正常登录（200）" || fail "登录失败（HTTP ${LOGIN_CODE}）"
 kill "$APP_PID" 2>/dev/null; wait "$APP_PID" 2>/dev/null; APP_PID=""
-unset LEADSTACK_LISTEN LEADSTACK_DATA_DIR
+# 必须连 ADMIN_PASSWORD 一起清掉：第 3 节安装时脚本已自动生成密码并写进环境文件，
+# set -a 加载后它成了导出的环境变量，会让后面「没指定密码就生成」的用例全部走成
+# 「用户已指定密码」分支（表现为汇总不打印密码、升级时又把它写进新环境文件）。
+unset LEADSTACK_LISTEN LEADSTACK_DATA_DIR LEADSTACK_ADMIN_PASSWORD
 
 # ---------------------------------------------------------------- 5. 幂等重装
 step "5. 幂等重装（升级路径）"
@@ -243,8 +247,8 @@ fi
 # ---------------------------------------------------------------- 10. 流程可见性
 step "10. 流程可见性（下载进度与阶段输出）"
 # 用户反馈过「没有流程输出」：十几 MB 下载期间盯着空屏无法判断是否卡住。
-DL_STEPS=$(grep -cE '\([1-6]/6\)' "$DL_LOG" 2>/dev/null || true)
-[ "${DL_STEPS:-0}" -eq 6 ] && pass "真实安装输出 6 个阶段标题（1/6 … 6/6）" \
+DL_STEPS=$(grep -cE '\([1-7]/7\)' "$DL_LOG" 2>/dev/null || true)
+[ "${DL_STEPS:-0}" -eq 7 ] && pass "真实安装输出 7 个阶段标题（1/7 … 7/7）" \
 	|| fail "阶段标题数量异常：${DL_STEPS:-0}"
 grep -q "已下载 .*B" "$DL_LOG" && pass "下载完成打印文件大小" || fail "未打印下载大小"
 grep -q "sha256 校验通过" "$DL_LOG" && pass "校验阶段有明确结论" || fail "校验阶段无结论"
@@ -258,11 +262,11 @@ else
 fi
 # 每个阶段都要有结论行（✓ 或 跳过），不能只打标题就没了
 DL_CONCLUSIONS=$(grep -cE '✓|– 跳过' "$DL_LOG" 2>/dev/null || true)
-[ "${DL_CONCLUSIONS:-0}" -ge 6 ] && pass "每个阶段都有 ✓/跳过 结论行" \
+[ "${DL_CONCLUSIONS:-0}" -ge 7 ] && pass "每个阶段都有 ✓/跳过 结论行" \
 	|| fail "结论行偏少：${DL_CONCLUSIONS:-0}"
 DRY_OUT="$BASE_DIR/progress-dry.log"
 run_install --dry-run --version "$VER" --base-url "$MOCK_BASE" --port 9103 > "$DRY_OUT" 2>&1
-grep -q "(1/6) 检查权限" "$DRY_OUT" && grep -q "(6/6) 健康检查" "$DRY_OUT" \
+grep -q "(1/7) 检查权限" "$DRY_OUT" && grep -q "(7/7) 接入本机" "$DRY_OUT" \
 	&& pass "dry-run 同样给出完整阶段序列" || fail "dry-run 阶段序列缺失"
 # 干跑不能撒谎：没改系统就不能说「已安装 / 已注册」
 if grep -qE "✓ 已安装|✓ 已注册" "$DRY_OUT"; then
@@ -303,7 +307,7 @@ DIRBIN_RC=$?
 grep -q "检测到同目录的 leadstack" "$DIRBIN_LOG" && grep -q "跳过下载" "$DIRBIN_LOG" \
 	&& pass "输出声明「检测到同目录…跳过下载」" \
 	|| fail "未声明同目录来源：$(grep -m1 '二进制来源' "$DIRBIN_LOG")"
-grep -q "(2/6) 获取控制端二进制（本地文件）" "$DIRBIN_LOG" \
+grep -q "(2/7) 获取控制端二进制（本地文件）" "$DIRBIN_LOG" \
 	&& pass "阶段 2 标题按来源显示「本地文件」" || fail "阶段 2 标题未按来源区分"
 grep -q "使用同目录二进制（跳过下载）" "$DIRBIN_LOG" \
 	&& pass "阶段 2 结论为「使用同目录二进制」" || fail "阶段 2 结论措辞不符"
@@ -373,6 +377,144 @@ else
 fi
 [ "$(sum_of "$LI_INSTALL/leadstack")" = "$BEFORE_ARC_SUM" ] \
 	&& pass "校验失败时未覆盖已安装二进制" || fail "校验失败仍覆盖了已装二进制"
+
+# ---------------------------------------------------------------- 12. 自动接入本机
+step "12. 自动接入本机（分支与初始密码）"
+# 用户的原话：「接入本机还要在客户端自己做，应该可以自动完成或者初始安装的时候自动安装」。
+# 所以安装脚本要自己把 agent 装上；这里先验证各条分支的判定与文案，真上线放到 13。
+AGENT_DRY="$BASE_DIR/agent-dry.log"
+run_install --dry-run --version "$VER" --base-url "$MOCK_BASE" --port 19516 > "$AGENT_DRY" 2>&1
+grep -q '(7/7) 接入本机' "$AGENT_DRY" \
+	&& pass "安装流程多出「7/7 接入本机」阶段" || fail "缺少 7/7 接入本机阶段"
+grep -q 'dry-run：只打印自动接入动作' "$AGENT_DRY" \
+	&& pass "dry-run 明确标注自动接入未真正执行" || fail "dry-run 未标注自动接入被跳过"
+
+AGENT_OPT="$BASE_DIR/agent-optout.log"
+# 带 --from-file：这两条只验第 7 阶段的判定，不该因为外网下载抖一下就整条失败
+run_install --no-service --no-local-agent --from-file bin/leadstack --port 19516 > "$AGENT_OPT" 2>&1
+grep -q '指定了 --no-local-agent' "$AGENT_OPT" \
+	&& pass "--no-local-agent 跳过自动接入并说明原因" || fail "--no-local-agent 未被识别"
+
+AGENT_NOSVC="$BASE_DIR/agent-noservice.log"
+run_install --no-service --from-file bin/leadstack --port 19516 > "$AGENT_NOSVC" 2>&1
+grep -q 'no-service 未注册服务，跳过自动接入' "$AGENT_NOSVC" \
+	&& pass "--no-service 时跳过自动接入（agent 需要服务托管）" || fail "--no-service 未跳过自动接入"
+
+# 初始密码：没指定就生成并写进环境文件——顺带治「装完密码就丢了」的老毛病
+GEN_DIR="$BASE_DIR/gen"
+GEN_BIN="$GEN_DIR/bin"; GEN_ENV="$GEN_DIR/etc"; GEN_DATA="$GEN_DIR/data"
+GEN_LOG="$GEN_DIR/gen.log"
+mkdir -p "$GEN_DIR"
+sh "$SCRIPT" --install-dir "$GEN_BIN" --env-dir "$GEN_ENV" --data-dir "$GEN_DATA" \
+	--no-service --port 19516 > "$GEN_LOG" 2>&1
+# 以环境文件为权威来源（比从日志里抠字符串稳），再反过来核对汇总打印的同一个密码
+GEN_PWD="$(sed -n 's/^LEADSTACK_ADMIN_PASSWORD=//p' "$GEN_ENV/leadstack.env" 2>/dev/null | head -n1)"
+[ -n "$GEN_PWD" ] \
+	&& pass "未指定 --admin-password 时生成了初始密码并写入环境文件" \
+	|| fail "没有生成初始密码（环境文件缺 LEADSTACK_ADMIN_PASSWORD）"
+[ "${#GEN_PWD}" -eq 20 ] \
+	&& pass "生成的初始密码为 20 位" || fail "生成的密码长度异常（${#GEN_PWD} 位）"
+grep -qF "初始管理员：admin / $GEN_PWD" "$GEN_LOG" \
+	&& pass "安装汇总打印了与之一致的管理员密码" \
+	|| fail "汇总没有打印生成的管理员密码"
+grep -qF "本次由脚本随机生成" "$GEN_LOG" \
+	&& pass "汇总说明了密码是本次生成的（并提示从环境文件删除）" \
+	|| fail "汇总未说明密码来源"
+GEN_PERM="$(stat -f '%Lp' "$GEN_ENV/leadstack.env" 2>/dev/null || stat -c '%a' "$GEN_ENV/leadstack.env" 2>/dev/null)"
+[ "$GEN_PERM" = "600" ] && pass "环境文件权限 0600（含明文密码）" || fail "环境文件权限是 ${GEN_PERM}，应为 0600"
+
+# 已有数据库（重复执行=升级）时不许凭空造密码：老密码不会因为环境变量变了而改变
+GEN_ENV2="$GEN_DIR/etc2"
+# --no-service 不会创建数据目录，这里显式建好再放一个库文件（幂等升级判据只看文件是否存在）
+mkdir -p "$GEN_DATA"
+: > "$GEN_DATA/leadstack.db"
+UP_LOG="$GEN_DIR/upgrade.log"
+sh "$SCRIPT" --install-dir "$GEN_BIN" --env-dir "$GEN_ENV2" --data-dir "$GEN_DATA" \
+	--no-service --port 19516 > "$UP_LOG" 2>&1
+if grep -q '本次由脚本随机生成' "$UP_LOG"; then
+	fail "已有安装（库已存在）时仍生成了新密码，会误导用户"
+else
+	pass "已有安装时不凭空生成密码"
+fi
+if [ -f "$GEN_ENV2/leadstack.env" ] && grep -q 'LEADSTACK_ADMIN_PASSWORD=' "$GEN_ENV2/leadstack.env"; then
+	fail "升级路径把生成的密码写进了环境文件"
+else
+	pass "升级路径不写入 ADMIN_PASSWORD（不覆盖既有账号）"
+fi
+
+# ---------------------------------------------------------------- 13. 容器内真跑
+step "13. 自动接入本机（容器内真跑：安装 → agent 在线）"
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+	# 必须放在仓库目录里：colima/Docker Desktop 只把用户目录（及工作目录）挂进容器，
+	# 放在 $TMPDIR（/var/folders/...）时容器看到的是空目录，表现为「--from-file 指定的文件不存在」。
+	LIN_DIR="$ROOT/bin/verify-linux"
+	mkdir -p "$LIN_DIR"
+	if GOOS=linux GOARCH="$ARCH" CGO_ENABLED=0 go build -o "$LIN_DIR/leadstack" ./cmd/leadstack 2>"$BASE_DIR/gobuild.log" \
+		&& GOOS=linux GOARCH="$ARCH" CGO_ENABLED=0 go build -o "$LIN_DIR/leadstack-agent" ./cmd/leadstack-agent 2>>"$BASE_DIR/gobuild.log"; then
+		pass "交叉编译出 linux/${ARCH} 控制端与 agent（容器里跑真二进制）"
+		AGENT_E2E_LOG="$BASE_DIR/agent-e2e.log"
+		docker run --rm --dns 8.8.8.8 \
+			-v "$ROOT":/src:ro \
+			-v "$LIN_DIR":/lin:ro \
+			debian:stable-slim \
+			sh -c '
+				# 网络抖动很常见：装不上就重试三次，别让一次 timeout 把整段跳过
+				for _try in 1 2 3; do
+					apt-get update -qq >/dev/null 2>&1
+					apt-get install -y -qq --no-install-recommends curl ca-certificates openssl passwd procps >/dev/null 2>&1 && break
+					sleep 2
+				done
+				if ! command -v curl >/dev/null 2>&1; then echo NO_CURL; exit 9; fi
+				export PATH=/src/scripts/testdata/fakebin:$PATH
+				: >/tmp/fake-systemctl.log
+				sh /src/deploy/install-control.sh \
+					--port 19555 \
+					--data-dir /tmp/ls/data --env-dir /tmp/ls/env --install-dir /tmp/ls/bin \
+					--from-file /lin/leadstack --agent-from-file /lin/leadstack-agent \
+					--admin-password E2ePassw0rdFixed || exit 1
+				echo "=== 服务注册 ==="
+				grep "leadstack-agent" /tmp/fake-systemctl.log || true
+				echo "=== agent 环境文件 ==="
+				stat -c "%a %n" /tmp/ls/env/agent.env 2>/dev/null || echo "缺 agent.env"
+				echo "=== API 核对 ==="
+				TOK=$(curl -fsS -X POST http://127.0.0.1:19555/api/v1/auth/login \
+					-H "Content-Type: application/json" \
+					-d "{\"username\":\"admin\",\"password\":\"E2ePassw0rdFixed\"}" \
+					| sed -n "s/.*\"token\":\"\([^\"]*\)\".*/\1/p")
+				[ -n "$TOK" ] && echo "登录成功" || { echo "登录失败"; exit 1; }
+				curl -fsS -H "Authorization: Bearer $TOK" http://127.0.0.1:19555/api/v1/servers
+				echo
+				systemctl stop leadstack.service >/dev/null 2>&1 || true
+				systemctl stop leadstack-agent.service >/dev/null 2>&1 || true
+			' > "$AGENT_E2E_LOG" 2>&1
+		AGENT_E2E_RC=$?
+		if [ "$AGENT_E2E_RC" -eq 9 ] || grep -q NO_CURL "$AGENT_E2E_LOG"; then
+			skip "容器内装不上 curl（网络受限），跳过「安装 → agent 上线」断言"
+		elif [ "$AGENT_E2E_RC" -ne 0 ]; then
+			fail "容器内一键安装失败（rc=${AGENT_E2E_RC}）：$(tail -3 "$AGENT_E2E_LOG" | tr '\n' ' ')"
+		else
+			pass "容器内一键安装退出码 0（含自动接入本机）"
+			grep -q '本机 agent 已安装并注册 systemd 服务' "$AGENT_E2E_LOG" \
+				&& pass "安装结论：agent 已注册系统服务" || fail "安装结论里没有 agent 注册"
+			grep -q '本机接入：已自动完成' "$AGENT_E2E_LOG" \
+				&& pass "汇总写明本机接入已自动完成" || fail "汇总缺「本机接入已完成」"
+			grep -q 'systemctl enable --now leadstack-agent.service' "$AGENT_E2E_LOG" \
+				&& pass "确实为 leadstack-agent 注册了服务" || fail "没有对 leadstack-agent 注册服务"
+			grep -q '600 /tmp/ls/env/agent.env' "$AGENT_E2E_LOG" \
+				&& pass "agent 环境文件（含令牌）权限 0600" || fail "agent 环境文件权限不是 0600"
+			grep -q '登录成功' "$AGENT_E2E_LOG" \
+				&& pass "安装时生成/指定的管理员密码可用于登录" || fail "管理员密码无法登录"
+			grep -q '"mode":"agent"' "$AGENT_E2E_LOG" \
+				&& pass "本机服务器以 agent 模式纳管" || fail "本机服务器没有建出来"
+			grep -q '"status":"online"' "$AGENT_E2E_LOG" \
+				&& pass "本机 agent 状态 online（安装完就在线）" || fail "本机 agent 未上线"
+		fi
+	else
+		fail "交叉编译 linux 二进制失败：$(tail -3 "$BASE_DIR/gobuild.log" | tr '\n' ' ')"
+	fi
+else
+	skip "本机没有可用的 docker，跳过「安装 → agent 上线」真机断言"
+fi
 
 # ---------------------------------------------------------------- 汇总
 step "验收结果"

@@ -47,6 +47,8 @@ DEFAULT_BASE_URL="https://github.com/${REPO}/releases/download"
 DEFAULT_RELEASE_API="https://api.github.com/repos/${REPO}/releases/latest"
 DEFAULT_INSTALL_DIR="/usr/local/bin"
 LAUNCHD_LABEL="com.leadstack.control"
+# 数据库文件名（internal/config/config.go 的 DefaultDBFileName），用于判断「是否已有安装」
+DB_FILE_NAME="leadstack.db"
 
 log()  { printf '[leadstack-install] %s\n' "$*"; }
 warn() { printf '[leadstack-install] 警告：%s\n' "$*" >&2; }
@@ -126,6 +128,8 @@ LeadStack 控制端一键安装
   --install-dir DIR   二进制目录，默认 /usr/local/bin
   --env-dir DIR       环境文件目录，默认 /etc/leadstack
   --user NAME         服务运行用户（Linux），默认 leadstack
+  --no-local-agent    不自动接入本机（默认会顺带把 agent 装到本机并纳管，免去手动跑接入命令）
+  --agent-from-file PATH  本机 agent 用本地二进制安装（离线 / 自测）
   --no-service        只安装二进制，不注册系统服务
   --dry-run           只打印动作，不改动系统
   --uninstall         卸载（保留数据目录）
@@ -172,9 +176,14 @@ PUBLIC_URL="${LEADSTACK_PUBLIC_URL:-}"
 TRUSTED_PROXIES="${LEADSTACK_TRUSTED_PROXIES:-}"
 SERVICE_USER="leadstack"
 NO_SERVICE=0
+NO_LOCAL_AGENT=0
+AGENT_FROM_FILE="${LEADSTACK_AGENT_BINARY:-}"
+AGENT_BASE_URL="${LEADSTACK_AGENT_BASE_URL:-}"
 DRY_RUN=0
 UNINSTALL=0
 PURGE=0
+# 自动生成的初始管理员密码（必须在写环境文件之前就定下来，见 ensure_admin_password）
+ADMIN_PASSWORD_GENERATED=0
 
 need_value() {
 	[ "$2" -ge 1 ] || die "选项 $1 缺少参数值（用 --help 查看用法）"
@@ -197,6 +206,8 @@ while [ $# -gt 0 ]; do
 		--env-dir)         need_value "$_opt" $(($# - 1)); ENV_DIR_OVERRIDE=$2; shift 2 ;;
 		--user)            need_value "$_opt" $(($# - 1)); SERVICE_USER=$2; shift 2 ;;
 		--no-service)      NO_SERVICE=1; shift ;;
+		--no-local-agent)  NO_LOCAL_AGENT=1; shift ;;
+		--agent-from-file) need_value "$_opt" $(($# - 1)); AGENT_FROM_FILE=$2; shift 2 ;;
 		--dry-run)         DRY_RUN=1; shift ;;
 		--uninstall)       UNINSTALL=1; shift ;;
 		--purge)           PURGE=1; shift ;;
@@ -936,6 +947,200 @@ health_check() {
 }
 
 # ---------------------------------------------------------------------------
+# 自动接入本机：装完控制端，顺手把 agent 装到本机并纳管
+#
+# 为什么要有这一步：控制台里「接入本机」会给你一条 curl 命令，但那条命令仍然要人手
+# 粘贴执行——对「我就这一台机器，装上就能用」的人来说这就是多余的一步。既然安装脚本
+# 本身已经以 root 跑、已经在为本机注册系统服务，那就把 agent 也在这里装掉。
+#
+# 做法是复用官方 agent 安装脚本（控制端自带 /install.sh），而不是在这里再写一份
+# systemd/launchd 逻辑：一处维护、行为一致、以后改 agent 服务单元不会两份漂移。
+# ---------------------------------------------------------------------------
+
+gen_password() {
+	# 20 位字母数字：先 openssl，再 dd+/dev/urandom，最后时间戳兜底。
+	# 注意不能写成 `tr -dc … </dev/urandom | cut -c1-20`：cut 要等 EOF 才输出，
+	# 而 /dev/urandom 永无 EOF —— 在没装 openssl 的机器（debian-slim、部分最小镜像）
+	# 上会直接把安装卡死。dd 限定字节数，输入有界才不会挂。
+	if command -v openssl >/dev/null 2>&1; then
+		openssl rand -base64 32 2>/dev/null | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 20
+		return 0
+	fi
+	if [ -r /dev/urandom ]; then
+		dd if=/dev/urandom bs=256 count=1 2>/dev/null | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 20
+		return 0
+	fi
+	printf 'LS%s%s00' "$(date +%s)" "$$"
+}
+
+ensure_admin_password() {
+	# 自动接入要用管理员身份登录 API，所以密码必须「已知」：用户没指定就生成一个。
+	# 顺带解决一个老痛点——以前随机密码只在首次启动日志里打印一次，装完就找不到了。
+	[ -n "$ADMIN_PASSWORD" ] && return 0
+	# dry-run 不落任何文件，生成密码只会让汇总说谎
+	[ "$DRY_RUN" -eq 1 ] && return 0
+	# 已有数据库（重复执行=升级）时不要凭空造密码：老管理员的密码不会因为环境变量变了而改变，
+	# 生成一个写进去只会让人以为「密码是这个」却登不进去。
+	if [ -f "${DATA_DIR}/${DB_FILE_NAME}" ]; then
+		return 0
+	fi
+	ADMIN_PASSWORD=$(gen_password)
+	[ -n "$ADMIN_PASSWORD" ] || die "无法生成初始管理员密码，请用 --admin-password 指定"
+	ADMIN_PASSWORD_GENERATED=1
+}
+
+json_escape() { # 把值塞进 JSON 字符串字面量（密码可能含引号/反斜杠）
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+json_str() { # <json> <field>：取第一个出现的字符串字段（令牌/UUID 都无转义字符，够用）
+	printf '%s' "$1" | sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+api_base() { # 本机回环地址（0.0.0.0/:: 也一定在 127.0.0.1 上可达）
+	_p=$(listen_port "$LISTEN")
+	[ -n "$_p" ] || return 1
+	printf 'http://127.0.0.1:%s' "$_p"
+}
+
+api_get() { # <path> <jwt>
+	curl -fsS --max-time 10 -H "Authorization: Bearer $2" "$(api_base)$1" 2>/dev/null
+}
+
+api_post() { # <path> <json-body> [jwt]
+	if [ -n "${3:-}" ]; then
+		curl -fsS --max-time 20 -X POST -H 'Content-Type: application/json' \
+			-H "Authorization: Bearer $3" -d "$2" "$(api_base)$1" 2>/dev/null
+	else
+		curl -fsS --max-time 20 -X POST -H 'Content-Type: application/json' \
+			-d "$2" "$(api_base)$1" 2>/dev/null
+	fi
+}
+
+agent_service_active() {
+	case "$OS" in
+		linux)
+			command -v systemctl >/dev/null 2>&1 || return 1
+			systemctl is-active --quiet leadstack-agent 2>/dev/null
+			;;
+		darwin)
+			run_priv launchctl print "system/com.leadstack.agent" >/dev/null 2>&1
+			;;
+		*) return 1 ;;
+	esac
+}
+
+# find_local_agent_binary 找「同目录的 agent 二进制」：离线场景下控制端与 agent 一起拷过来时免下载。
+find_local_agent_binary() {
+	[ -n "$AGENT_FROM_FILE" ] && { printf '%s' "$AGENT_FROM_FILE"; return 0; }
+	for _d in "$LOCAL_DIR" "$(pwd)"; do
+		[ -n "$_d" ] || continue
+		if [ -f "${_d}/leadstack-agent" ] && [ -x "${_d}/leadstack-agent" ]; then
+			printf '%s' "${_d}/leadstack-agent"
+			return 0
+		fi
+	done
+	return 0
+}
+
+# local_agent_server_id 找出「已存在的本机服务器」id，用于重装时不重复建台。
+# 返回空表示还没有本机服务器。
+local_agent_server_id() { # <jwt>
+	_list=$(api_get "/api/v1/servers" "$1") || return 0
+	# 把数组按对象切开，只留 host=127.0.0.1 且 mode=agent 的那一条
+	_frag=$(printf '%s' "$_list" | sed 's/},{/}\n{/g' | grep '"host":"127.0.0.1"' | grep '"mode":"agent"' | head -n1)
+	[ -n "$_frag" ] || return 0
+	json_str "$_frag" id
+}
+
+wait_local_agent_online() { # <jwt> <seconds>
+	_secs=$2
+	_i=0
+	while [ "$_i" -lt "$_secs" ]; do
+		_srv=$(api_get "/api/v1/servers" "$1") || _srv=""
+		if [ -n "$_srv" ] && printf '%s' "$_srv" | sed 's/},{/}\n{/g' \
+			| grep '"host":"127.0.0.1"' | grep -q '"status":"online"'; then
+			return 0
+		fi
+		_i=$((_i + 1))
+		sleep 1
+	done
+	return 1
+}
+
+install_local_agent() {
+	LOCAL_AGENT_STATE="skipped"
+	[ "$NO_LOCAL_AGENT" -eq 1 ] && { LOCAL_AGENT_STATE="opted-out"; return 0; }
+	[ "$NO_SERVICE" -eq 1 ] && { LOCAL_AGENT_STATE="no-service"; return 0; }
+	# dry-run 必须排在健康检查之前：dry-run 不跑探活，HEALTH_OK 恒为 0，
+	# 放后面会让 dry-run 显示成「跳过自动接入」而不是「只打印动作」。
+	[ "$DRY_RUN" -eq 1 ] && { LOCAL_AGENT_STATE="dry-run"; return 0; }
+	[ "${HEALTH_OK:-0}" -eq 1 ] || return 0
+	command -v curl >/dev/null 2>&1 || return 0
+
+	# 已经在跑就不折腾（重复执行安装脚本时最常见的情形）
+	if agent_service_active; then
+		LOCAL_AGENT_STATE="already-running"
+		return 0
+	fi
+	if [ -z "$ADMIN_PASSWORD" ]; then
+		LOCAL_AGENT_STATE="no-credentials"
+		return 0
+	fi
+
+	# 1) 登录
+	_login=$(api_post "/api/v1/auth/login" "{\"username\":\"admin\",\"password\":\"$(json_escape "$ADMIN_PASSWORD")\"}") || _login=""
+	_jwt=$(json_str "$_login" token)
+	if [ -z "$_jwt" ]; then
+		LOCAL_AGENT_STATE="login-failed"
+		return 0
+	fi
+
+	# 2) 拿令牌与服务器：已有本机服务器就给它补一个令牌，没有才新建（避免重复建台）
+	_sid=$(local_agent_server_id "$_jwt")
+	if [ -n "$_sid" ]; then
+		_tok_resp=$(api_post "/api/v1/enroll-tokens" \
+			"{\"note\":\"本机接入（安装脚本）\",\"ttl_s\":3600,\"server_id\":\"$(json_escape "$_sid")\"}" "$_jwt") || _tok_resp=""
+	else
+		_hostname=$(hostname 2>/dev/null || echo localhost)
+		_tok_resp=$(api_post "/api/v1/servers/local" \
+			"{\"name\":\"本机（$(json_escape "$_hostname")）\",\"ttl_s\":3600}" "$_jwt") || _tok_resp=""
+	fi
+	_tok=$(json_str "$_tok_resp" token)
+	if [ -z "$_tok" ]; then
+		LOCAL_AGENT_STATE="token-failed"
+		return 0
+	fi
+
+	# 3) 用官方 agent 安装脚本装服务（它自己处理 systemd/launchd、环境文件 0600、幂等重装）
+	# 目录跟控制端保持一致：自定义 --install-dir/--env-dir 的人不会希望 agent 偷偷落到默认位置。
+	_agent_args="--server $(api_base) --token ${_tok} --install-dir ${INSTALL_DIR} --env-dir ${ENV_DIR}"
+	_agent_bin=$(find_local_agent_binary)
+	if [ -n "$_agent_bin" ]; then
+		_agent_args="${_agent_args} --from-file ${_agent_bin}"
+	else
+		[ -n "$AGENT_BASE_URL" ] && _agent_args="${_agent_args} --base-url ${AGENT_BASE_URL}"
+		# 控制端版本已知且像 semver 时锁定同一版本，避免 agent 脚本再去 GitHub 解析 latest
+		# （受限网络里这一步会直接失败，而控制端本来就是从这个版本装起来的）
+		_cver=$(json_str "$(api_get "/api/v1/system/info" "$_jwt")" version)
+		case "$_cver" in
+			[0-9]*.[0-9]*.[0-9]*) _agent_args="${_agent_args} --version ${_cver}" ;;
+		esac
+	fi
+	if ! curl -fsSL --max-time 30 "$(api_base)/install.sh" 2>/dev/null | sh -s -- $_agent_args; then
+		LOCAL_AGENT_STATE="install-failed"
+		return 0
+	fi
+
+	# 4) 等 agent 连上来（心跳 20s、握手立刻），最多 45 秒
+	if wait_local_agent_online "$_jwt" 45; then
+		LOCAL_AGENT_STATE="online"
+	else
+		LOCAL_AGENT_STATE="not-yet-online"
+	fi
+}
+
+# ---------------------------------------------------------------------------
 # 卸载
 # ---------------------------------------------------------------------------
 uninstall_all() {
@@ -1011,11 +1216,13 @@ do_uninstall() {
 
 do_install() {
 	STEP_N=0
-	STEP_TOTAL=6
+	STEP_TOTAL=7
 	STEP_ALL_T0=$(date +%s)
 
-	# 同目录探测要赶在阶段 1 之前：它决定「需不需要下载工具」与 2/6 的来源措辞
+	# 同目录探测要赶在阶段 1 之前：它决定「需不需要下载工具」与 2/7 的来源措辞
 	detect_local_source
+	# 初始管理员密码要在写环境文件之前定下来（阶段 5 才写），否则自动接入拿不到凭据
+	ensure_admin_password
 
 	# ---- 1/6 环境 ----
 	step "检查权限、平台与下载工具"
@@ -1118,6 +1325,29 @@ do_install() {
 		fi
 	fi
 
+	# ---- 7/7 自动接入本机 ----
+	step "接入本机（自动安装 agent）"
+	install_local_agent
+	case "$LOCAL_AGENT_STATE" in
+		online)
+			if [ "$OS" = "darwin" ]; then
+				step_ok "本机 agent 已安装并注册 launchd 任务 com.leadstack.agent（已上线）"
+			else
+				step_ok "本机 agent 已安装并注册 systemd 服务 leadstack-agent（已上线）"
+			fi
+			;;
+		already-running) step_skip "本机 agent 已在运行，无需重复接入" ;;
+		opted-out)       step_skip "指定了 --no-local-agent：不自动接入本机" ;;
+		no-service)      step_skip "--no-service 未注册服务，跳过自动接入（服务没人托管）" ;;
+		dry-run)         step_skip "dry-run：只打印自动接入动作" ;;
+		no-credentials)  step_skip "已有安装且未提供 --admin-password，跳过自动接入（密码未知，无法登录 API）" ;;
+		login-failed)    step_skip "无法用 admin 登录（密码不是这个实例的），跳过自动接入" ;;
+		token-failed)    step_skip "创建接入令牌失败，跳过自动接入" ;;
+		install-failed)  step_skip "agent 安装失败，跳过自动接入" ;;
+		not-yet-online)  step_skip "agent 已安装但 45 秒内未上线，稍后刷新控制台查看" ;;
+		*)               step_skip "跳过自动接入" ;;
+	esac
+
 	# ---- 汇总 ----
 	_total=$(( $(date +%s) - STEP_ALL_T0 ))
 	_p=$(listen_port "$LISTEN")
@@ -1126,12 +1356,21 @@ do_install() {
 	log "  环境文件：${ENV_FILE}"
 	if [ "$NO_SERVICE" -eq 0 ]; then log "  服务单元：${UNIT_PATH}"; fi
 	log "  访问地址：http://127.0.0.1:${_p}（监听 ${LISTEN}）"
+	case "${LOCAL_AGENT_STATE:-}" in
+		online) log "  本机接入：已自动完成（这台上已装 agent，控制台「服务器」里能看到本机在线）" ;;
+		already-running) log "  本机接入：agent 已在运行" ;;
+		no-credentials|login-failed) log "  本机接入：未自动完成。登录控制台后点「接入本机」复制命令执行即可" ;;
+		install-failed|not-yet-online|token-failed) log "  本机接入：未完成（${LOCAL_AGENT_STATE}）。日志排查：journalctl -u leadstack-agent -n 50" ;;
+	esac
 	case "$LISTEN" in
 		127.0.0.1:*|localhost:*|'[::1]':*)
 			log "  提示：当前只监听本机。要让其他机器访问，用 --bind 0.0.0.0（并建议前置 TLS 反代）"
 			;;
 	esac
-	if [ -n "$ADMIN_PASSWORD" ]; then
+	if [ "$ADMIN_PASSWORD_GENERATED" -eq 1 ]; then
+		log "  初始管理员：admin / ${ADMIN_PASSWORD}"
+		log "    （本次由脚本随机生成，已写入 ${ENV_FILE}；登录后请改密并从该文件删除这一行）"
+	elif [ -n "$ADMIN_PASSWORD" ]; then
 		log "  初始管理员：admin / 指定密码（已写入环境文件；登录后请改密并从文件删除）"
 	else
 		if [ "$OS" = "linux" ] && [ "$NO_SERVICE" -eq 0 ]; then

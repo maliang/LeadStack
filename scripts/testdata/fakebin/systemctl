@@ -1,0 +1,93 @@
+#!/bin/sh
+# 测试专用 systemctl 替身（只覆盖 LeadStack 安装脚本用到的子命令）。
+# 作用：在没有 systemd 的容器里真的把服务拉起来，从而验证「安装 → agent 上线」这条链路。
+UNIT_DIR=/etc/systemd/system
+LOG=/tmp/fake-systemctl.log
+printf 'systemctl %s\n' "$*" >>"$LOG"
+
+norm_unit() {
+	case "$1" in
+		*.service) printf '%s' "$1" ;;
+		*)         printf '%s.service' "$1" ;;
+	esac
+}
+unit_path() { printf '%s/%s' "$UNIT_DIR" "$(norm_unit "$1")"; }
+pid_file() { printf '/run/fake-%s.pid' "$(norm_unit "$1")"; }
+
+running() {
+	_pf=$(pid_file "$1")
+	[ -f "$_pf" ] && kill -0 "$(cat "$_pf")" 2>/dev/null
+}
+
+start_unit() {
+	_u=$(unit_path "$1")
+	[ -f "$_u" ] || { printf 'fake-systemctl: 没有单元文件 %s\n' "$_u" >&2; return 1; }
+	running "$1" && return 0
+	_exec=$(sed -n 's/^ExecStart=//p' "$_u" | head -n1)
+	_env=$(sed -n 's/^EnvironmentFile=-*//p' "$_u" | head -n1)
+	_out="/tmp/fake-$(basename "$_u").log"
+	(
+		set -a
+		# shellcheck disable=SC1090
+		[ -n "$_env" ] && [ -f "$_env" ] && . "$_env"
+		set +a
+		eval "exec $_exec"
+	) >"$_out" 2>&1 &
+	printf '%s' "$!" >"$(pid_file "$1")"
+	sleep 1
+}
+
+stop_unit() {
+	_pf=$(pid_file "$1")
+	if [ -f "$_pf" ]; then
+		_pid=$(cat "$_pf")
+		kill "$_pid" 2>/dev/null || true
+		# 等服务真的退出（脚本随后会立刻检查是否已停）
+		_i=0
+		while [ "$_i" -lt 20 ] && kill -0 "$_pid" 2>/dev/null; do
+			sleep 0.2
+			_i=$((_i + 1))
+		done
+		kill -9 "$_pid" 2>/dev/null || true
+		rm -f "$_pf"
+	fi
+	return 0
+}
+
+_cmd=$1
+[ $# -gt 0 ] && shift
+case "$_cmd" in
+	daemon-reload|daemon-reexec) exit 0 ;;
+	enable)
+		# 参数顺序是 `enable --now x.service`：先收集目标与 --now，再动作
+		_now=0
+		_unit=""
+		for _a in "$@"; do
+			case "$_a" in
+				--now) _now=1 ;;
+				-*)    ;;
+				*)     _unit=$_a ;;
+			esac
+		done
+		[ -n "$_unit" ] || exit 0
+		if [ "$_now" -eq 1 ]; then start_unit "$_unit" || exit 1; fi
+		exit 0
+		;;
+	start)   start_unit "$1" ;;
+	restart) stop_unit "$1"; start_unit "$1" ;;
+	stop|disable)
+		for _a in "$@"; do
+			case "$_a" in -*) ;; *) stop_unit "$_a" ;; esac
+		done
+		exit 0
+		;;
+	reset-failed) exit 0 ;;
+	is-active)
+		[ "$1" = "--quiet" ] && shift
+		running "$1" && { [ "$1" = "--quiet" ] || echo active; exit 0; }
+		exit 3
+		;;
+	is-enabled) echo enabled; exit 0 ;;
+	status) echo "fake status: $*"; exit 0 ;;
+	*) exit 0 ;;
+esac
