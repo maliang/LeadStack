@@ -297,7 +297,7 @@ grep -q 'mysql-data-bytes' "$TARGET_B/help/docker-compose/mysql/data/ibdata1" &&
 [ ! -f "$TARGET_B/code/app/controller.php" ] && pass "旧版本残留文件被清理（rsync --delete 生效）" || fail "旧文件残留"
 
 # ---------------------------------------------------------------- 发布预览与预设
-step "5. 发布预览与内置预设"
+step "4. 发布预览与内置预设"
 PREVIEW="$(api POST /api/v1/releases/preview "$(jq -n --arg a "$APP_A" --arg t "$TPL_ID" --arg art "$ART2" --arg srv "$SRV_ID" \
   '{app_id:$a,template_id:$t,version:"1.0.9",artifact_id:$art,server_ids:[$srv]}')" "$TOKEN")"
 PREVIEW_ROOT="$(sget "$PREVIEW" '.data.servers[0].plan_root')"
