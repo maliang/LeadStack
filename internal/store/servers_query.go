@@ -216,3 +216,26 @@ func (s *Store) UpdateServerSystemInfo(ctx context.Context, id, osName, arch, ke
 func (s *Store) ListServersByMode(ctx context.Context, mode string) ([]Server, error) {
 	return s.ListServersFiltered(ctx, ServerFilter{Mode: mode}, NowMS())
 }
+
+// FindLocalAgentServer 返回「本机 agent 服务器」：mode=agent 且 host 为回环地址。
+//
+// 幂等改造前每次接入都会新建一台，历史库可能有多条重复；选择顺序为
+// 有效令牌（未过期）> 有过心跳（last_seen_at 非空）> 最早创建，尽量复用真正在用的那台。
+// 不存在返回 ErrNotFound（调用方据此决定是否新建）。
+func (s *Store) FindLocalAgentServer(ctx context.Context, nowMS int64) (*Server, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+serverColumns+` FROM servers
+		  WHERE mode = ? AND host IN ('127.0.0.1', 'localhost', '::1')
+		  ORDER BY
+		    CASE WHEN EXISTS (SELECT 1 FROM enroll_tokens t
+		                       WHERE t.server_id = servers.id AND t.expires_at > ?)
+		         THEN 0 ELSE 1 END,
+		    CASE WHEN last_seen_at IS NOT NULL THEN 0 ELSE 1 END,
+		    created_at ASC, id ASC
+		  LIMIT 1`, ModeAgent, nowMS)
+	srv, err := scanServer(row)
+	if err != nil {
+		return nil, err
+	}
+	return srv, nil
+}

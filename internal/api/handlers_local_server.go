@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,15 +14,18 @@ import (
 )
 
 // localServerResponse 是「接入本机」的结果：服务器 + 一次性令牌 + 安装命令。
+// Created 区分「新建」与「复用已有本机服务器」：重放同一请求时 created=false，server.id 不变。
 type localServerResponse struct {
 	Server    serverPayload `json:"server"`
 	Token     string        `json:"token"`
 	ExpiresAt int64         `json:"expires_at"`
 	Command   string        `json:"command"`
+	Created   bool          `json:"created"`
 }
 
 // handleCreateLocalServer 处理 POST /api/v1/servers/local：
-// 创建一台「本机」服务器（mode=agent, host=127.0.0.1）并返回可直接粘贴执行的 agent 安装命令。
+// 接入本机：复用已有的本机 agent 服务器（mode=agent, host=127.0.0.1），只重新签发绑定它的令牌，
+// 并返回可直接粘贴执行的 agent 安装命令。重放同一请求不会新建第二台服务器。
 //
 // 为什么走 agent 而不是 SSH：本机部署最怕两件事——给控制端开 sshd、以及 SSH 轮询拿不到实时状态。
 // agent 常驻本机后，状态/指标是推送的（心跳 20s、指标 15s、离线阈值 45s），部署任务也走长连下发。
@@ -40,6 +44,21 @@ func (a *API) handleCreateLocalServer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 先校验后落盘：非法 ttl / 非法 server_url 必须在任何写入之前被拒。
+	ttl := req.TTLS
+	if ttl <= 0 {
+		ttl = defaultEnrollTTLS
+	}
+	if ttl < 60 || ttl > maxEnrollTTLS {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, fmt.Sprintf("ttl_s 必须在 60-%d 秒之间", maxEnrollTTLS))
+		return
+	}
+	base, err := a.localServerURL(r, req.ServerURL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+		return
+	}
+
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		if host, herr := os.Hostname(); herr == nil && strings.TrimSpace(host) != "" {
@@ -50,28 +69,35 @@ func (a *API) handleCreateLocalServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nowMS := a.nowMS()
-	srv := &store.Server{
-		ID:        uuid.NewString(),
-		Name:      name,
-		Host:      "127.0.0.1",
-		Port:      0, // agent 模式不用于连入
-		Mode:      store.ModeAgent,
-		Status:    "unknown",
-		CreatedAt: nowMS,
-	}
-	if err := a.st.CreateServer(r.Context(), srv); err != nil {
+	// 查找或创建必须串行：并发两次接入若各建一台，本机就会在列表里出现两条。
+	a.localServerMu.Lock()
+	defer a.localServerMu.Unlock()
+
+	srv, err := a.st.FindLocalAgentServer(r.Context(), nowMS)
+	created := false
+	switch {
+	case err == nil:
+		// 复用已有本机服务器：保留原 id/名称/分组，只重新签发绑定该服务器的令牌。
+	case errors.Is(err, store.ErrNotFound):
+		srv = &store.Server{
+			ID:        uuid.NewString(),
+			Name:      name,
+			Host:      "127.0.0.1",
+			Port:      0, // agent 模式不用于连入
+			Mode:      store.ModeAgent,
+			Status:    "unknown",
+			CreatedAt: nowMS,
+		}
+		if err := a.st.CreateServer(r.Context(), srv); err != nil {
+			a.writeStoreError(w, r, err)
+			return
+		}
+		created = true
+	default:
 		a.writeStoreError(w, r, err)
 		return
 	}
 
-	ttl := req.TTLS
-	if ttl <= 0 {
-		ttl = defaultEnrollTTLS
-	}
-	if ttl < 60 || ttl > maxEnrollTTLS {
-		writeError(w, http.StatusBadRequest, codeInvalidArgument, fmt.Sprintf("ttl_s 必须在 60-%d 秒之间", maxEnrollTTLS))
-		return
-	}
 	plain, err := newEnrollToken()
 	if err != nil {
 		a.internalError(w, r, err)
@@ -89,12 +115,6 @@ func (a *API) handleCreateLocalServer(w http.ResponseWriter, r *http.Request) {
 		a.writeStoreError(w, r, err)
 		return
 	}
-
-	base, err := a.localServerURL(r, req.ServerURL)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
-		return
-	}
 	command := fmt.Sprintf("curl -fsSL '%s/install.sh' | sh -s -- --server '%s' --token '%s'", base, base, plain)
 
 	payload := toServerPayload(*srv, nowMS, nil, nil)
@@ -106,12 +126,17 @@ func (a *API) handleCreateLocalServer(w http.ResponseWriter, r *http.Request) {
 		payload.GroupNames = []string{}
 	}
 
-	a.logger.Info("创建本机服务器", "server_id", srv.ID, "name", srv.Name, "token_id", token.ID)
-	writeData(w, http.StatusCreated, localServerResponse{
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	a.logger.Info("接入本机服务器", "server_id", srv.ID, "name", srv.Name, "token_id", token.ID, "created", created)
+	writeData(w, status, localServerResponse{
 		Server:    payload,
 		Token:     plain,
 		ExpiresAt: token.ExpiresAt,
 		Command:   command,
+		Created:   created,
 	})
 }
 

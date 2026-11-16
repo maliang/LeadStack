@@ -101,6 +101,9 @@ type API struct {
 	fallbackReason string
 	termTickets    sync.Map // ticket → *terminalTicket
 	agentTerms     sync.Map // sessionID → *agentTermSession
+	// localServerMu 串行化「本机服务器」的查找或创建：并发两次接入必须复用同一台，
+	// 否则会各建一台本机 agent 服务器（控制端单进程 + SQLite，进程内锁足够）。
+	localServerMu sync.Mutex
 	// backupWake 用于「设置变更后立即重排定时备份」，容量 1 的非阻塞信号。
 	backupWake chan struct{}
 	// authzCache / authzGen 缓存角色权限与资源范围（契约 §52.4），

@@ -37,7 +37,9 @@ export function LocalServerDialog({ open, onClose, onChanged }: LocalServerDialo
     try {
       const created = await api.createLocalServer()
       setResult(created)
-      if (created.expires_at != null && Date.now() > created.expires_at) {
+      if (created.server.status === 'online') {
+        setState('online')
+      } else if (created.expires_at != null && Date.now() > created.expires_at) {
         setState('expired')
       }
       onChanged()
@@ -137,10 +139,20 @@ export function LocalServerDialog({ open, onClose, onChanged }: LocalServerDialo
                 <ServerIcon className="h-4 w-4" />
               </span>
               <span className="font-medium">{result.server.name}</span>
+              {result.created ? null : (
+                <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
+                  <CheckIcon className="h-3 w-3" />
+                  {t('localServer.reused')}
+                </span>
+              )}
               <span className="font-mono text-xs text-slate-400 dark:text-slate-500">
                 {result.server.host} · agent
               </span>
             </div>
+
+            {result.created ? null : (
+              <p className="text-xs text-slate-500 dark:text-slate-400">{t('localServer.reusedHint')}</p>
+            )}
 
             <div>
               <div className="flex items-center justify-between gap-2">

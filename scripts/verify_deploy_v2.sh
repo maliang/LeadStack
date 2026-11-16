@@ -143,7 +143,7 @@ SRV_BODY="$(jq -n --argjson port "$SPORT" --arg cid "$CRED_ID" \
   '{name:"v2-node",host:"127.0.0.1",port:$port,mode:"ssh",credential_id:$cid}')"
 SRV_RESP="$(api POST /api/v1/servers "$SRV_BODY" "$TOKEN")"
 SRV_ID="$(sget "$SRV_RESP" '.data.id')"
-[ -n "$SRV_ID" ] && pass "目标服务器已创建" || { fail "创建服务器失败：$SRV_RESP（cred=$CRED_ID port=$SPORT）"; exit 1; }
+[ -n "$SRV_ID" ] && pass "目标服务器已创建" || { fail "创建服务器失败：${SRV_RESP}（cred=${CRED_ID} port=${SPORT}）"; exit 1; }
 
 make_artifact() { # <name> <dir-to-pack>
   local name="$1" dir="$2"
@@ -310,7 +310,7 @@ printf '%s' "$PREVIEW" | jq -e '.data.servers[0].notes | type == "array"' >/dev/
 BEFORE_COUNT="$(api GET "/api/v1/releases?limit=100" "" "$TOKEN" | jq -r '.data | length')"
 NONE="$(api POST /api/v1/releases/preview "$(jq -n --arg a "$APP_A" --arg t "$TPL_ID" --arg srv "$SRV_ID" '{app_id:$a,template_id:$t,version:"1.0.9",server_ids:[$srv]}')" "$TOKEN")"
 AFTER_COUNT="$(api GET "/api/v1/releases?limit=100" "" "$TOKEN" | jq -r '.data | length')"
-[ "$BEFORE_COUNT" = "$AFTER_COUNT" ] && pass "预览不会创建发布记录（只读）" || fail "预览产生了发布记录（$BEFORE_COUNT → $AFTER_COUNT）"
+[ "$BEFORE_COUNT" = "$AFTER_COUNT" ] && pass "预览不会创建发布记录（只读）" || fail "预览产生了发布记录（${BEFORE_COUNT} → ${AFTER_COUNT}）"
 
 PRESETS="$(api GET /api/v1/deploy/presets "" "$TOKEN")"
 PRESET_COUNT="$(printf '%s' "$PRESETS" | jq -r '.data | length' 2>/dev/null)"
@@ -321,10 +321,21 @@ printf '%s' "$NONE" | jq -e '.data.servers[0].notes | join(" ") | test("制品")
   && pass "inplace 缺制品时预览给出明确提示（不静默）" || fail "缺制品提示不明确"
 
 # ---------------------------------------------------------------- 本机接入
-step "5. 本机接入（agent 一键命令）"
-LOCAL="$(api POST /api/v1/servers/local '{"name":"本机-e2e","ttl_s":600}' "$TOKEN")"
+step "5. 本机接入（agent 一键命令，幂等）"
+# 一次请求同时拿响应体与 HTTP 状态：首次新建 201，重放复用 200（契约：created 区分两者）。
+local_post() { # <body>：输出「<body>\n<status>」
+  curl -sS -w '\n%{http_code}' -X POST "${BASE}/api/v1/servers/local" \
+    -H 'Content-Type: application/json' -H "Authorization: Bearer ${TOKEN}" -d "$1" 2>/dev/null
+}
+LOCAL_BEFORE="$(api GET /api/v1/servers "" "$TOKEN" | jq -r '.data | length')"
+LOCAL_1_RAW="$(local_post '{"name":"本机-e2e","ttl_s":600}')"
+LOCAL_1_CODE="${LOCAL_1_RAW##*$'\n'}"
+LOCAL="${LOCAL_1_RAW%$'\n'*}"
 LOCAL_ID="$(sget "$LOCAL" '.data.server.id')"
 [ -n "$LOCAL_ID" ] && pass "本机服务器已创建" || fail "本机接入失败：$LOCAL"
+[ "$LOCAL_1_CODE" = "201" ] && [ "$(sget "$LOCAL" '.data.created')" = "true" ] \
+  && pass "首次接入返回 201 且 created=true" \
+  || fail "首次接入应为 201/created=true，实际 ${LOCAL_1_CODE}/created=$(sget "$LOCAL" '.data.created')"
 [ "$(sget "$LOCAL" '.data.server.mode')" = "agent" ] && pass "本机服务器为 agent 模式" || fail "本机服务器模式不符"
 LOCAL_CMD="$(sget "$LOCAL" '.data.command')"
 printf '%s' "$LOCAL_CMD" | grep -q "/install.sh" && printf '%s' "$LOCAL_CMD" | grep -q -- "--token '" \
@@ -335,6 +346,43 @@ printf '%s' "$LOCAL_CMD" | grep -q "$LOCAL_TOKEN" && pass "命令内嵌一次性
 LOCAL_LIST="$(api GET /api/v1/servers "" "$TOKEN")"
 printf '%s' "$LOCAL_LIST" | jq -e --arg id "$LOCAL_ID" '.data[] | select(.id==$id) | .mode=="agent"' >/dev/null 2>&1 \
   && pass "本机服务器出现在服务器列表中" || fail "列表未包含本机服务器"
+
+# 幂等：连点三次「接入本机」→ 服务器总数只增 1 条；第 2/3 次返回 created=false，且仍重新签发可用令牌。
+LOCAL_2_RAW="$(local_post '{"name":"本机-e2e","ttl_s":600}')"
+LOCAL_2_CODE="${LOCAL_2_RAW##*$'\n'}"
+LOCAL_2="${LOCAL_2_RAW%$'\n'*}"
+LOCAL_3_RAW="$(local_post '{"name":"本机-e2e","ttl_s":600}')"
+LOCAL_3_CODE="${LOCAL_3_RAW##*$'\n'}"
+LOCAL_3="${LOCAL_3_RAW%$'\n'*}"
+LOCAL_AFTER="$(api GET /api/v1/servers "" "$TOKEN" | jq -r '.data | length')"
+[ "$LOCAL_AFTER" -eq $((LOCAL_BEFORE + 1)) ] \
+  && pass "连点三次接入后服务器总数只增 1 条（${LOCAL_BEFORE} → ${LOCAL_AFTER}）" \
+  || fail "接入不幂等：连点三次后服务器总数 ${LOCAL_BEFORE} → ${LOCAL_AFTER}（应 +1）"
+
+local_reuse() { # <第几次> <状态码> <响应体>
+  local n="$1" c="$2" js="$3" sid tok
+  if [ "$c" != "200" ]; then fail "第 ${n} 次接入状态码应为 200（复用），实际 $c"; return; fi
+  if [ "$(sget "$js" '.data.created')" != "false" ]; then fail "第 ${n} 次接入 created 应为 false"; return; fi
+  sid="$(sget "$js" '.data.server.id')"
+  if [ "$sid" != "$LOCAL_ID" ]; then fail "第 ${n} 次接入复用了不同服务器（${sid} ≠ ${LOCAL_ID}）"; return; fi
+  tok="$(sget "$js" '.data.token')"
+  if ! printf '%s' "$tok" | grep -Eq '^[A-Za-z0-9_-]{43}$'; then fail "第 ${n} 次接入未返回可用令牌（${tok}）"; return; fi
+  if [ "$tok" = "$LOCAL_TOKEN" ]; then fail "第 ${n} 次接入复用了旧令牌（应重新签发）"; return; fi
+  if ! printf '%s' "$(sget "$js" '.data.command')" | grep -qF -- "$tok"; then fail "第 ${n} 次接入安装命令未内嵌新令牌"; return; fi
+  pass "第 ${n} 次接入复用同一服务器并重新签发令牌（200/created=false）"
+}
+local_reuse 2 "$LOCAL_2_CODE" "$LOCAL_2"
+local_reuse 3 "$LOCAL_3_CODE" "$LOCAL_3"
+
+# 令牌可用：三次点击各落一条「未使用、未过期、预绑定本机服务器」的接入令牌（列表可查）。
+LOCAL_TOKENS="$(api GET /api/v1/enroll-tokens "" "$TOKEN")"
+NOW_MS=$(( $(date +%s) * 1000 ))
+BOUND="$(printf '%s' "$LOCAL_TOKENS" | jq -r --arg id "$LOCAL_ID" '[.data[] | select(.server_id==$id and .used_at==null)] | length' 2>/dev/null)"
+[ "${BOUND:-0}" -ge 3 ] && pass "三次接入共签发 ${BOUND} 个绑定本机且未使用的令牌" \
+  || fail "绑定本机的可用令牌不足：${BOUND:-0}（应 ≥3）"
+printf '%s' "$LOCAL_TOKENS" | jq -e --arg id "$LOCAL_ID" --argjson now "$NOW_MS" \
+  '[.data[] | select(.server_id==$id and .used_at==null) | .expires_at > $now] | all' >/dev/null 2>&1 \
+  && pass "绑定本机的令牌均未过期（可用）" || fail "存在已过期/失效的本机接入令牌"
 
 # ---------------------------------------------------------------- C. 接管向导
 step "6. 接管向导（只读探测）"
@@ -352,10 +400,10 @@ chk_pair() { # <期望码> <body> <说明>
   r="$(api PATCH "/api/v1/apps/$APP_A" "$body" "$TOKEN")"
   c="$(printf '%s' "$r" | jq -r '.error.code // empty' 2>/dev/null)"
   if [ "$want" = "200" ]; then
-    if printf '%s' "$r" | jq -e '.data.id' >/dev/null 2>&1; then pass "$desc"; else fail "$desc（响应：$r）"; fi
+    if printf '%s' "$r" | jq -e '.data.id' >/dev/null 2>&1; then pass "$desc"; else fail "${desc}（响应：${r}）"; fi
   else
     if printf '%s' "$r" | jq -e --arg c "$want" '.error.code == $c' >/dev/null 2>&1; then pass "$desc"
-    else fail "$desc（期望 $want，实际 $r）"; fi
+    else fail "${desc}（期望 ${want}，实际 ${r}）"; fi
   fi
 }
 chk_pair invalid_argument '{"healthcheck_path":"healthz"}' "healthcheck_path 无前导 / → 400"

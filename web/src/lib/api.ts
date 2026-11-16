@@ -2494,6 +2494,8 @@ export interface LocalServerResult {
   token: string
   expires_at: number | null
   command: string
+  /** true=本次新建；false=复用已有的本机 agent 服务器（server.id 不变），只重新签发令牌 */
+  created: boolean
 }
 
 export interface PasswordCredentialInput {
@@ -2758,6 +2760,7 @@ export const api = {
           token: toText(record.token) ?? '',
           expires_at: toNumber(record.expires_at),
           command: toText(record.command) ?? '',
+          created: toBool(record.created),
         }
       },
     )
