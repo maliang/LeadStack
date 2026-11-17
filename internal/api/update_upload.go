@@ -140,11 +140,12 @@ func (a *API) handleUploadUpdate(w http.ResponseWriter, r *http.Request) {
 	const schemaChanged = true
 
 	job := &upgradeJob{
-		JobID:         jobID,
-		Phase:         "validating",
-		TargetVersion: version,
-		FromVersion:   a.version,
-		StartedAt:     a.nowMS(),
+		JobID:          jobID,
+		Phase:          "validating",
+		TargetVersion:  version,
+		FromVersion:    a.version,
+		StartedAt:      a.nowMS(),
+		PhaseStartedAt: a.nowMS(),
 	}
 	a.upgrader.setJob(job)
 	a.logger.Info("开始升级控制端（上传二进制）",
@@ -154,7 +155,9 @@ func (a *API) handleUploadUpdate(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf(`{"from":%q,"to":%q,"job_id":%q,"schema_changed":%t,"source":"upload","upload_sha256":%q,"upload_bytes":%d}`,
 			a.version, version, job.JobID, schemaChanged, upload.SHA256, upload.Bytes))
 
-	go a.runUploadUpgrade(job, upload.Path, schemaChanged, os.Args)
+	go a.runUpgradeGuarded(job, func() {
+		a.runUploadUpgrade(job, upload.Path, schemaChanged, os.Args)
+	})
 
 	// 响应形状与 /system/update/apply 完全一致（前端复用同一套轮询/展示逻辑）。
 	writeData(w, http.StatusAccepted, map[string]any{"job_id": job.JobID, "status": a.upgrader.getJob()})

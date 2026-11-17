@@ -9,6 +9,7 @@
 #   2) 备份失败 → 拒绝升级且二进制不变
 #   3) 正常升级 → 版本变化、产生备份、保留 .prev
 #   4) 新版本一启动就崩溃 → watchdog 自动回退到旧版本且服务可用
+#   5) 升级阶段停滞超阈值 → 自动判失败并释放并发锁（不再永久 409）
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -78,7 +79,7 @@ pass "已生成发布包与 checksums"
 # ---------------------------------------------------------------- 1. mock GitHub API
 step "1. 启动 mock GitHub API"
 cat > "$WORK/mock.py" <<'PY'
-import http.server, json, os, sys
+import http.server, json, os, sys, time
 root, port, state_path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 class H(http.server.BaseHTTPRequestHandler):
     def _json(self, obj):
@@ -102,6 +103,10 @@ class H(http.server.BaseHTTPRequestHandler):
                            "size": 100},
                           {"name": "checksums.txt", "browser_download_url": f"{base}/pkg/checksums.txt", "size": 100}]})
         elif self.path.startswith('/pkg/'):
+            # 停滞用例：state 置 hang_download=true 时把下载卡住 120s，
+            # 让「阶段停滞看门狗」先于下载超时（10 分钟）触发。
+            if st.get('hang_download'):
+                time.sleep(120)
             name = os.path.basename(self.path)
             p = os.path.join(root, name)
             if not os.path.exists(p):
@@ -112,7 +117,9 @@ class H(http.server.BaseHTTPRequestHandler):
         else:
             self.send_response(404); self.end_headers()
     def log_message(self, *a): pass
-http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+# ThreadingHTTPServer：停滞用例里一个 /pkg/ 请求会挂起 120s，
+# 单线程 HTTPServer 会把后续的 releases/latest 也一起堵死（第二个 apply 就没法验锁释放）。
+http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 PY
 echo '{"version":"v0.0.2","schema":false}' > "$WORK/mockstate.json"
 python3 "$WORK/mock.py" "$PKG_DIR" "$MOCK_PORT" "$WORK/mockstate.json" > "$WORK/mock.log" 2>&1 &
@@ -235,8 +242,98 @@ done
 HIST="$(printf '%s' "$ST" | jq -c '.data.history // []' 2>/dev/null)"
 printf '%s' "$HIST" | grep -qE '"outcome":"rollback"' && pass "升级历史记录了回退（outcome=rollback）" || fail "升级历史缺少回退记录：${HIST:0:160}"
 
-# ---------------------------------------------------------------- 6. 权限与开关
-step "6. 开关与权限"
+# ---------------------------------------------------------------- 6. 阶段停滞看门狗
+# 真机造停滞：mock 的 /pkg/ 在 hang_download=true 时挂起 120s，lead 的停滞阈值设为 10s。
+# 断言链：实例确实读到阈值（stall_timeout_s=10）→ 任务在跑时并发锁生效（409）
+#         → 超阈值后任务转 phase=stalled、running=false（自动失败，且不早于阈值）
+#         → 同一请求随后变成 400 而非 409（并发锁已释放）。
+# 变异检验：删掉 watchUpgradeStall 后，30s 内一直停在 download/running=true，本段必红。
+step "6. 阶段停滞超阈值 → 自动失败并释放并发锁"
+
+# 升级会 exec 换进程映像，LEAD_PID 未必仍是最新监听者；按端口精确回收，避免旧实例冒充新实例。
+stop_port() {
+  local pids
+  pids="$(lsof -nP -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null)"
+  [ -n "$pids" ] && kill -9 $pids 2>/dev/null
+  for _ in $(seq 1 50); do
+    [ -z "$(lsof -nP -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null)" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+stop_lead
+if stop_port; then pass "端口 ${PORT} 已释放（无残留监听进程）"; else fail "端口 ${PORT} 仍被占用"; fi
+
+DATA_ST="$WORK/data-stall"; mkdir -p "$DATA_ST"
+echo '{"version":"v0.0.4","schema":false,"hang_download":true}' > "$WORK/mockstate.json"
+if start_lead "$DATA_ST" "$EXE" LEADSTACK_UPGRADE_STALL_TIMEOUT=10s; then
+  pass "以停滞阈值 10s 启动当前版本"
+else
+  fail "启动失败"; tail -20 "$WORK/lead.log" | sed 's/^/      /'
+fi
+TOKEN="$(login upgrade-pass)"
+STALL_CFG="$(curl -s -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/system/update/status" | jq -r '.data.stall_timeout_s // empty' 2>/dev/null)"
+[ "$STALL_CFG" = "10" ] && pass "状态接口暴露停滞阈值 stall_timeout_s=10" || fail "停滞阈值未生效（stall_timeout_s=${STALL_CFG:-空}）"
+
+APPLY_ST="$(curl -s -X POST -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+  -d '{"version":"v0.0.4"}' "${BASE}/api/v1/system/update/apply")"
+STALL_JOB="$(jget "$APPLY_ST" '.data.job_id')"
+[ -n "$STALL_JOB" ] && pass "停滞用例升级已受理（job=${STALL_JOB:0:8}…）" || fail "apply 未受理：$(printf '%s' "$APPLY_ST" | head -c 160)"
+
+# 控制组：任务在跑时，同样的请求必须被并发锁挡成 409；否则后面的 400 不能证明锁已释放。
+BUSY_CODE="$(curl -s -o "$WORK/stall-busy.json" -w '%{http_code}' -X POST -H "Authorization: Bearer ${TOKEN}" \
+  -H 'Content-Type: application/json' -d '{"version":"v9.9.9"}' "${BASE}/api/v1/system/update/apply")"
+BUSY_MSG="$(jq -r '.error.message // empty' "$WORK/stall-busy.json" 2>/dev/null)"
+if [ "$BUSY_CODE" = "409" ] && printf '%s' "$BUSY_MSG" | grep -q "已有升级正在进行"; then
+  pass "停滞判定前并发锁生效（409）：${BUSY_MSG:0:20}"
+else
+  fail "停滞判定前并发保护异常（HTTP ${BUSY_CODE}）：${BUSY_MSG:0:50}"
+fi
+
+# 看门狗判定周期为 timeout/3≈3.4s，10s 阈值最迟约 13.4s 触发；30s 轮询窗口留足余量。
+STALL_START="$(date +%s)"
+STALL_OK=0
+for _ in $(seq 1 60); do
+  ST="$(curl -s -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/system/update/status")"
+  PHASE="$(printf '%s' "$ST" | jq -r '.data.job.phase // empty' 2>/dev/null)"
+  RUNNING_ST="$(printf '%s' "$ST" | jq -r '.data.running' 2>/dev/null)"
+  STALLED_FLAG="$(printf '%s' "$ST" | jq -r '.data.job.stalled' 2>/dev/null)"
+  DONE_FLAG="$(printf '%s' "$ST" | jq -r '.data.job.done' 2>/dev/null)"
+  ERRMSG="$(printf '%s' "$ST" | jq -r '.data.job.error // empty' 2>/dev/null)"
+  if [ "$RUNNING_ST" = "false" ] && [ "$PHASE" = "stalled" ]; then STALL_OK=1; break; fi
+  sleep 0.5
+done
+STALL_ELAPSED=$(( $(date +%s) - STALL_START ))
+if [ "$STALL_OK" = "1" ] && [ "$STALL_ELAPSED" -ge 10 ] \
+   && [ "$STALLED_FLAG" = "true" ] && [ "$DONE_FLAG" = "true" ] \
+   && printf '%s' "$ERRMSG" | grep -q "停滞超过 10s"; then
+  pass "超阈值自动失败：phase=${PHASE} stalled=true done=true（阈值后 ${STALL_ELAPSED}s 判定）"
+else
+  fail "停滞未按阈值判失败（${STALL_ELAPSED}s 时 phase=${PHASE:-空} running=${RUNNING_ST:-空} stalled=${STALLED_FLAG:-空} err=${ERRMSG:0:60}）"
+fi
+
+# 锁释放：与上面控制组同一请求（不存在的版本），现在应进入校验并得到 400，而不是 409。
+REL_CODE="$(curl -s -o "$WORK/stall-rel.json" -w '%{http_code}' -X POST -H "Authorization: Bearer ${TOKEN}" \
+  -H 'Content-Type: application/json' -d '{"version":"v9.9.9"}' "${BASE}/api/v1/system/update/apply")"
+REL_MSG="$(jq -r '.error.message // empty' "$WORK/stall-rel.json" 2>/dev/null)"
+if [ "$REL_CODE" = "400" ] && ! printf '%s' "$REL_MSG" | grep -q "已有升级正在进行"; then
+  pass "并发锁已释放：同一请求 409 → 400（${REL_MSG:0:30}）"
+else
+  fail "并发锁未释放（HTTP ${REL_CODE}）：${REL_MSG:0:60}"
+fi
+
+# 收尾：停掉带 10s 阈值的实例（它还挂着一个下载协程），用默认配置重启，避免影响后续步骤。
+stop_lead
+stop_port || true
+echo '{"version":"v0.0.3","schema":false}' > "$WORK/mockstate.json"
+start_lead "$DATA_ST" "$EXE" && pass "已恢复正常配置实例（供后续用例使用）" || fail "恢复实例启动失败"
+TOKEN="$(login upgrade-pass)"
+RESTORED_VER="$(curl -s "${BASE}/healthz" | jq -r '.data.version // empty' 2>/dev/null)"
+[ "$RESTORED_VER" = "v0.0.2" ] && pass "恢复实例运行 v0.0.2（后续同版本上传用例前置）" \
+  || fail "恢复实例版本异常（${RESTORED_VER:-无响应}）"
+
+# ---------------------------------------------------------------- 7. 权限与开关
+step "7. 开关与权限"
 # 保证没有升级在跑，否则 409（并发保护）会盖住"版本不存在"的 400
 for _ in $(seq 1 40); do
   R="$(curl -s -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/system/update/status" | jq -r '.data.running' 2>/dev/null)"
@@ -253,8 +350,8 @@ fi
 NOAUTH="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/v1/system/update")"
 [ "$NOAUTH" = "401" ] && pass "未带 token 访问更新接口返回 401" || fail "未鉴权未被拒绝（HTTP ${NOAUTH}）"
 
-# ---------------------------------------------------------------- 7. 上传二进制升级
-step "7. 上传二进制升级（POST /api/v1/system/update/upload）"
+# ---------------------------------------------------------------- 8. 上传二进制升级
+step "8. 上传二进制升级（POST /api/v1/system/update/upload）"
 # 造一个比当前运行版本（v0.0.2）更高的版本：上传接口要过「魔数 → --version → 版本比较」全关。
 UP_EXE="$WORK/upload-0.1.99"
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=0.1.99" -o "$UP_EXE" ./cmd/leadstack 2>&1 | head -3
@@ -340,6 +437,12 @@ fi
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"
+# t3 关键断言定位：让门禁 tail 直接看到「停滞自动失败 + 并发锁释放」这两条真机结论。
+if [ "${STALL_OK:-0}" = "1" ] && [ "${REL_CODE:-}" = "400" ]; then
+  printf '  t3 关键断言：停滞判定 phase=%s（阈值后 %ss）；并发锁已释放 409→400\n' "${PHASE:-空}" "${STALL_ELAPSED:-?}"
+else
+  printf '  t3 关键断言：停滞/锁释放未通过（stall_ok=%s rel_code=%s）\n' "${STALL_OK:-0}" "${REL_CODE:-空}"
+fi
 if [ "$FAIL" -eq 0 ]; then printf '\033[32m自升级验收通过\033[0m\n'; exit 0; fi
 printf '\033[31m自升级验收未通过\033[0m\n'
 exit 1

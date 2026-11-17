@@ -82,6 +82,8 @@ const (
 	EnvUpgradeEnabled = "LEADSTACK_UPGRADE_ENABLED"
 	// EnvUpgradeRollbackTimeout 是 watchdog 等待新版本确认成功的上限。
 	EnvUpgradeRollbackTimeout = "LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT"
+	// EnvUpgradeStallTimeout 是单个升级阶段允许停滞的最长时间。
+	EnvUpgradeStallTimeout = "LEADSTACK_UPGRADE_STALL_TIMEOUT"
 )
 
 // 默认值。
@@ -94,6 +96,8 @@ const (
 	DefaultUpdateCheckInterval = 6 * time.Hour
 	// DefaultUpgradeRollbackTimeout 是默认的 watchdog 回退超时。
 	DefaultUpgradeRollbackTimeout = 120 * time.Second
+	// DefaultUpgradeStallTimeout 是默认的升级阶段停滞超时。
+	DefaultUpgradeStallTimeout = 10 * time.Minute
 
 	DefaultListen     = "127.0.0.1:8080"
 	DefaultDataDir    = "./data"
@@ -229,6 +233,8 @@ type Config struct {
 	UpgradeEnabled bool
 	// UpgradeRollbackTimeout 是 watchdog 回退超时。
 	UpgradeRollbackTimeout time.Duration
+	// UpgradeStallTimeout 是单个升级阶段允许停滞的最长时间（超过即判定失败）。
+	UpgradeStallTimeout time.Duration
 }
 
 // Load 解析配置。version 由调用方（main）传入，args 通常为 os.Args[1:]。
@@ -272,8 +278,21 @@ func Load(version string, args []string) (*Config, error) {
 	updateInterval := fs.Duration("update-check-interval", defaultDurationOr(EnvUpdateCheckInterval, DefaultUpdateCheckInterval), "自动检查更新间隔，0=仅手动（环境变量 "+EnvUpdateCheckInterval+"）")
 	upgradeEnabled := fs.Bool("upgrade-enabled", envBoolOr(EnvUpgradeEnabled, true), "是否允许控制台自升级（环境变量 "+EnvUpgradeEnabled+"）")
 	upgradeTimeout := fs.Duration("upgrade-rollback-timeout", defaultDurationOr(EnvUpgradeRollbackTimeout, DefaultUpgradeRollbackTimeout), "升级 watchdog 回退超时（环境变量 "+EnvUpgradeRollbackTimeout+"）")
+	// 用 string + time.ParseDuration 而不是 fs.Duration：非法值要给出「配置错误: ...」的
+	// 可定位文案（字段名 + 期望形式），而不是 flag 包默认的 "invalid value ... for flag"。
+	upgradeStallTimeoutRaw := fs.String("upgrade-stall-timeout", envOr(EnvUpgradeStallTimeout, DefaultUpgradeStallTimeout.String()), "升级阶段停滞判定超时，如 10m（环境变量 "+EnvUpgradeStallTimeout+"）")
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("解析命令行参数: %w", err)
+	}
+	upgradeStallTimeout, err := time.ParseDuration(strings.TrimSpace(*upgradeStallTimeoutRaw))
+	if err != nil {
+		return nil, fmt.Errorf("配置错误: upgrade-stall-timeout 不是合法时长（如 10m）: %w", err)
+	}
+	if upgradeStallTimeout <= 0 {
+		return nil, errors.New("配置错误: upgrade-stall-timeout 必须大于 0")
+	}
+	if upgradeStallTimeout < 10*time.Second || upgradeStallTimeout > 2*time.Hour {
+		return nil, errors.New("配置错误: upgrade-stall-timeout 必须在 10s-2h 之间")
 	}
 
 	cfg := &Config{
@@ -312,6 +331,7 @@ func Load(version string, args []string) (*Config, error) {
 		UpdateCheckInterval:    *updateInterval,
 		UpgradeEnabled:         *upgradeEnabled,
 		UpgradeRollbackTimeout: *upgradeTimeout,
+		UpgradeStallTimeout:    upgradeStallTimeout,
 	}
 
 	// 区分「显式传入 --listen」与「默认/环境变量值」：显式值才拥有最高优先级。

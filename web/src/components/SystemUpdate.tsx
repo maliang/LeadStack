@@ -33,7 +33,58 @@ export function isUpdateRunning(phase: UpdatePhase | undefined): boolean {
 }
 
 export function isUpdateFinished(phase: UpdatePhase | undefined): boolean {
-  return phase === 'success' || phase === 'failed' || phase === 'rolled_back'
+  // stalled 是服务端停滞看门狗（`upgrader.failUpgrade`，见 internal/api/update_apply.go）判定出的**终态**。
+  // 不把它算作结束，界面就会对着一个早已失败的任务永远转圈——本次修复的核心。
+  return phase === 'success' || phase === 'failed' || phase === 'rolled_back' || phase === 'stalled'
+}
+
+/**
+ * 本地停滞阈值：20 分钟没有新的进度就不再转圈，改为提示 + 重试入口。
+ * 服务端 stalled 是半程预警，但状态接口不可达（重启期间）时只有本地计时还能兜底。
+ */
+export const LOCAL_STALL_MS = 20 * 60 * 1000
+
+/**
+ * 进度指纹：只有「阶段 / 百分比 / 文案 / 备份文件」变化才算真的往前走。
+ * phase_elapsed_s 每次轮询都在涨，绝不能进指纹，否则永远判不出停滞。
+ */
+export function updateProgressKey(status: UpdateStatus | null): string {
+  if (!status) return ''
+  return [status.phase, status.progress ?? '', status.message ?? '', status.backup_file ?? ''].join('|')
+}
+
+/** 停滞提示里的「已多久没进展」：本地计时与服务端阶段耗时取大者，向上取整且至少 1 分钟。 */
+export function stallMinutes(noProgressSec: number, phaseElapsedSec: number | null | undefined): number {
+  return Math.max(1, Math.ceil(Math.max(noProgressSec, phaseElapsedSec ?? 0) / 60))
+}
+
+/**
+ * 阶段文案映射：既覆盖前端归一化后的阶段，也覆盖服务端原始阶段名
+ * （update_apply.go 里的 verify_checksum / extract / prepare / swap / exec 等）。
+ * 停滞提示要告诉用户「卡在哪个阶段」，直接吐内部英文名等于没说。
+ */
+const PHASE_LABEL_KEYS: Record<string, string> = {
+  validating: 'update.phase.validating',
+  downloading: 'update.phase.downloading',
+  verify_checksum: 'update.phase.verify_checksum',
+  extract: 'update.phase.extract',
+  backing_up: 'update.phase.backing_up',
+  prepare: 'update.phase.prepare',
+  replacing: 'update.phase.replacing',
+  swap: 'update.phase.swap',
+  restarting: 'update.phase.restarting',
+  spawn_watchdog: 'update.phase.spawn_watchdog',
+  exec: 'update.phase.exec',
+  stalled: 'update.phase.stalled',
+}
+
+export function updatePhaseLabel(
+  phase: UpdatePhase | undefined,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  if (!phase || phase === 'idle') return '—'
+  const key = PHASE_LABEL_KEYS[phase]
+  return key ? t(key) : phase
 }
 
 /**
@@ -63,16 +114,21 @@ export function useUpdateNotice() {
   }
 }
 
-function PhaseStepper({ status }: { status: UpdateStatus | null }) {
+function PhaseStepper({ status, stalled = false }: { status: UpdateStatus | null; stalled?: boolean }) {
   const { t } = useI18n()
   const phase = status?.phase
+  const stalledPhase = phase === 'stalled'
   const currentIndex = PHASE_ORDER.indexOf(phase as UpdatePhase)
   return (
     <ol className="grid gap-2 sm:grid-cols-4">
       {PHASE_ORDER.map((step, index) => {
+        // 停滞时既不算完成、也不让活动步继续转圈：转圈代表「还在进展」，与停滞提示自相矛盾。
         const done =
-          (currentIndex > index && currentIndex !== -1) || isUpdateFinished(phase) || phase === 'success'
+          !stalled &&
+          !stalledPhase &&
+          ((currentIndex > index && currentIndex !== -1) || isUpdateFinished(phase) || phase === 'success')
         const active = phase === step
+        const activeStalled = active && stalled
         return (
           <li
             key={step}
@@ -80,14 +136,18 @@ function PhaseStepper({ status }: { status: UpdateStatus | null }) {
               'rounded-lg border px-3 py-2 text-xs transition-colors',
               done
                 ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300'
-                : active
-                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-300'
-                  : 'border-slate-200 bg-slate-50 text-slate-400 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-500',
+                : activeStalled
+                  ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200'
+                  : active
+                    ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-300'
+                    : 'border-slate-200 bg-slate-50 text-slate-400 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-500',
             )}
           >
             <span className="flex items-center gap-1.5 font-medium">
               {done ? (
                 <CheckCircleIcon className="h-3.5 w-3.5" />
+              ) : activeStalled ? (
+                <AlertTriangleIcon className="h-3.5 w-3.5" />
               ) : active ? (
                 <SpinnerIcon className="h-3.5 w-3.5" />
               ) : (
@@ -121,6 +181,11 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
   const [recoveredVersion, setRecoveredVersion] = useState<string | null>(null)
   const [applyError, setApplyError] = useState<string | null>(null)
   const [upgradeDisabled, setUpgradeDisabled] = useState(false)
+  // 本地停滞计时：距上一次「真实进度变化」多少秒（与 2s 轮询、服务可达性都解耦）。
+  const [noProgressSec, setNoProgressSec] = useState(0)
+  const [retryChecking, setRetryChecking] = useState(false)
+  const lastProgressAtRef = useRef(Date.now())
+  const progressKeyRef = useRef('')
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [applying, setApplying] = useState(false)
   // 「从本地文件升级」的独立状态机：选文件 → 二次确认 → 上传（带进度/可取消）→ 202 后交给既有轮询
@@ -143,7 +208,12 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
       .then((current) => {
         if (!current.phase || current.phase === 'idle') return
         setStatus(current)
-        if (isUpdateRunning(current.phase)) setRunning(true)
+        if (isUpdateRunning(current.phase)) {
+          progressKeyRef.current = updateProgressKey(current)
+          lastProgressAtRef.current = Date.now()
+          setNoProgressSec(0)
+          setRunning(true)
+        }
       })
       .catch(() => {
         /* 升级接口未就绪时忽略 */
@@ -160,6 +230,13 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
         const current = await api.updateStatus()
         if (cancelled) return
         setStatus(current)
+        // 只有阶段/百分比/文案/备份文件真的变了才算「有进展」；重复轮询同一快照不刷新计时。
+        const progressKey = updateProgressKey(current)
+        if (progressKey !== progressKeyRef.current) {
+          progressKeyRef.current = progressKey
+          lastProgressAtRef.current = Date.now()
+          setNoProgressSec(0)
+        }
         if (isUpdateFinished(current.phase)) {
           setRunning(false)
           setWaiting(false)
@@ -181,6 +258,19 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
       window.clearInterval(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running])
+
+  // 本地停滞计时：running 期间每秒重算「距上次真实进展多久」。独立于状态轮询，
+  // 这样状态接口不可达（waiting）时计时仍然走着，20 分钟后照样能停止无限转圈。
+  useEffect(() => {
+    if (!running) {
+      setNoProgressSec(0)
+      return
+    }
+    const timer = window.setInterval(() => {
+      setNoProgressSec(Math.max(0, Math.floor((Date.now() - lastProgressAtRef.current) / 1_000)))
+    }, 1_000)
+    return () => window.clearInterval(timer)
   }, [running])
 
   // 等待服务重启：轮询 /healthz，恢复后刷新版本
@@ -238,6 +328,9 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
       setRunning(true)
       setWaiting(false)
       setRecoveredVersion(null)
+      progressKeyRef.current = ''
+      lastProgressAtRef.current = Date.now()
+      setNoProgressSec(0)
       setStatus({
         job_id: null,
         phase: 'downloading',
@@ -250,6 +343,9 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
         progress: null,
         started_at: Date.now(),
         finished_at: null,
+        stalled: false,
+        phase_started_at: Date.now(),
+        phase_elapsed_s: 0,
       })
       toast(t('update.startedToast', { version: info.latest }), 'info')
     } catch (caught) {
@@ -324,6 +420,9 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
       setRunning(true)
       setWaiting(false)
       setRecoveredVersion(null)
+      progressKeyRef.current = updateProgressKey(started)
+      lastProgressAtRef.current = Date.now()
+      setNoProgressSec(0)
       toast(t('update.startedToast', { version: started.target_version ?? file.name }), 'info')
     } catch (caught) {
       setUploadConfirmOpen(false)
@@ -345,10 +444,55 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
     uploadAbortRef.current?.abort()
   }
 
+  /**
+   * 停滞后的手动重试：只做一次权威状态查询，不盲目重新发起升级。
+   * - 已终态（含服务端 stalled）→ 停止轮询，交给失败/成功面板；
+   * - 仍在跑 → 保留轮询并重置本地计时（用户已看到告警，再卡 20 分钟才重新提示）；
+   * - idle/未知 → 任务已不在内存，停止转圈；
+   * - 接口不可达 → 走既有「等待服务重启」探活链路。
+   */
+  const handleRetryStall = async () => {
+    setRetryChecking(true)
+    try {
+      const current = await api.updateStatus()
+      setStatus(current)
+      progressKeyRef.current = updateProgressKey(current)
+      lastProgressAtRef.current = Date.now()
+      setNoProgressSec(0)
+      if (isUpdateFinished(current.phase)) {
+        setRunning(false)
+        setWaiting(false)
+        void query.refresh()
+        if (current.phase === 'success') {
+          toast(t('update.successToast', { version: current.target_version ?? info?.latest ?? '' }), 'success')
+        }
+      } else if (isUpdateRunning(current.phase)) {
+        setWaiting(false)
+        toast(t('update.stalledStillRunning'), 'info')
+      } else {
+        setRunning(false)
+        setWaiting(false)
+        void query.refresh()
+      }
+    } catch {
+      // 失败不许静默：用户点了重试，至少要知道这次查询没成功。
+      // 状态接口不可达：交给 /healthz 探活，恢复后会刷新版本并停止转圈。
+      toast(t('update.stalledRetryFailed'), 'error')
+      setWaiting(true)
+    } finally {
+      setRetryChecking(false)
+    }
+  }
+
   const current = info?.current ?? status?.current_version ?? '—'
   const latest = info?.latest ?? status?.target_version ?? '—'
   const phase = status?.phase
-  const failed = phase === 'failed' || phase === 'rolled_back'
+  const stalledPhase = phase === 'stalled'
+  const failed = phase === 'failed' || phase === 'rolled_back' || stalledPhase
+  // 服务端半程预警（stalled）或本地 20 分钟无进展，都算「疑似停滞」：提示 + 重试，不再只转圈。
+  const stalled = running && (Boolean(status?.stalled) || noProgressSec * 1_000 >= LOCAL_STALL_MS)
+  const stalledMinutes = stallMinutes(noProgressSec, status?.phase_elapsed_s)
+  const stalledPhaseLabel = updatePhaseLabel(phase, t)
   const succeeded = phase === 'success' || Boolean(recoveredVersion)
   const disabled = upgradeDisabled || info?.upgrade_enabled === false
   // 「本平台没有可用升级包」只有在「检查本身成功」时才是事实：
@@ -597,7 +741,7 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
               {t('update.progressHint')}
             </span>
           </div>
-          <PhaseStepper status={status} />
+          <PhaseStepper status={status} stalled={stalled} />
           {status?.message ? (
             <p className="text-xs text-slate-500 dark:text-slate-400">{status.message}</p>
           ) : null}
@@ -606,9 +750,38 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
               {t('update.backupFile')}：{status.backup_file}
             </p>
           ) : null}
+          {stalled ? (
+            <div
+              role="alert"
+              className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200"
+            >
+              <div className="flex min-w-0 items-start gap-2">
+                <AlertTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-medium">{t('update.stalledTitle')}</p>
+                  <p className="mt-0.5 break-words leading-relaxed">
+                    {t('update.stalledHint', { minutes: stalledMinutes, phase: stalledPhaseLabel })}
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void handleRetryStall()}
+                loading={retryChecking}
+                icon={<RefreshIcon className="h-3.5 w-3.5" />}
+              >
+                {t('update.stalledRetry')}
+              </Button>
+            </div>
+          ) : null}
           {waiting ? (
             <div className="flex items-start gap-2 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
-              <SpinnerIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {stalled ? (
+                <AlertTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              ) : (
+                <SpinnerIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              )}
               <div>
                 <p className="font-medium">{t('update.waitingTitle')}</p>
                 <p className="mt-0.5 leading-relaxed">{t('update.waitingHint', { seconds: waitSeconds })}</p>
@@ -629,13 +802,32 @@ export function UpdatePanel({ compact = false }: { compact?: boolean }) {
         <div className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-xs leading-relaxed text-rose-900 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-200">
           <p className="flex items-center gap-1.5 font-semibold">
             <AlertTriangleIcon className="h-4 w-4" />
-            {status?.rolled_back || phase === 'rolled_back' ? t('update.rollbackTitle') : t('update.failedTitle')}
+            {status?.rolled_back || phase === 'rolled_back'
+              ? t('update.rollbackTitle')
+              : stalledPhase
+                ? t('update.stalledFailedTitle')
+                : t('update.failedTitle')}
           </p>
           <p className="mt-1 break-words">{status?.error ?? status?.message ?? t('update.failedNoReason')}</p>
           {status?.rolled_back || phase === 'rolled_back' ? (
             <p className="mt-1 font-medium">
               {t('update.rollbackHint', { version: status?.current_version ?? current })}
             </p>
+          ) : null}
+          {stalledPhase ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p>{t('update.stalledFailedHint')}</p>
+              {canApply ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setConfirmOpen(true)}
+                  icon={<DownloadIcon className="h-3.5 w-3.5" />}
+                >
+                  {t('update.stalledRetryApply')}
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}

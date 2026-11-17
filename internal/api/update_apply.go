@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/maliang/leadstack/internal/config"
 	"github.com/maliang/leadstack/internal/store"
 )
 
@@ -40,6 +42,12 @@ type upgradeJob struct {
 	SchemaChanged bool   `json:"schema_changed"`
 	Error         string `json:"error,omitempty"`
 	Done          bool   `json:"done"`
+	// PhaseStartedAt 是进入当前阶段的毫秒时间戳；停滞看门狗据此判定阶段是否卡死。
+	PhaseStartedAt int64 `json:"phase_started_at,omitempty"`
+	// PhaseElapsedS 与 Stalled 是状态接口的派生字段（由 getJob 在锁内按快照计算），
+	// 不参与任务本身的判定，避免调用方自己拿时间戳猜。
+	PhaseElapsedS int64 `json:"phase_elapsed_s"`
+	Stalled       bool  `json:"stalled"`
 }
 
 // upgrader 串行化升级执行（并发 apply 返回 409）。
@@ -47,6 +55,35 @@ type upgrader struct {
 	mu      sync.Mutex
 	running bool
 	job     *upgradeJob
+	// stallTimeout 读取当前的停滞超时配置；用闭包而不是快照，测试在构造后改 cfg 也能生效。
+	stallTimeout func() time.Duration
+}
+
+// newUpgrader 构造升级状态机。
+func newUpgrader(cfg *config.Config) *upgrader {
+	u := &upgrader{}
+	if cfg != nil {
+		u.stallTimeout = func() time.Duration { return cfg.UpgradeStallTimeout }
+	}
+	return u
+}
+
+// upgradeStallTimeout 返回停滞看门狗阈值；未配置（0）时回落到默认值。
+func (a *API) upgradeStallTimeout() time.Duration {
+	if a != nil && a.cfg != nil && a.cfg.UpgradeStallTimeout > 0 {
+		return a.cfg.UpgradeStallTimeout
+	}
+	return config.DefaultUpgradeStallTimeout
+}
+
+// upgradeStallTimeoutOrDefault 是 upgrader 侧的同一套回落逻辑（状态快照计算用）。
+func (u *upgrader) upgradeStallTimeoutOrDefault() time.Duration {
+	if u != nil && u.stallTimeout != nil {
+		if d := u.stallTimeout(); d > 0 {
+			return d
+		}
+	}
+	return config.DefaultUpgradeStallTimeout
 }
 
 // applyRequest 是 POST /system/update/apply 的请求体。
@@ -84,7 +121,7 @@ func (a *API) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	job := &upgradeJob{
 		JobID: uuid.NewString(), Phase: "validating", TargetVersion: target,
-		FromVersion: a.version, StartedAt: a.nowMS(),
+		FromVersion: a.version, StartedAt: a.nowMS(), PhaseStartedAt: a.nowMS(),
 	}
 	a.upgrader.setJob(job)
 
@@ -112,7 +149,11 @@ func (a *API) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 			a.version, target, job.JobID, info.SchemaChanged))
 
 	// 后台执行；HTTP 立即返回 202，让前端能持续轮询 status。
-	go a.runUpgrade(job, asset, info.SchemaChanged, os.Args)
+	// panic 必须被兜住：否则整个控制端进程会被一个升级协程带走，
+	// 且 running 会永久为 true，之后所有 apply/upload 都 409。
+	go a.runUpgradeGuarded(job, func() {
+		a.runUpgrade(job, asset, info.SchemaChanged, os.Args)
+	})
 
 	// 注意：不能把 job 指针直接序列化——runUpgrade 的 goroutine 正在并发写它，
 	// json 编码会与那些写入构成数据竞争。getJob() 在锁内做值拷贝，返回安全快照。
@@ -126,6 +167,8 @@ func (a *API) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 		"current_version": a.version,
 		"upgrade_dir":     a.cfg.UpgradeDir(),
 		"running":         a.upgrader.isRunning(),
+		// 判停滞的阈值，前端据此把 phase_elapsed_s 展示成「已停滞 N 秒（上限 M 秒）」。
+		"stall_timeout_s": int64(a.upgradeStallTimeout().Seconds()),
 	}
 	if job != nil {
 		payload["job"] = job
@@ -135,6 +178,95 @@ func (a *API) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	payload["history"] = ReadUpgradeHistory(a.cfg.DataDir, 10)
 	writeData(w, http.StatusOK, payload)
+}
+
+// runUpgradeGuarded 在后台协程里执行一次升级：panic 兜底 + 阶段停滞看门狗。
+//
+// panic 兜底：升级链路涉及 tar 解包、文件替换、exec，任何一处 panic 若逃逸都会
+// 直接崩掉控制端进程；这里 recover 后把任务置为失败并释放并发锁（finish），
+// 保证「升级失败」而不是「整个服务消失」。
+// 看门狗：每个阶段开始时刷新 PhaseStartedAt，超过 cfg.UpgradeStallTimeout 没有推进
+// 就判定停滞失败。stop 在协程正常返回时关闭，避免看门狗在测试/失败路径上泄漏。
+func (a *API) runUpgradeGuarded(job *upgradeJob, fn func()) {
+	if job == nil || fn == nil {
+		return
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	defer func() {
+		rv := recover()
+		if rv == nil {
+			return
+		}
+		stack := string(debug.Stack())
+		a.logger.Error("升级协程 panic", "job_id", job.JobID, "panic", rv, "stack", stack)
+		a.failUpgrade(job, "internal", fmt.Errorf("升级协程异常退出: %v", rv))
+	}()
+	go a.watchUpgradeStall(job, stop)
+	fn()
+}
+
+// watchUpgradeStall 是阶段停滞看门狗：阶段超时未推进就把任务判失败并释放并发锁。
+//
+// 判定周期取 min(timeout/3, 30s)：既能在超时后尽快发现，又不会把小阈值放大成忙轮询。
+// stop 关闭（升级协程返回）时立即退出；任务终态（Done 或 success/failed/rolled_back）
+// 或 job 已被新任务替换时也退出。exec 阶段进程马上被替换，看门狗正常来不及触发。
+func (a *API) watchUpgradeStall(job *upgradeJob, stop <-chan struct{}) {
+	if job == nil {
+		return
+	}
+	timeout := a.upgradeStallTimeout()
+	interval := timeout / 3
+	if interval > 30*time.Second {
+		interval = 30 * time.Second
+	}
+	if interval < 10*time.Millisecond {
+		interval = 10 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+		cur := a.upgrader.getJob()
+		if cur == nil || cur.JobID != job.JobID || cur.Done || isUpgradeTerminalPhase(cur.Phase) {
+			return
+		}
+		if cur.PhaseStartedAt <= 0 {
+			continue
+		}
+		elapsed := a.nowMS() - cur.PhaseStartedAt
+		if elapsed > timeout.Milliseconds() {
+			// failUpgrade → finish 会把 running 置回 false，否则用户之后再点升级永远 409。
+			a.failUpgrade(job, "stalled",
+				fmt.Errorf("升级在阶段 %s 停滞超过 %s，已判定失败", cur.Phase, timeout))
+			return
+		}
+	}
+}
+
+// isUpgradeTerminalPhase 判断阶段名是否已是终态。
+func isUpgradeTerminalPhase(phase string) bool {
+	switch phase {
+	case "success", "failed", "rolled_back":
+		return true
+	default:
+		return false
+	}
+}
+
+// isFinished 判断该 job 是否已被判定结束（例如停滞看门狗已判失败）。
+//
+// 看门狗判失败后会立刻释放并发锁，但原协程可能还阻塞在网络调用里；
+// 收尾阶段执行前用它确认「这个任务还没被别人判死」，避免用户在界面看到失败之后
+// 进程仍然把二进制替换掉。
+func (u *upgrader) isFinished(job *upgradeJob) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.job != nil && u.job.JobID == job.JobID && u.job.Done
 }
 
 // runUpgrade 执行契约 51.3 的严格流程：校验 → 备份 → 下载 → 校验和 → 解压 → 标记 → A/B 替换 → spawn watchdog → exec。
@@ -173,6 +305,12 @@ func (a *API) runUpgrade(job *upgradeJob, asset UpdateAsset, schemaChanged bool,
 	}
 
 	// 4)~6) 写升级标记 → A/B 替换 → spawn watchdog → exec。
+	// 看门狗可能已经把本任务判失败（例如某阶段卡死后又被 ctx 超时唤醒），
+	// 此时绝不能继续替换二进制。
+	if a.upgrader.isFinished(job) {
+		a.logger.Warn("升级任务已被判定结束，放弃替换二进制", "job_id", job.JobID)
+		return
+	}
 	a.restartUpgrade(job, backupInfo, newExe, schemaChanged, execArgs)
 }
 
@@ -222,6 +360,14 @@ func (a *API) restartUpgrade(job *upgradeJob, backupInfo *BackupInfo, newExe str
 // 下载路径（runUpgrade）与上传路径（runUploadUpgrade）共用本函数：phase 名称、
 // 日志文案、失败回滚行为对两条链路必须逐字一致（verify_upgrade.sh 依赖 phase 序列）。
 func (a *API) applyAndRestart(job *upgradeJob, backupInfo *BackupInfo, newExe string, schemaChanged bool, execArgs []string) {
+	// 上传路径没有下载路径末尾那次 isFinished 检查：备份耗时超过停滞阈值时，
+	// 看门狗会先把任务判失败并释放并发锁，而本函数随后仍可能被调用。
+	// 用户已经看到「失败」之后绝不能再写升级标记或替换二进制，否则会出现
+	// 「界面显示失败、进程却换成了新版本」的不可解释状态。
+	if a.upgrader.isFinished(job) {
+		a.logger.Warn("升级任务已被判定结束，放弃进入替换阶段", "job_id", job.JobID)
+		return
+	}
 	fail := func(phase string, err error) { a.failUpgrade(job, phase, err) }
 
 	// 4) 写升级标记（watchdog 与新进程自检共用）。
@@ -603,8 +749,11 @@ func (u *upgrader) setSchemaChanged(job *upgradeJob, changed bool) {
 
 func (u *upgrader) setPhase(job *upgradeJob, phase string) {
 	u.mu.Lock()
-	if u.job != nil && u.job.JobID == job.JobID {
+	// Done 之后 phase 是给用户看的终态证据（finish 之后可能还有迟到的收尾调用），
+	// 不允许被后续 setPhase 改写——否则 stalled/error 会与真实结局不一致。
+	if u.job != nil && u.job.JobID == job.JobID && !u.job.Done {
 		u.job.Phase = phase
+		u.job.PhaseStartedAt = time.Now().UnixMilli()
 	}
 	u.mu.Unlock()
 }
@@ -624,7 +773,12 @@ func (u *upgrader) finish(job *upgradeJob, cause error) {
 	u.running = false
 }
 
-// getJob 返回当前任务快照。
+// getJob 返回当前任务快照（锁内值拷贝，调用方不可写，避免与升级协程竞态）。
+//
+// 快照附加两个只读派生字段：
+//   - phase_elapsed_s：当前阶段已耗时（秒）；
+//   - stalled：疑似停滞预警。阶段耗时 × upgradeStallWarnRatio > 停滞超时即置 true，
+//     给前端提前告警；真正的失败判定由 watchUpgradeStall 用完整超时完成。
 func (u *upgrader) getJob() *upgradeJob {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -632,6 +786,19 @@ func (u *upgrader) getJob() *upgradeJob {
 		return nil
 	}
 	copied := *u.job
+	copied.PhaseElapsedS = 0
+	copied.Stalled = false
+	if copied.PhaseStartedAt > 0 {
+		elapsedMS := time.Now().UnixMilli() - copied.PhaseStartedAt
+		if elapsedMS < 0 {
+			elapsedMS = 0
+		}
+		copied.PhaseElapsedS = elapsedMS / 1000
+		// 已判失败（如停滞看门狗置的 phase=stalled）的终态任务也要如实显示停滞，
+		// 但 Done 之后不再按耗时增长继续升级预警。
+		copied.Stalled = copied.Phase == "stalled" ||
+			(!copied.Done && elapsedMS*upgradeStallWarnRatio > u.upgradeStallTimeoutOrDefault().Milliseconds())
+	}
 	return &copied
 }
 

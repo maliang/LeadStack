@@ -479,6 +479,9 @@ leadstack network --show
 **检查 → 自动备份 → 下载校验 → A/B 替换 → 重启**；新版本起不来时**独立 watchdog 自动回退**（含数据恢复到升级前）。
 可关掉：`LEADSTACK_UPGRADE_ENABLED=false`。自动升级只在你点击时发生，不会后台偷跑；Windows 不支持进程内自升级。
 
+**卡住不动**：每个阶段超过 `LEADSTACK_UPGRADE_STALL_TIMEOUT`（默认 `10m`）没有推进，控制端会自己判失败并释放升级锁（不会一直 409）。
+取证与自救见 [架构契约 §51.4](docs/ARCHITECTURE.md) 与下方常见问题；面板会把 `stalled` 当终态停轮询并给出「重新升级」，但判定仍以接口为准。
+
 **手动三步**：
 
 ```bash
@@ -574,6 +577,9 @@ linux / darwin / docker 三条重启命令（带复制按钮）。重启后回�
 | `LEADSTACK_LOGIN_IP_LIMIT` | `20` | 同 IP 窗口内登录请求上限（0=关闭） |
 | `LEADSTACK_LOGIN_IP_WINDOW` | `1m` | IP 限流窗口 |
 | `LEADSTACK_TRUSTED_PROXIES` | 空（不信任任何代理头） | 可信反代 CIDR/IP，逗号分隔 |
+| `LEADSTACK_UPGRADE_ENABLED` | `true` | 控制台自升级开关（`false` 时 apply 返回 403） |
+| `LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT` | `120s` | 独立 watchdog 等新版本确认成功的上限，超时自动回退 |
+| `LEADSTACK_UPGRADE_STALL_TIMEOUT` | `10m` | 单个升级阶段停滞多久判失败（`10s`–`2h`，非法值启动即报配置错误），挡住「升级永远转圈」 |
 | `LEADSTACK_BCRYPT_COST` | `12` | 新密码 bcrypt 成本（4–31）。仅供测试与极低算力环境，调低会削弱抗暴力破解 |
 
 > ⚠️ `master.key` 丢失 → 已存凭证无法解密；`backup.pass` 丢失 → 备份永久无法解密。二者都要与数据一并备份，且分开保管。
@@ -616,6 +622,24 @@ leadstack-agent --insecure                   # 跳过 TLS 校验（不推荐）
 
 **发布失败了，线上没事吧？**
 没事。失败时 `current` 仍指向上一个成功版本。看详情里的「失败步骤」与日志，修好后重试或回滚。
+
+**升级卡在某个阶段不动了，怎么办？**
+控制端会自己判：单个阶段超过 `LEADSTACK_UPGRADE_STALL_TIMEOUT`（默认 `10m`）没有推进，就判失败并把升级锁放回 false——不会让后续请求一直 409。判定看接口，别只看面板：
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' -d '{"username":"admin","password":"<password>"}' | jq -r .data.token)
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/system/update/status \
+  | jq '.data | {running, stall_timeout_s, job: (.job | {phase, phase_elapsed_s, stalled, done, error})}'
+```
+
+- `job.stalled=true` 只是**预警**（阶段走了一半），还没失败；`phase=stalled` + `done=true` + `error` 才是判失败。
+- 卡在 `exec` 之前（备份/下载/校验/解压/换文件）：二进制没动过，修好网络或磁盘后**直接重新点升级**，不用恢复备份、也不用重启进程。
+- 卡在 `exec` 之后（新版本已就位却没起来）：独立 watchdog 会在 `LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT`（默认 `120s`）内自动回退，先别手工搬文件，等一个周期看 `/healthz` 版本与状态接口里的 `history`（`outcome` 为 `rollback`，带 `reason`）。
+- `running=true` 且 `phase_elapsed_s` 远超 `stall_timeout_s` 仍不转 `stalled`：说明看门狗没在跑（进程卡死），重启控制端再判断；手工回滚见[版本升级与回滚 §7](docs/UPGRADE.md)。
+- 面板会把 `stalled` 视为终态（前端 `isUpdateFinished` 判定）：识别到之后停止轮询、展示失败面板并给出「重新升级」入口；排障仍以接口的 `done`/`error` 为准。
+
+字段语义、看门狗周期与 `state.json` 判据见 [架构契约 §51.4](docs/ARCHITECTURE.md)。
 
 **报错里的「请求编号」是什么？**
 就是响应头 `X-Request-Id`，日志里搜这个号能定位那一次请求，报障时一起发出来最省时间。三种失败要分清：
@@ -707,7 +731,7 @@ bash scripts/verify_backup.sh           # 加密有效性、篡改检测、离�
 bash scripts/verify_ops.sh              # 审计、RBAC、Token、分页、导入、终端、文件、定时任务、端口
 bash scripts/verify_authz.sh            # 权限点、自定义角色、分组与资源级授权、可信代理、登录限流
 bash scripts/verify_install_control.sh  # 一键安装：端口、下载校验、幂等升级、卸载、自动接入本机
-bash scripts/verify_upgrade.sh          # 控制端自升级与 watchdog 回退（29 项）
+bash scripts/verify_upgrade.sh          # 控制端自升级与 watchdog 回退（38 项）
 ```
 
 实测断言数：bootstrap 19、servers 34、checks 31、alerts 36、deploy 33、deploy_v2 66、deploy_script 24、

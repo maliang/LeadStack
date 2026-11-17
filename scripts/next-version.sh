@@ -1,6 +1,6 @@
 #!/bin/sh
 # LeadStack 自动发版版本推导：取最新 tag → patch + 1
-# 契约：docs/ARCHITECTURE.md §51.4（主分支自动发版）
+# 契约：docs/ARCHITECTURE.md §51.5（主分支自动发版）
 #
 # 用法：
 #   sh scripts/next-version.sh          # 在仓库内执行，打印下一个版本号

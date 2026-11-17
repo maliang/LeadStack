@@ -22,6 +22,12 @@ const (
 	upgradeNotesMaxBytes = 4096
 	// upgradeSelfCheckTimeout 是新进程自检的最长等待时间。
 	upgradeSelfCheckTimeout = 10 * time.Second
+	// upgradeStallWarnRatio 决定状态接口中 `stalled` 的预警阈值：
+	// 阶段耗时 × ratio > 停滞超时即认为「疑似停滞」。
+	// 取 2（半程预警）：给运维留出「看门狗自动判失败」之前的响应窗口，
+	// 又不会把短阶段（下载/校验）的正常抖动误报成停滞；
+	// 真正的失败判定在 watchUpgradeStall 里用完整超时，不依赖本常量。
+	upgradeStallWarnRatio = 2
 )
 
 // UpdateAsset 是一个发行产物。

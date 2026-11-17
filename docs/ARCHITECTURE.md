@@ -1522,6 +1522,7 @@ leadstack network --reset                      # 清除全部网络设置，回�
 | `LEADSTACK_UPDATE_CHECK_INTERVAL` | `6h` | 自动检查间隔（0 = 只在手动刷新时检查） |
 | `LEADSTACK_UPGRADE_ENABLED` | `true` | 是否允许控制台自升级（false 时 apply 返回 403） |
 | `LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT` | `120s` | watchdog 等待新版本确认成功的上限 |
+| `LEADSTACK_UPGRADE_STALL_TIMEOUT` | `10m` | 单个升级阶段允许停滞的上限，超过即判失败（合法范围 `10s`–`2h`；命令行 `--upgrade-stall-timeout`）。非法值启动即报 `配置错误: upgrade-stall-timeout ...` |
 
 ### 51.2 检查更新
 
@@ -1580,7 +1581,60 @@ GET  /system/update/status                        -> 进度与结果
 - 全程写审计 `system.upgrade_start` / `system.upgrade_success` / `system.upgrade_rollback`；
 - 升级端点仅 `admin`。
 
-### 51.4 GitHub 主分支自动发版（CI）
+### 51.4 卡住的判定与自救（阶段停滞看门狗）
+
+**要解决的问题**：升级协程会阻塞在下载、备份、解压这类没有独立超时保证的路径上。旧行为下 `running` 一直为 true，此后所有 apply/upload 都返回 409，用户既拿不到失败原因也无法重试。
+
+**两级兜底**（`internal/api/update_apply.go`）
+
+| 机制 | 落点 | 作用 |
+|---|---|---|
+| panic 兜底 `runUpgradeGuarded` | `internal/api/update_apply.go:190` | 升级协程 recover 后 `failUpgrade(job,"internal",…)`：一个 panic 不再带走整个控制端，`running` 也不会永久为 true |
+| 阶段停滞看门狗 `watchUpgradeStall` | `internal/api/update_apply.go:214` | 每 `min(阈值/3, 30s)` 复查一次（下限 10ms）；某阶段耗时超过 `cfg.UpgradeStallTimeout` 就 `failUpgrade(job,"stalled",…)`，并释放并发锁 |
+
+看门狗**只结束进程内的任务，不做回退**：`exec` 之后的回退仍由独立 watchdog 进程按 `LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT` 完成（见 §51.3）。被判失败后，原协程即使从阻塞中醒来，`runUpgrade` 也会在换二进制前用 `isFinished()`（`internal/api/update_apply.go:266`）复查并放弃替换——不会出现「界面已显示失败，进程又把二进制换掉」。
+
+**状态接口字段**（`GET /system/update/status`）
+
+| 字段 | 含义 |
+|---|---|
+| `stall_timeout_s` | 当前生效的单阶段停滞阈值（秒），来自 `LEADSTACK_UPGRADE_STALL_TIMEOUT`，默认 `600` |
+| `job.phase` | 当前阶段：`backup` → `download` → `verify_checksum` → `extract` → `prepare` → `swap` → `spawn_watchdog` → `exec`；终态 `success` / `failed` / `rolled_back`；被看门狗判失败时为 `stalled` |
+| `job.phase_started_at` | 进入当前阶段的毫秒时间戳 |
+| `job.phase_elapsed_s` | 当前阶段已耗时（秒），由接口按快照算好，调用方不必自己减时间戳 |
+| `job.stalled` | **预警**而非失败：阶段耗时 × 2 > 阈值即 `true`（走到一半就给响应窗口）；`phase=stalled` 的终态任务恒为 `true` |
+| `job.error` / `job.done` | 判失败原因（形如「升级在阶段 download 停滞超过 10m0s，已判定失败」）与终态标志 |
+
+两层要分清：`stalled=true` 只是「疑似停滞」；真正的失败是 `phase=stalled` + `done=true` + `error` 非空，此时 `running` 已为 false，可以重新发起升级。
+
+**自救口径（先看卡在哪个阶段）**
+
+- 卡在 `exec` 之前（`backup` / `download` / `verify_checksum` / `extract` / `prepare` / `swap`）：二进制还没被替换，**不需要**用备份恢复数据，也不要手工搬文件；等 `phase=stalled` 后修好网络/磁盘/权限，直接重新点升级即可。
+- 卡在 `exec` 之后：新进程没删 `<data_dir>/upgrade/state.json`，由独立 watchdog 在 `deadline` 到期后自动回退（默认 120s）。**不要手工换二进制**，等一个回退周期后用 `/healthz` 的版本与 `upgrade-history.jsonl` 确认。
+- `running=true` 且 `phase_elapsed_s` 远超 `stall_timeout_s` 却始终不转 `stalled`：说明看门狗协程本身没在跑（进程卡死或被挂起）——重启控制端，再看 `state.json` 是否存在决定后续动作（存在 = 有未收尾的升级标记：重启后新进程会跑自检，通过则删标记并写成功审计，不通过则退出让 watchdog 回退；已确认新版本有问题时按 [UPGRADE.md §7](UPGRADE.md) 手工回滚）。
+
+**升级历史与审计的分工**：`upgrade-history.jsonl` 只记 `success` 与 `rollback`（独立 watchdog 写）；进程内被停滞看门狗判失败的那次升级**不写 history**，只有审计日志里一条 `system.upgrade_start` 带 `aborted/phase/error`——所以「history 里查不到」不等于没发生过，判停滞要看状态接口与审计。
+
+**取证命令**（systemd 安装，`<password>` 换成实际管理员口令；Docker 把数据目录换成 `/data`）
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' -d '{"username":"admin","password":"<password>"}' | jq -r .data.token)
+
+# 判定与阈值：running / stall_timeout_s / 阶段 / 已停滞秒数 / 预警 / 错误 / 待收尾标记 / 最近 10 条历史
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/system/update/status \
+  | jq '.data | {running, stall_timeout_s, job: (.job | {phase, phase_elapsed_s, stalled, done, error}), pending_state, history}'
+
+# 上次升级的收尾标记：存在 = 有未收尾的升级（新进程自检通过、或 watchdog 回退完成，都会删掉它）
+jq . /var/lib/leadstack/data/upgrade/state.json
+
+# 历史记录（outcome 为 success 或 rollback，含 reason）
+tail -n 3 /var/lib/leadstack/data/upgrade/upgrade-history.jsonl | jq -c .
+```
+
+**停滞后的面板行为**：前端 `isUpdateFinished`（`web/src/components/SystemUpdate.tsx`）把 `success` / `failed` / `rolled_back` / `stalled` 一并当终态。看门狗判出 `phase=stalled` 后，面板停止轮询并直接切到失败面板，给出「重新升级」入口；排障仍以接口的 `done` / `error` 为准，不要把「面板还在转」当成还在正常执行。
+
+### 51.5 GitHub 主分支自动发版（CI）
 
 `.github/workflows/release-auto.yml`：
 - 触发：`push` 到 `main`（排除 `docs/**`、`**.md` 等纯文档提交；`[skip release]` 可跳过）；
@@ -1590,7 +1644,7 @@ GET  /system/update/status                        -> 进度与结果
 - 保留手动触发（`workflow_dispatch`，可指定 version）。
 - `schema_changed` 的判定来源：发布前对比迁移目录 `internal/store/migrations/` 在上一 tag 与本 tag 之间是否有新增文件，写入 release body 的机器可读标记 `<!-- schema_changed: true -->`。
 
-### 51.5 验收（`scripts/verify_upgrade.sh`，29 项；`make verify-upgrade`）
+### 51.6 验收（`scripts/verify_upgrade.sh`，38 项；`make verify-upgrade`）
 
 > 这套验收**故意不在 `make test-e2e` 主干闸门内**：它要真实替换运行中的二进制，并依赖 watchdog 的 10 秒级自查回退时序，对机器负载敏感——放进主干闸门容易出现「代码没动却 CI 红」（本仓库已因 bcrypt 成本撞过 `go test` 包超时，同一类假红）。**发版前必跑 `make verify-upgrade`**；主干 13 套闸门（`E2E_SCRIPTS`）里不含它。
 
@@ -2463,7 +2517,7 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 | 前端产物 | `internal/webui/dist/assets/` 里可 `grep` 到 `restore-status`、`中止`、`agent 代检`、`请求编号`、`该分组共` |
 
 > 上面四套脚本的断言数是实测值；13 套 `make test-e2e` 脚本合计 **601 项**（每套明细见 README「开发与验收」）。
-> `scripts/verify_upgrade.sh`（控制端自升级 29 项）不在主干闸门内，用 `make verify-upgrade` 单独跑、发版前必跑（见 §51.5）。
+> `scripts/verify_upgrade.sh`（控制端自升级 38 项）不在主干闸门内，用 `make verify-upgrade` 单独跑、发版前必跑（见 §51.6）。
 
 ## 66. 列表接口的范围过滤必须排在 LIMIT 之前
 

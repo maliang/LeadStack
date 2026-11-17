@@ -417,6 +417,9 @@ export type UpdatePhase =
   | 'success'
   | 'failed'
   | 'rolled_back'
+  // 服务端停滞看门狗判定的失败终态（internal/api/update_apply.go:244）。
+  // 它是终态，必须与 failed 一样让面板停止轮询，否则界面会永远转圈。
+  | 'stalled'
   | string
 
 export interface UpdateStatus {
@@ -431,6 +434,12 @@ export interface UpdateStatus {
   progress: number | null
   started_at: number | null
   finished_at: number | null
+  /** 服务端半程停滞预警（阶段耗时 × 2 > 停滞超时，见 update_types.go:30）。 */
+  stalled: boolean
+  /** 进入当前阶段的毫秒时间戳；0/undefined 表示服务端未提供。 */
+  phase_started_at: number | null
+  /** 当前阶段已耗时（秒），由服务端在 state 锁内算好，前端不自己拿时间戳猜。 */
+  phase_elapsed_s: number | null
 }
 
 export interface HealthInfo {
@@ -2325,6 +2334,7 @@ function normalizeUpdatePhase(value: unknown): UpdatePhase {
     failure: 'failed',
     rollback: 'rolled_back',
     rolled_back: 'rolled_back',
+    stalled: 'stalled',
   }
   return map[phase] ?? (phase === '' ? 'idle' : phase)
 }
@@ -2337,9 +2347,10 @@ export function normalizeUpdateStatus(input: unknown): UpdateStatus {
   //  - POST /system/update/{apply,upload} 的 202 → {job_id, status:{job_id,phase,…}}
   // 不先拆这一层时 phase 恒为空 → 归一成 idle，进度面板永远停在第一步（真实缺陷，非理论问题）。
   const raw = toRecord(payload.job) ?? toRecord(payload.status) ?? payload
+  const phase = normalizeUpdatePhase(raw.phase ?? raw.stage ?? raw.state)
   return {
     job_id: toText(raw.job_id ?? raw.jobId),
-    phase: normalizeUpdatePhase(raw.phase ?? raw.stage ?? raw.state),
+    phase,
     target_version: toText(raw.target_version),
     current_version: toText(raw.current_version) ?? toText(payload.current_version),
     message: toText(raw.message),
@@ -2349,6 +2360,10 @@ export function normalizeUpdateStatus(input: unknown): UpdateStatus {
     progress: toNumber(raw.progress),
     started_at: toNumber(raw.started_at),
     finished_at: toNumber(raw.finished_at),
+    // 后端 stalled 是派生布尔；phase 已是 stalled 时即使缺字段也要按停滞处理。
+    stalled: toBool(raw.stalled) || phase === 'stalled',
+    phase_started_at: toNumber(raw.phase_started_at),
+    phase_elapsed_s: toNumber(raw.phase_elapsed_s),
   }
 }
 

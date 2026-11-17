@@ -35,7 +35,7 @@ func NewUpgradeRunner(cfg *config.Config, version string, logger *slog.Logger) (
 		cfg:      cfg,
 		backups:  backupService,
 		updates:  newUpdateChecker(cfg.UpdateRepo, cfg.UpdateAPIBase, version, cfg.UpdateCheckInterval, logger),
-		upgrader: &upgrader{},
+		upgrader: newUpgrader(cfg),
 		logger:   logger,
 		version:  version,
 	}
@@ -81,7 +81,7 @@ func (r *UpgradeRunner) Apply(ctx context.Context, target string, allowMajor boo
 	}
 	job := &upgradeJob{
 		JobID: "cli-" + target, Phase: "validating", TargetVersion: target,
-		FromVersion: a.version, StartedAt: a.nowMS(),
+		FromVersion: a.version, StartedAt: a.nowMS(), PhaseStartedAt: a.nowMS(),
 	}
 	a.upgrader.setJob(job)
 	a.upgrader.begin()

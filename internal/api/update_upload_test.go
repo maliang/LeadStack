@@ -604,3 +604,86 @@ func TestUpgradeUploadBackupFailureKeepsBinary(t *testing.T) {
 		t.Fatalf("中止审计应记录 phase=backup 与目标版本，实际 %s", detail)
 	}
 }
+
+// TestUpgradeUploadStallDuringBackupDoesNotSwap 覆盖 M1：上传链路备份耗时超过停滞阈值时，
+// 看门狗会先把任务判失败并释放并发锁；备份返回后 applyAndRestart 必须止步，
+// 不得再写升级标记、替换二进制（否则界面显示失败、进程却换了版本）。
+//
+// 变异检验：去掉 applyAndRestart 首行的 isFinished 守卫，本用例会在备份返回后
+// 进入替换阶段（phase 被改写 / 留下 upgrade_state.json 或 .prev）。
+func TestUpgradeUploadStallDuringBackupDoesNotSwap(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+	env.api.version = "v1.0.0"
+	env.cfg.UpgradeStallTimeout = 100 * time.Millisecond
+	probeUploadedBinaryVersion = func(string) (string, error) {
+		return "leadstack v1.4.0 (commit test, built test)\n", nil
+	}
+	t.Cleanup(func() { probeUploadedBinaryVersion = nil })
+
+	// 备份耗时远超停滞阈值：看门狗必然在备份返回之前把任务判死。
+	env.backup.mu.Lock()
+	env.backup.createDelay = 800 * time.Millisecond
+	env.backup.mu.Unlock()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("定位当前可执行文件失败: %v", err)
+	}
+	before, err := os.Stat(exe)
+	if err != nil {
+		t.Fatalf("读取当前可执行文件状态失败: %v", err)
+	}
+
+	status, raw := env.postUpload(jwt, nil, fakeBinary(elfMagic, upgradeUploadMinBytes))
+	if status != http.StatusAccepted {
+		t.Fatalf("合法上传应 202（备份在后台做），实际 %d %s", status, raw)
+	}
+
+	// 先等终态（停滞看门狗触发）。
+	deadline := time.Now().Add(10 * time.Second)
+	var job *upgradeJob
+	for {
+		job = env.api.upgrader.getJob()
+		if job != nil && job.Done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("升级没有在 10 秒内进入终态：%+v", job)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if job.Phase != "stalled" || !strings.Contains(job.Error, "停滞") {
+		t.Fatalf("备份超过停滞阈值应判 stalled，实际 %+v", job)
+	}
+
+	// 等备份返回、runUploadUpgrade 走到 guard：给它超过 createDelay 的余量。
+	time.Sleep(1500 * time.Millisecond)
+
+	// 终态证据不得被迟到的收尾改写。
+	snap := env.api.upgrader.getJob()
+	if snap == nil || snap.Phase != "stalled" || !snap.Done {
+		t.Fatalf("终态任务的 phase 被改写了：%+v", snap)
+	}
+	if !snap.Stalled {
+		t.Fatal("stalled 派生标记必须保持 true")
+	}
+	if !strings.Contains(snap.Error, "停滞") {
+		t.Fatalf("终态错误被改写：%q", snap.Error)
+	}
+	// 二进制与替换痕迹：一步都不能发生。
+	after, err := os.Stat(exe)
+	if err != nil {
+		t.Fatalf("读取当前可执行文件状态失败: %v", err)
+	}
+	if after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("任务已判失败却动了当前二进制：size %d→%d，mtime %v→%v",
+			before.Size(), after.Size(), before.ModTime(), after.ModTime())
+	}
+	if _, err := os.Stat(exe + upgradePrevSuffix); err == nil {
+		t.Fatalf("任务已判失败却留下了 %s", exe+upgradePrevSuffix)
+	}
+	if _, err := os.Stat(upgradeStatePath(env.cfg.DataDir)); err == nil {
+		t.Fatalf("任务已判失败却写了升级标记 %s", upgradeStatePath(env.cfg.DataDir))
+	}
+}

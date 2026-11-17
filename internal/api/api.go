@@ -183,7 +183,7 @@ func New(opts Options) (*API, error) {
 		maxSchemaVersion: resolvedMaxSchemaVersion(opts.MaxSchemaVersion),
 		updates: newUpdateChecker(cfgUpdateRepo(opts.Config), cfgUpdateAPIBase(opts.Config),
 			version, cfgUpdateInterval(opts.Config), logger),
-		upgrader:   &upgrader{},
+		upgrader:   newUpgrader(opts.Config),
 		backupWake: make(chan struct{}, 1),
 		login: newLoginThrottle(loginPolicy{
 			MaxAttempts:  opts.Config.LoginMaxAttempts,
