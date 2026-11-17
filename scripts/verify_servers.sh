@@ -278,6 +278,247 @@ dist_has "升级 Agent 入口与无权限说明（A30）" \
   'server.agentUpgrade' 'server.agentUpgradeSubmit' 'server.agentUpgradeNoPerm' \
   'agent_assets' 'refreshUpdateCheck().then('
 
+# ---------------------------------------------------------------- 14. 服务器登录信息
+step "14. 服务器登录信息回显（GET /servers/{id}/access）"
+# access 是唯一回显 SSH 明文密码的接口：字段必须齐、密码必须与创建时逐字相等、
+# 且不得出现在服务器列表里；未绑凭证必须给原因；组范围角色读组外服务器必须 404。
+PW_KEY="password"
+ACCESS_PW="QaAccess-Pw-2026"
+ACCESS_CRED_BODY="$(jq -n --arg name "verify-access" --arg pw "$ACCESS_PW" \
+  '{name:$name,kind:"'"$PW_KEY"'",username:"root","'"$PW_KEY"'":$pw}')"
+ACCESS_CRED="$(api POST /api/v1/credentials "$ACCESS_CRED_BODY" "$TOKEN")"
+ACCESS_CRED_ID="$(jget "$ACCESS_CRED" '.data.id')"
+[ -n "$ACCESS_CRED_ID" ] && pass "创建 access 验收用密码凭证" || fail "创建 access 凭证失败：$ACCESS_CRED"
+
+ACCESS_SRV_BODY="$(jq -n --arg host "127.0.0.1" --argjson port "$SSH_PORT" --arg cid "$ACCESS_CRED_ID" \
+  '{name:"verify-access-srv",host:$host,port:$port,mode:"ssh",credential_id:$cid}')"
+ACCESS_SRV="$(api POST /api/v1/servers "$ACCESS_SRV_BODY" "$TOKEN")"
+ACCESS_SRV_ID="$(jget "$ACCESS_SRV" '.data.id')"
+[ -n "$ACCESS_SRV_ID" ] && pass "创建 access 验收用服务器" || fail "创建 access 服务器失败：$ACCESS_SRV"
+
+ACCESS_CODE="$(status_of -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/servers/${ACCESS_SRV_ID}/access")"
+ACCESS="$(api GET "/api/v1/servers/${ACCESS_SRV_ID}/access" "" "$TOKEN")"
+[ "$ACCESS_CODE" = "200" ] && pass "管理员 GET /servers/{id}/access 返回 200" || fail "GET access 返回 ${ACCESS_CODE}：$ACCESS"
+
+ACCESS_MISSING=""
+for f in server_id name host port username auth_type "$PW_KEY"; do
+  v="$(printf '%s' "$ACCESS" | jq -r --arg f "$f" '.data[$f] // empty' 2>/dev/null)"
+  [ -n "$v" ] || ACCESS_MISSING="${ACCESS_MISSING}${f} "
+done
+[ -z "$ACCESS_MISSING" ] && pass "登录信息字段齐全（server_id/name/host/port/username/password/auth_type）" \
+  || fail "登录信息缺字段：${ACCESS_MISSING}"
+
+ACCESS_GOT_PW="$(printf '%s' "$ACCESS" | jq -jr --arg f "$PW_KEY" '.data[$f] // empty' 2>/dev/null)"
+if [ -n "$ACCESS_GOT_PW" ] && [ "$ACCESS_GOT_PW" = "$ACCESS_PW" ]; then
+  pass "登录信息里的密码与创建时逐字相等（${#ACCESS_GOT_PW} 字节）"
+else
+  fail "密码不一致（期望 ${#ACCESS_PW} 字节，实际 ${#ACCESS_GOT_PW} 字节）"
+fi
+
+ACCESS_HOST="$(printf '%s' "$ACCESS" | jq -r '.data.host // empty' 2>/dev/null)"
+ACCESS_PORT="$(printf '%s' "$ACCESS" | jq -r '.data.port // empty' 2>/dev/null)"
+ACCESS_USER="$(printf '%s' "$ACCESS" | jq -r '.data.username // empty' 2>/dev/null)"
+ACCESS_AUTH="$(printf '%s' "$ACCESS" | jq -r '.data.auth_type // empty' 2>/dev/null)"
+[ "$ACCESS_HOST" = "127.0.0.1" ] && [ "$ACCESS_PORT" = "$SSH_PORT" ] \
+  && pass "地址/端口与创建一致（${ACCESS_HOST}:${ACCESS_PORT}）" \
+  || fail "地址/端口不符：${ACCESS_HOST}:${ACCESS_PORT}，期望 127.0.0.1:${SSH_PORT}"
+[ "$ACCESS_USER" = "root" ] && [ "$ACCESS_AUTH" = "$PW_KEY" ] \
+  && pass "用户名/auth_type 正确（${ACCESS_USER}/${ACCESS_AUTH}）" \
+  || fail "用户名或 auth_type 不符：${ACCESS_USER}/${ACCESS_AUTH}，期望 root/${PW_KEY}"
+
+SERVERS_AFTER_ACCESS="$(api GET /api/v1/servers "" "$TOKEN")"
+if printf '%s' "$SERVERS_AFTER_ACCESS" | grep -qF -- "$ACCESS_PW"; then
+  fail "GET /servers 列表泄露了登录密码明文"
+else
+  pass "GET /servers 列表不含登录密码明文"
+fi
+LIST_HAS_PW="$(printf '%s' "$SERVERS_AFTER_ACCESS" | jq -r --arg id "$ACCESS_SRV_ID" --arg k "$PW_KEY" \
+  '([.data[] | select(.id==$id) | has($k)] | .[0]) // false' 2>/dev/null)"
+[ "$LIST_HAS_PW" = "false" ] && pass "服务器列表响应没有 password 字段" \
+  || fail "服务器列表出现了 password 字段（${LIST_HAS_PW}）"
+
+NOCRED_SRV="$(api POST /api/v1/servers "$(jq -n --arg host "127.0.0.1" --argjson port "$SSH_PORT" \
+  '{name:"verify-no-cred-access",host:$host,port:$port,mode:"ssh"}')" "$TOKEN")"
+NOCRED_SRV_ID="$(jget "$NOCRED_SRV" '.data.id')"
+NOCRED_CODE="$(status_of -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/servers/${NOCRED_SRV_ID}/access")"
+NOCRED="$(api GET "/api/v1/servers/${NOCRED_SRV_ID}/access" "" "$TOKEN")"
+NOCRED_AUTH="$(printf '%s' "$NOCRED" | jq -r '.data.auth_type // empty' 2>/dev/null)"
+NOCRED_MSG="$(printf '%s' "$NOCRED" | jq -r '.error.message // empty' 2>/dev/null)"
+if [ "$NOCRED_CODE" = "409" ] && [ -z "$NOCRED_AUTH" ]; then
+  pass "未绑凭证时无 auth_type（HTTP ${NOCRED_CODE}）"
+else
+  fail "未绑凭证返回 ${NOCRED_CODE} 且 auth_type='${NOCRED_AUTH}'，期望 409 且为空"
+fi
+if [ -n "$NOCRED_MSG" ] && printf '%s' "$NOCRED_MSG" | grep -q '凭证'; then
+  pass "未绑凭证的 message 给出了原因（${NOCRED_MSG}）"
+else
+  fail "未绑凭证缺少原因说明：message='${NOCRED_MSG}'"
+fi
+
+ACCESS_GRP="$(api POST /api/v1/server-groups '{"name":"verify-access-scope"}' "$TOKEN")"
+ACCESS_GRP_ID="$(jget "$ACCESS_GRP" '.data.id')"
+ACCESS_ROLE_KEY=""; ACCESS_ROLE=""; VLOGIN=""
+if [ -n "$ACCESS_GRP_ID" ]; then
+  api PUT "/api/v1/server-groups/${ACCESS_GRP_ID}/servers" \
+    "$(jq -n --arg s "$ACCESS_SRV_ID" '{server_ids:[$s]}')" "$TOKEN" >/dev/null
+  ACCESS_ROLE="$(api POST /api/v1/roles "$(jq -n --arg g "$ACCESS_GRP_ID" \
+    '{name:"verify-access-reader",permissions:["server.read"],scope:{mode:"groups",group_ids:[$g],server_ids:[]}}')" "$TOKEN")"
+  ACCESS_ROLE_KEY="$(jget "$ACCESS_ROLE" '.data.key')"
+fi
+ACCESS_VIEW_PW="QaView-Pw-2026"
+VTOKEN=""
+if [ -n "$ACCESS_ROLE_KEY" ]; then
+  api POST /api/v1/users "$(jq -n --arg r "$ACCESS_ROLE_KEY" --arg pw "$ACCESS_VIEW_PW" \
+    '{username:"verify-access-viewer",role:$r,"'"$PW_KEY"'":$pw}')" "$TOKEN" >/dev/null
+  VLOGIN="$(api POST /api/v1/auth/login "$(jq -n --arg pw "$ACCESS_VIEW_PW" \
+    '{username:"verify-access-viewer","'"$PW_KEY"'":$pw}')")"
+  VTOKEN="$(jget "$VLOGIN" '.data.token')"
+fi
+if [ -n "$VTOKEN" ]; then
+  V_IN="$(status_of -H "Authorization: Bearer ${VTOKEN}" "${BASE}/api/v1/servers/${ACCESS_SRV_ID}/access")"
+  V_OUT="$(status_of -H "Authorization: Bearer ${VTOKEN}" "${BASE}/api/v1/servers/${SRV_ID}/access")"
+  [ "$V_IN" = "200" ] && pass "组范围角色读组内服务器 200（正向对照）" \
+    || fail "组内服务器返回 ${V_IN}，期望 200（否则 404 断言失去意义）"
+  [ "$V_OUT" = "404" ] && pass "组范围角色读组外服务器返回 404（不泄露存在性）" \
+    || fail "组外服务器返回 ${V_OUT}，期望 404"
+else
+  fail "创建组范围角色/用户并登录失败：group=${ACCESS_GRP} role=${ACCESS_ROLE} login=${VLOGIN}"
+fi
+
+AUDIT_LOGS="$(api GET "/api/v1/audit-logs?action=server.access" "" "$TOKEN")"
+AUDIT_ACCESS_N="$(printf '%s' "$AUDIT_LOGS" | jq -r --arg id "$ACCESS_SRV_ID" \
+  '[.data[] | select(.action=="server.access" and .resource_id==$id)] | length' 2>/dev/null)"
+[ "${AUDIT_ACCESS_N:-0}" -ge 1 ] 2>/dev/null \
+  && pass "GET /audit-logs 含有 server.access 记录（${AUDIT_ACCESS_N} 条）" \
+  || fail "审计缺少 server.access：$AUDIT_LOGS"
+AUDIT_LEAK="$(printf '%s' "$AUDIT_LOGS" | jq -r --arg id "$ACCESS_SRV_ID" --arg pw "$ACCESS_PW" \
+  '[.data[] | select(.action=="server.access" and .resource_id==$id) | ((.detail // "") | contains($pw))] | any' 2>/dev/null)"
+[ "$AUDIT_LEAK" = "false" ] && pass "server.access 审计 detail 不含密码明文" \
+  || fail "server.access 审计 detail 泄露了密码（jq=${AUDIT_LEAK:-解析失败}）"
+
+# ---------------------------------------------------------------- 15. 登录脚本（一键登录）
+step "15. 登录脚本：POST /servers/{id}/login 的三种返回形态与失败边界"
+
+# 登录脚本会在目标机上真执行，所以这里用一套 devssh 认可的凭证（devuser/devpass），
+# 而不是复用第 14 节那个「只为展示登录信息」的 root 凭证——否则脚本一定认证失败。
+LOGIN_CRED="$(api POST /api/v1/credentials "$(jq -n --arg name "verify-login" --arg pw "devpass" --arg u "devuser" \
+  '{name:$name,kind:"'"$PW_KEY"'",username:$u,"'"$PW_KEY"'":$pw}')" "$TOKEN")"
+LOGIN_CRED_ID="$(jget "$LOGIN_CRED" '.data.id')"
+LOGIN_SRV="$(api POST /api/v1/servers "$(jq -n --arg host "127.0.0.1" --argjson port "$SSH_PORT" --arg cid "$LOGIN_CRED_ID" \
+  '{name:"verify-login-srv",host:$host,port:$port,mode:"ssh",credential_id:$cid}')" "$TOKEN")"
+LOGIN_SRV_ID="$(jget "$LOGIN_SRV" '.data.id')"
+[ -n "$LOGIN_SRV_ID" ] && pass "创建登录脚本验收用服务器（devssh 凭证）" \
+  || fail "创建登录脚本验收服务器失败：$LOGIN_SRV"
+if [ -n "$ACCESS_GRP_ID" ] && [ -n "$LOGIN_SRV_ID" ]; then
+  api PUT "/api/v1/server-groups/${ACCESS_GRP_ID}/servers" \
+    "$(jq -n --arg a "$ACCESS_SRV_ID" --arg b "$LOGIN_SRV_ID" '{server_ids:[$a,$b]}')" "$TOKEN" >/dev/null
+fi
+
+LOGIN_TERM_SCRIPT="printf '{\"terminal\":\"ssh -p 22 root@1.2.3.4\"}'"
+LOGIN_PATCH_BODY="$(jq -n --arg s "$LOGIN_TERM_SCRIPT" '{login_script:$s}')"
+LOGIN_PATCH="$(api PATCH "/api/v1/servers/${LOGIN_SRV_ID}" "$LOGIN_PATCH_BODY" "$TOKEN")"
+LOGIN_SAVED="$(jget "$LOGIN_PATCH" '.data.login_script')"
+[ -n "$LOGIN_SAVED" ] && pass "PATCH /servers/{id} 保存 login_script 成功" \
+  || fail "保存 login_script 失败：$LOGIN_PATCH"
+
+LOGIN_REREAD="$(jget "$(api GET "/api/v1/servers/${LOGIN_SRV_ID}" "" "$TOKEN")" '.data.login_script')"
+[ "$LOGIN_REREAD" = "$LOGIN_SAVED" ] && pass "GET /servers/{id} 回读 login_script 一致" \
+  || fail "login_script 回读不一致：写入='${LOGIN_SAVED}' 回读='${LOGIN_REREAD}'"
+
+LOGIN_TERM="$(api POST "/api/v1/servers/${LOGIN_SRV_ID}/login" "" "$TOKEN")"
+LOGIN_TERM_CMD="$(jget "$LOGIN_TERM" '.data.terminal')"
+[ "$LOGIN_TERM_CMD" = "ssh -p 22 root@1.2.3.4" ] \
+  && pass "脚本输出 terminal 被原样解析（${LOGIN_TERM_CMD}）" \
+  || fail "terminal 形态解析失败：$LOGIN_TERM"
+
+api PATCH "/api/v1/servers/${LOGIN_SRV_ID}" \
+  "$(jq -n --arg s "printf '{\"url\":\"https://panel.example.com/t/abc\"}'" '{login_script:$s}')" "$TOKEN" >/dev/null
+LOGIN_URL="$(api POST "/api/v1/servers/${LOGIN_SRV_ID}/login" "" "$TOKEN")"
+LOGIN_URL_VAL="$(jget "$LOGIN_URL" '.data.url')"
+[ "$LOGIN_URL_VAL" = "https://panel.example.com/t/abc" ] \
+  && pass "脚本输出 url 被原样解析（${LOGIN_URL_VAL}）" \
+  || fail "url 形态解析失败：$LOGIN_URL"
+
+api PATCH "/api/v1/servers/${LOGIN_SRV_ID}" '{"login_script":"echo hello-login"}' "$TOKEN" >/dev/null
+LOGIN_RAW="$(api POST "/api/v1/servers/${LOGIN_SRV_ID}/login" "" "$TOKEN")"
+LOGIN_RAW_OUT="$(jget "$LOGIN_RAW" '.data.output')"
+LOGIN_RAW_URL="$(jget "$LOGIN_RAW" '.data.url')"
+if printf '%s' "$LOGIN_RAW_OUT" | grep -q 'hello-login' && [ -z "$LOGIN_RAW_URL" ]; then
+  pass "非 JSON 输出整体落到 output，url/terminal 留空"
+else
+  fail "非 JSON 输出的降级不正确：$LOGIN_RAW"
+fi
+
+api PATCH "/api/v1/servers/${LOGIN_SRV_ID}" '{"login_script":"echo boom >&2; exit 3"}' "$TOKEN" >/dev/null
+LOGIN_FAIL_CODE="$(status_of -X POST -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/servers/${LOGIN_SRV_ID}/login")"
+LOGIN_FAIL_BODY="$(api POST "/api/v1/servers/${LOGIN_SRV_ID}/login" "" "$TOKEN")"
+LOGIN_FAIL_ERR="$(jget "$LOGIN_FAIL_BODY" '.error.code')"
+if [ "$LOGIN_FAIL_CODE" = "502" ] && [ "$LOGIN_FAIL_ERR" = "remote_failure" ]; then
+  pass "脚本执行失败返回 502 remote_failure（不谎称成功）"
+else
+  fail "脚本失败应 502 remote_failure，实际 ${LOGIN_FAIL_CODE}/${LOGIN_FAIL_ERR}：$LOGIN_FAIL_BODY"
+fi
+
+LOGIN_EMPTY_CODE="$(status_of -X POST -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/servers/${NOCRED_SRV_ID}/login")"
+LOGIN_EMPTY_BODY="$(api POST "/api/v1/servers/${NOCRED_SRV_ID}/login" "" "$TOKEN")"
+LOGIN_EMPTY_MSG="$(jget "$LOGIN_EMPTY_BODY" '.error.message')"
+if [ "$LOGIN_EMPTY_CODE" = "409" ] && printf '%s' "$LOGIN_EMPTY_MSG" | grep -q '未配置登录脚本'; then
+  pass "未配置脚本返回 409 并说明原因（${LOGIN_EMPTY_MSG}）"
+else
+  fail "未配置脚本应 409 且给出原因，实际 ${LOGIN_EMPTY_CODE}：$LOGIN_EMPTY_BODY"
+fi
+
+LOGIN_LONG="$(api PATCH "/api/v1/servers/${LOGIN_SRV_ID}" \
+  "$(jq -n --arg s "$(printf 'x%.0s' $(seq 1 9000))" '{login_script:$s}')" "$TOKEN")"
+LOGIN_LONG_CODE="$(printf '%s' "$LOGIN_LONG" | jq -r '.error.code // empty' 2>/dev/null)"
+[ "$LOGIN_LONG_CODE" = "invalid_argument" ] && pass "超长 login_script 返回 400 invalid_argument" \
+  || fail "超长 login_script 未被拦截：$LOGIN_LONG"
+
+LOGIN_NUL_CODE="$(curl -sS -o /dev/null -w '%{http_code}' -X PATCH "${BASE}/api/v1/servers/${LOGIN_SRV_ID}" \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer ${TOKEN}" \
+  --data-binary '{"login_script":"a\u0000b"}' 2>/dev/null)"
+[ "$LOGIN_NUL_CODE" = "400" ] && pass "含 NUL 的 login_script 返回 400" \
+  || fail "含 NUL 的 login_script 返回 ${LOGIN_NUL_CODE}，期望 400"
+
+api PATCH "/api/v1/servers/${LOGIN_SRV_ID}" \
+  "$(jq -n --arg s "$LOGIN_TERM_SCRIPT" '{login_script:$s}')" "$TOKEN" >/dev/null
+LOGIN_SCOPE_KEY=""; LOGIN_SCOPE_LOGIN=""
+if [ -n "$ACCESS_GRP_ID" ]; then
+  LOGIN_SCOPE_KEY="$(jget "$(api POST /api/v1/roles "$(jq -n --arg g "$ACCESS_GRP_ID" \
+    '{name:"verify-login-writer",permissions:["server.read","server.write"],scope:{mode:"groups",group_ids:[$g],server_ids:[]}}')" "$TOKEN")" '.data.key')"
+fi
+if [ -n "$LOGIN_SCOPE_KEY" ]; then
+  api POST /api/v1/users "$(jq -n --arg r "$LOGIN_SCOPE_KEY" --arg pw 'verify-login-pw' \
+    '{username:"verify-login-writer",role:$r,"'"$PW_KEY"'":$pw}')" "$TOKEN" >/dev/null
+  LOGIN_SCOPE_TOKEN="$(jget "$(api POST /api/v1/auth/login "$(jq -n --arg pw 'verify-login-pw' \
+    '{username:"verify-login-writer","'"$PW_KEY"'":$pw}')")" '.data.token')"
+  if [ -n "$LOGIN_SCOPE_TOKEN" ]; then
+    LS_IN="$(status_of -X POST -H "Authorization: Bearer ${LOGIN_SCOPE_TOKEN}" "${BASE}/api/v1/servers/${LOGIN_SRV_ID}/login")"
+    LS_OUT="$(status_of -X POST -H "Authorization: Bearer ${LOGIN_SCOPE_TOKEN}" "${BASE}/api/v1/servers/${SRV_ID}/login")"
+    [ "$LS_IN" = "200" ] && pass "组范围写权限角色对组内服务器可执行登录脚本（200）" \
+      || fail "组内登录脚本返回 ${LS_IN}，期望 200"
+    [ "$LS_OUT" = "404" ] && pass "组范围角色对组外服务器执行登录脚本返回 404" \
+      || fail "组外登录脚本返回 ${LS_OUT}，期望 404"
+  else
+    fail "组范围写权限用户登录失败"
+  fi
+else
+  fail "创建组范围写权限角色失败：${ACCESS_GRP_ID}"
+fi
+
+LOGIN_AUDIT="$(api GET "/api/v1/audit-logs?action=server.login" "" "$TOKEN")"
+LOGIN_AUDIT_N="$(printf '%s' "$LOGIN_AUDIT" | jq -r --arg id "$LOGIN_SRV_ID" \
+  '[.data[] | select(.action=="server.login" and .resource_id==$id)] | length' 2>/dev/null)"
+[ "${LOGIN_AUDIT_N:-0}" -ge 1 ] 2>/dev/null \
+  && pass "GET /audit-logs 含有 server.login 记录（${LOGIN_AUDIT_N} 条）" \
+  || fail "审计缺少 server.login：$LOGIN_AUDIT"
+LOGIN_AUDIT_LEAK="$(printf '%s' "$LOGIN_AUDIT" | jq -r --arg id "$LOGIN_SRV_ID" \
+  '[.data[] | select(.action=="server.login" and .resource_id==$id) | ((.detail // "") | contains("panel.example.com"))] | any' 2>/dev/null)"
+[ "$LOGIN_AUDIT_LEAK" = "false" ] && pass "server.login 审计 detail 不含脚本产出的 URL 明文" \
+  || fail "server.login 审计 detail 泄露了 URL（jq=${LOGIN_AUDIT_LEAK:-解析失败}）"
+
+dist_has "登录信息卡片含一键登录入口" 'server.login.action' 'server.login.scriptTitle'
+
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"

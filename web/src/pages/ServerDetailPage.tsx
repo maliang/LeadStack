@@ -6,6 +6,8 @@ import {
   type MetricSeries,
   type MetricsStep,
   type Server,
+  type ServerAccess,
+  type ServerLoginResult,
   type TestConnectionResult,
   type UpdateAsset,
 } from '../lib/api'
@@ -25,6 +27,8 @@ import {
   usageTone,
 } from '../lib/format'
 import { Button } from '../components/Button'
+import { CodeEditor } from '../components/CodeEditor'
+import { CopyButton } from '../components/CopyButton'
 import { Modal } from '../components/Modal'
 import {
   AlertTriangleIcon,
@@ -340,6 +344,488 @@ function AgentUpgradeDialog({
         </p>
       </form>
     </Modal>
+  )
+}
+
+/** 密码掩码占位：只在界面上替换明文，复制时仍取真实值。 */
+const ACCESS_PASSWORD_MASK = '••••••••'
+
+export interface ServerAccessLabels {
+  name: string
+  host: string
+  port: string
+  username: string
+  password: string
+}
+
+/**
+ * 把登录信息拼成「字段: 值」多行文本，供「一键复制」使用（纯函数，便于单测）。
+ * 数字字段（端口）不带单位后缀，与字段标签分列。
+ */
+export function formatServerAccess(access: ServerAccess, labels: ServerAccessLabels): string {
+  return [
+    `${labels.name}: ${access.name}`,
+    `${labels.host}: ${access.host}`,
+    `${labels.port}: ${access.port === null ? '' : access.port}`,
+    `${labels.username}: ${access.username}`,
+    `${labels.password}: ${access.password}`,
+  ].join('\n')
+}
+
+interface AccessRowProps {
+  label: string
+  value: string
+  copyValue?: string
+  mono?: boolean
+  children?: ReactNode
+}
+
+/** 单条登录信息：左标签右值 + 复制；窄宽下值截断，hover 用 title 兜底。 */
+function AccessRow({ label, value, copyValue, mono = false, children }: AccessRowProps) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-slate-100 py-2 last:border-b-0 dark:border-slate-800/70">
+      <dt className="shrink-0 text-xs text-slate-500 dark:text-slate-400">{label}</dt>
+      <dd className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate text-right text-xs font-medium text-slate-700 dark:text-slate-200',
+            mono && 'font-mono text-[11px]',
+          )}
+          title={value}
+        >
+          {value}
+        </span>
+        {children}
+        {copyValue === undefined ? null : (
+          <CopyButton value={copyValue} label={t('server.access.copy')} className="h-7 px-2" />
+        )}
+      </dd>
+    </div>
+  )
+}
+
+/** 登录脚本示例：宝塔 / 1Panel 各一段，覆盖 output 与 terminal 两种分派形态。 */
+const LOGIN_SCRIPT_SAMPLES: Array<{ key: string; labelKey: string; script: string }> = [
+  {
+    key: 'baota',
+    labelKey: 'server.login.sampleBaota',
+    script: `#!/usr/bin/env bash
+# 宝塔面板没有免密网页登录的公开 API，只能用「面板设置 → 临时访问授权」生成一次性链接，
+# 把链接粘到下面这行里，脚本就能把它交给浏览器打开。
+PANEL_URL='https://panel.example.com:8888'
+TEMP_LINK=''
+if [ -n "$TEMP_LINK" ]; then
+  printf '{"url":"%s"}' "$TEMP_LINK"
+else
+  printf '{"output":"面板地址：%s\\n登录方式：面板设置 → 临时访问授权，生成一次性链接后填入脚本"}' "$PANEL_URL"
+fi`,
+  },
+  {
+    key: 'onepanel',
+    labelKey: 'server.login.sampleOnePanel',
+    script: `#!/usr/bin/env bash
+# 1Panel 只有 API Key 鉴权，没有免密网页登录；这里输出一条 SSH 命令交给网页终端。
+# 把 host/port 换成这台服务器的实际值（脚本里不要写密码）。
+printf '{"terminal":"ssh -p %s %s@%s"}' '22' 'root' '1.2.3.4'`,
+  },
+]
+
+/**
+ * 「登录脚本」配置对话框。
+ *
+ * 脚本在目标机上执行（POST /servers/{id}/login 由发布执行器下发单步任务），约定输出 JSON：
+ * {"url":…} / {"terminal":…} / {"output":…}。保存走 PATCH /servers/{id} 的 login_script。
+ */
+function LoginScriptDialog({
+  open,
+  server,
+  onClose,
+  onSaved,
+}: {
+  open: boolean
+  server: Server
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [script, setScript] = useState(server.login_script)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setScript(server.login_script)
+    setError(null)
+  }, [open, server.login_script])
+
+  const save = async (next: string) => {
+    setSaving(true)
+    setError(null)
+    try {
+      await api.updateServer(server.id, { login_script: next })
+      toast(t('server.login.scriptSaved'), 'success')
+      onSaved()
+      onClose()
+    } catch (caught) {
+      setError(errorMessage(caught, t('server.login.scriptSaveFailed')))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      size="lg"
+      title={t('server.login.scriptTitle')}
+      description={t('server.login.scriptHint')}
+      onClose={onClose}
+      footer={
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={saving || script.trim() === ''}
+            onClick={() => void save('')}
+          >
+            {t('server.login.scriptClear')}
+          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" size="sm" onClick={onClose} disabled={saving}>
+              {t('s.0024')}
+            </Button>
+            <Button size="sm" loading={saving} onClick={() => void save(script)}>
+              {t('server.login.scriptSave')}
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            {t('server.login.sampleLabel')}
+          </span>
+          {LOGIN_SCRIPT_SAMPLES.map((sample) => (
+            <Button
+              key={sample.key}
+              variant="ghost"
+              size="sm"
+              onClick={() => setScript(sample.script)}
+            >
+              {t(sample.labelKey)}
+            </Button>
+          ))}
+        </div>
+        <CodeEditor
+          value={script}
+          onChange={setScript}
+          rows={14}
+          placeholder={t('server.login.scriptPlaceholder')}
+          ariaLabel={t('server.login.scriptTitle')}
+        />
+        <p className="text-[11px] leading-relaxed text-slate-400 dark:text-slate-500">
+          {t('server.login.scriptRisk')}
+        </p>
+        {error ? (
+          <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
+            {error}
+          </p>
+        ) : null}
+      </div>
+    </Modal>
+  )
+}
+
+/** 一键登录结果对话框：terminal 形态给命令 + 跳终端，output 形态原样展示。 */
+function LoginResultDialog({
+  result,
+  serverId,
+  onClose,
+}: {
+  result: ServerLoginResult | null
+  serverId: string
+  onClose: () => void
+}) {
+  const { t } = useI18n()
+  const navigate = useNavigate()
+  const terminal = result?.terminal ?? ''
+  const output = result?.output ?? ''
+
+  return (
+    <Modal
+      open={result !== null}
+      size="lg"
+      title={terminal ? t('server.login.terminalTitle') : t('server.login.outputTitle')}
+      description={terminal ? t('server.login.terminalHint') : t('server.login.outputHint')}
+      onClose={onClose}
+      footer={
+        terminal ? (
+          <div className="flex items-center justify-end gap-2">
+            <CopyButton value={terminal} label={t('server.login.copyCommand')} />
+            <Button size="sm" onClick={() => navigate(`/servers/${serverId}?tab=terminal`)}>
+              {t('server.login.openTerminal')}
+            </Button>
+          </div>
+        ) : null
+      }
+    >
+      <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-900 px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-100">
+        {terminal || output || t('server.login.resultEmpty')}
+      </pre>
+    </Modal>
+  )
+}
+
+interface ServerAccessCardProps {
+  server: Server
+  onRefreshServer: () => void
+}
+
+/**
+ * 服务器详情页「登录信息」卡片。
+ *
+ * 数据源 GET /servers/{id}/access：服务端每次读取都写一条 server.access 审计，
+ * 所以卡片默认折叠——用户点「展开查看」才请求一次，收起即丢弃明文；不做轮询。
+ * 同一张卡片是一键登录入口：未配置脚本给配置入口，已配置则执行脚本并按返回分派。
+ */
+function ServerAccessCard({ server, onRefreshServer }: ServerAccessCardProps) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [expanded, setExpanded] = useState(false)
+  const [access, setAccess] = useState<ServerAccess | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [passwordVisible, setPasswordVisible] = useState(false)
+  const [scriptOpen, setScriptOpen] = useState(false)
+  const [loginBusy, setLoginBusy] = useState(false)
+  const [loginResult, setLoginResult] = useState<ServerLoginResult | null>(null)
+
+  const serverId = server.id
+  const hasScript = server.login_script.trim() !== ''
+
+  useEffect(() => {
+    // 折叠状态一律不请求：否则「打开详情页」就等于「导出凭据」（契约 §67.6）。
+    if (!expanded) return
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    api
+      .serverAccess(serverId)
+      .then((next) => {
+        if (cancelled) return
+        setAccess(next)
+      })
+      .catch((caught) => {
+        if (cancelled) return
+        setAccess(null)
+        setError(errorMessage(caught, t('server.access.loadFailed')))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [expanded, serverId, reloadKey, t])
+
+  // 标签每次渲染现取：useI18n 的 t 是稳定引用，memo 住会在切换语言后留下旧文案。
+  const labels: ServerAccessLabels = {
+    name: t('server.access.fieldName'),
+    host: t('server.access.fieldHost'),
+    port: t('server.access.fieldPort'),
+    username: t('server.access.fieldUsername'),
+    password: t('server.access.fieldPassword'),
+  }
+
+  const retry = () => setReloadKey((key) => key + 1)
+  const collapse = () => {
+    setExpanded(false)
+    // 收起即丢弃：明文不留在内存里，下次展开重新读取（并重新记一次审计）。
+    setAccess(null)
+    setError(null)
+    setPasswordVisible(false)
+  }
+  const toggleExpanded = () => {
+    if (expanded) collapse()
+    else setExpanded(true)
+  }
+
+  const runLogin = async () => {
+    if (!hasScript) {
+      setScriptOpen(true)
+      return
+    }
+    setLoginBusy(true)
+    try {
+      const result = await api.serverLogin(serverId)
+      if (result.url) {
+        const opened = window.open(result.url, '_blank', 'noopener,noreferrer')
+        toast(
+          opened ? t('server.login.urlOpened') : t('server.login.urlBlocked'),
+          opened ? 'success' : 'error',
+        )
+        return
+      }
+      if (result.terminal || result.output) {
+        setLoginResult(result)
+        return
+      }
+      toast(t('server.login.resultEmpty'), 'error')
+    } catch (caught) {
+      toast(errorMessage(caught, t('server.login.failed')), 'error')
+    } finally {
+      setLoginBusy(false)
+    }
+  }
+
+  const hasPassword = access !== null && access.password !== ''
+  const passwordText = !access
+    ? '—'
+    : !hasPassword
+      ? '—'
+      : passwordVisible
+        ? access.password
+        : ACCESS_PASSWORD_MASK
+  const wholeText = access ? formatServerAccess(access, labels) : ''
+  const keyAuth = access !== null && access.auth_type === 'key'
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            {t('server.access.title')}
+          </h2>
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-400 dark:text-slate-500">
+            {t('server.access.hint')}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={loginBusy}
+            onClick={() => void runLogin()}
+            icon={<TerminalIcon className="h-4 w-4" />}
+          >
+            {hasScript ? t('server.login.action') : t('server.login.configure')}
+          </Button>
+          {hasScript ? (
+            <Button size="sm" variant="ghost" onClick={() => setScriptOpen(true)}>
+              {t('server.login.scriptEdit')}
+            </Button>
+          ) : null}
+          <Button size="sm" variant="secondary" onClick={toggleExpanded} loading={loading}>
+            {expanded ? t('server.access.collapse') : t('server.access.expand')}
+          </Button>
+        </div>
+      </div>
+
+      {!expanded ? null : loading && !access ? (
+        <div className="mt-3">
+          <InlineLoading label={t('server.access.loading')} />
+        </div>
+      ) : null}
+
+      {expanded && error ? (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
+          <span className="min-w-0 break-all">{error}</span>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={retry}
+            icon={<RefreshIcon className="h-4 w-4" />}
+          >
+            {t('server.access.retry')}
+          </Button>
+        </div>
+      ) : null}
+
+      {expanded && access ? (
+        <>
+          <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+            <CopyButton value={wholeText} label={t('server.access.copyAll')} />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={retry}
+              loading={loading}
+              icon={<RefreshIcon className="h-4 w-4" />}
+            >
+              {t('server.access.refresh')}
+            </Button>
+          </div>
+          <dl className="mt-1">
+            <AccessRow
+              label={labels.name}
+              value={access.name || '—'}
+              copyValue={access.name}
+            />
+            <AccessRow
+              label={labels.host}
+              value={access.host || '—'}
+              copyValue={access.host}
+              mono
+            />
+            <AccessRow
+              label={labels.port}
+              value={access.port === null ? '—' : String(access.port)}
+              copyValue={access.port === null ? undefined : String(access.port)}
+              mono
+            />
+            <AccessRow
+              label={labels.username}
+              value={access.username || '—'}
+              copyValue={access.username}
+              mono
+            />
+            <AccessRow
+              label={labels.password}
+              value={passwordText}
+              copyValue={hasPassword ? access.password : undefined}
+              mono
+            >
+              {hasPassword ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2"
+                  aria-pressed={passwordVisible}
+                  aria-label={
+                    passwordVisible
+                      ? t('server.access.hidePassword')
+                      : t('server.access.showPassword')
+                  }
+                  onClick={() => setPasswordVisible((visible) => !visible)}
+                >
+                  {passwordVisible
+                    ? t('server.access.hidePassword')
+                    : t('server.access.showPassword')}
+                </Button>
+              ) : null}
+            </AccessRow>
+          </dl>
+          <p className="mt-3 text-[11px] leading-relaxed text-slate-400 dark:text-slate-500">
+            {keyAuth ? t('server.access.keyAuthNote') : t('server.access.copyAllHint')}
+          </p>
+        </>
+      ) : null}
+
+      <LoginScriptDialog
+        open={scriptOpen}
+        server={server}
+        onClose={() => setScriptOpen(false)}
+        onSaved={onRefreshServer}
+      />
+      <LoginResultDialog
+        result={loginResult}
+        serverId={serverId}
+        onClose={() => setLoginResult(null)}
+      />
+    </section>
   )
 }
 
@@ -752,6 +1238,8 @@ export default function ServerDetailPage() {
           ) : null}
         </section>
       </div>
+
+      <ServerAccessCard server={server} onRefreshServer={() => void query.refresh()} />
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-2">

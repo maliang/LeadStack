@@ -19,14 +19,16 @@ import (
 
 // fakeBackupService 是 BackupService 的测试替身：真实读写备份目录，便于验证路径安全与暂存。
 type fakeBackupService struct {
-	mu            sync.Mutex
-	dir           string
-	interval      time.Duration
-	retention     int
-	seq           int
-	infos         []BackupInfo
-	verifyErr     error
-	createErr     error
+	mu        sync.Mutex
+	dir       string
+	interval  time.Duration
+	retention int
+	seq       int
+	infos     []BackupInfo
+	verifyErr error
+	createErr error
+	// createDelay 让备份「变慢」，用于验证停滞看门狗与收尾阶段的竞态。
+	createDelay   time.Duration
 	manifest      *BackupManifest
 	schemaVersion int
 	deleted       []string
@@ -46,6 +48,9 @@ func (f *fakeBackupService) Create(_ context.Context, includeArtifacts bool) (*B
 	defer f.mu.Unlock()
 	if f.createErr != nil {
 		return nil, f.createErr
+	}
+	if f.createDelay > 0 {
+		time.Sleep(f.createDelay)
 	}
 	f.seq++
 	name := fmt.Sprintf("leadstack-2026102%d-%06d.lsbak", f.seq, f.seq)

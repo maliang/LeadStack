@@ -512,6 +512,25 @@ export interface Server {
   credential_id: string | null
   last_error: string | null
   host_info: HostInfo | null
+  /** 服务器登录脚本（迁移 0013）；空串表示未配置一键登录 */
+  login_script: string
+}
+
+/**
+ * GET /servers/{id}/access 的返回体（契约第 10 节）。
+ *
+ * 这是唯一回显 SSH 明文密码的接口：服务端每次读取都会写一条 `server.access` 审计，
+ * 因此前端只在卡片挂载/手动重试时读取一次，禁止放进轮询。
+ */
+export interface ServerAccess {
+  server_id: string
+  name: string
+  host: string
+  port: number | null
+  username: string
+  password: string
+  /** 凭证类型：password / key（key 无密码时 password 为空串） */
+  auth_type: string
 }
 
 export type CredentialKind = 'password' | 'key' | 'baota' | string
@@ -2414,6 +2433,44 @@ export function normalizeServer(input: unknown): Server {
     credential_id: toText(raw.credential_id),
     last_error: toText(raw.last_error),
     host_info: normalizeHostInfo(raw.host_info),
+    login_script: toText(raw.login_script) ?? '',
+  }
+}
+
+/** 逐字段解包登录信息：缺字段一律降级为空串/空端口，不把原始信封交给界面。 */
+export function normalizeServerAccess(input: unknown): ServerAccess {
+  const raw = toRecord(input) ?? {}
+  return {
+    server_id: toText(raw.server_id) ?? '',
+    name: toText(raw.name) ?? '',
+    host: toText(raw.host) ?? '',
+    port: toNumber(raw.port),
+    username: toText(raw.username) ?? '',
+    password: toText(raw.password) ?? '',
+    auth_type: toText(raw.auth_type) ?? '',
+  }
+}
+
+/**
+ * POST /servers/{id}/login 的返回体：服务端在目标机执行登录脚本，把 stdout 解析成三选一。
+ *
+ * 前端按「哪个字段非空」分派：url → 新标签打开；terminal → 跳到终端并预置命令；否则展示 output。
+ */
+export interface ServerLoginResult {
+  server_id: string
+  url: string
+  terminal: string
+  output: string
+}
+
+/** 逐字段解包登录脚本结果：缺字段降级为空串，界面据此选分派方式。 */
+export function normalizeServerLogin(input: unknown): ServerLoginResult {
+  const raw = toRecord(input) ?? {}
+  return {
+    server_id: toText(raw.server_id) ?? '',
+    url: toText(raw.url) ?? '',
+    terminal: toText(raw.terminal) ?? '',
+    output: toText(raw.output) ?? '',
   }
 }
 
@@ -2471,6 +2528,8 @@ export interface UpdateServerPayload {
   /** 整包替换；缺省表示不改（契约第 55.4 节） */
   group_ids?: string[]
   panel_credential_id?: string | null
+  /** 服务器登录脚本（空串清除）；只在用户显式编辑时提交，避免误清 */
+  login_script?: string
 }
 
 /** POST /servers 请求体（纳管 扩展字段，契约第 10 节）。 */
@@ -2787,6 +2846,21 @@ export const api = {
 
   server(id: string): Promise<Server> {
     return request<unknown>(`/servers/${encodeURIComponent(id)}`).then(normalizeServer)
+  },
+
+  /**
+   * GET /servers/{id}/access —— 登录信息（名称/地址/端口/用户名/密码明文）。
+   * 服务端每次调用写 `server.access` 审计：只允许挂载/手动重试时调用，不要轮询。
+   */
+  serverAccess(id: string): Promise<ServerAccess> {
+    return request<unknown>(`/servers/${encodeURIComponent(id)}/access`).then(normalizeServerAccess)
+  },
+
+  /** 执行该服务器配置的登录脚本（POST，非幂等只读：服务端会在目标机跑一次命令）。 */
+  serverLogin(id: string): Promise<ServerLoginResult> {
+    return request<unknown>(`/servers/${encodeURIComponent(id)}/login`, { method: 'POST' }).then(
+      normalizeServerLogin,
+    )
   },
 
   updateServer(id: string, payload: UpdateServerPayload): Promise<Server> {

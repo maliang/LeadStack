@@ -34,6 +34,9 @@ type Server struct {
 	Group             *string `json:"group"`
 	HostKeyPolicy     string  `json:"host_key_policy"`
 	LastError         *string `json:"last_error"`
+	// LoginScript 是服务器登录脚本（迁移 0013）；空串表示未配置。
+	// 脚本在目标机上执行，由 POST /servers/{id}/login 触发。
+	LoginScript string `json:"login_script"`
 }
 
 // 服务器接入模式。

@@ -2003,5 +2003,59 @@ const enUS: Record<string, string> = {
   'toast.copy': 'Copy',
   'toast.close': 'Close',
   'errors.requestId': 'Request ID {id}',
+
+  // T-15: server detail page "login credentials" card (GET /servers/{id}/access)
+  'server.access.title': 'Login credentials',
+  'server.access.hint':
+    'Reading credentials writes a server.access audit entry. The password stays hidden until you click Show.',
+  'server.access.fieldName': 'Name',
+  'server.access.fieldHost': 'Address',
+  'server.access.fieldPort': 'Port',
+  'server.access.fieldUsername': 'Username',
+  'server.access.fieldPassword': 'Password',
+  'server.access.copy': 'Copy',
+  'server.access.copyAll': 'Copy all',
+  'server.access.copyAllHint':
+    'Copy all joins the five fields into one text block that includes the plaintext password; do not paste it into public channels.',
+  'server.access.showPassword': 'Show',
+  'server.access.hidePassword': 'Hide',
+  'server.access.loading': 'Loading login credentials…',
+  'server.access.loadFailed': 'Failed to load login credentials: ',
+  'server.access.retry': 'Retry',
+  'server.access.refresh': 'Reload',
+  'server.access.expand': 'Show details',
+  'server.access.collapse': 'Hide details',
+  'server.access.keyAuthNote':
+    'This server authenticates with a private key, so there is no password to copy; the key itself is never returned by any endpoint.',
+
+  // One-click login (POST /servers/{id}/login): the script runs on the target and prints url/terminal/output
+  'server.login.action': 'One-click login',
+  'server.login.configure': 'Set up login',
+  'server.login.scriptEdit': 'Edit script',
+  'server.login.failed': 'Login script failed: ',
+  'server.login.resultEmpty':
+    'The login script returned nothing usable (it must print one of url / terminal / output).',
+  'server.login.urlOpened': 'Opened the login URL in a new tab',
+  'server.login.urlBlocked': 'The browser blocked the new tab; allow pop-ups and try again',
+  'server.login.terminalTitle': 'Run this command in a terminal',
+  'server.login.terminalHint':
+    'The script returned a terminal command. Copy it to your own terminal, or open the web terminal on this page and paste it.',
+  'server.login.outputTitle': 'Login script output',
+  'server.login.outputHint': 'The script returned neither url nor terminal; here is its raw output.',
+  'server.login.copyCommand': 'Copy command',
+  'server.login.openTerminal': 'Open web terminal',
+  'server.login.scriptTitle': 'Login script',
+  'server.login.scriptHint':
+    'The script runs on the target and must print a JSON object: {"url":"…"} opens the browser, {"terminal":"…"} hands a command to the terminal, {"output":"…"} is shown as text.',
+  'server.login.scriptPlaceholder': '#!/usr/bin/env bash\nprintf \'{"terminal":"ssh -p 22 root@1.2.3.4"}\'',
+  'server.login.scriptSave': 'Save script',
+  'server.login.scriptClear': 'Clear script',
+  'server.login.scriptSaved': 'Login script saved',
+  'server.login.scriptSaveFailed': 'Failed to save the login script: ',
+  'server.login.scriptRisk':
+    'Risk: the script runs on the target with the service account, which is equivalent to command execution on that machine. Do not embed passwords — keep secrets in credentials.',
+  'server.login.sampleLabel': 'Samples:',
+  'server.login.sampleBaota': 'Baota panel',
+  'server.login.sampleOnePanel': '1Panel / SSH',
 }
 export default enUS

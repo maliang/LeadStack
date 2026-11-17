@@ -326,9 +326,12 @@ type HostInfo struct { // 字段与 hostinfo.Info 一一对应，json tag 相同
 | POST | `/servers/{id}/refresh-host-info` | 通过 SSH 采集并落库 → `host_info` |
 | POST | `/servers/batch` | `{ids,action,params?}`，action ∈ `test-connection`/`refresh-host-info`/`add-tags`/`set-group`/`delete` → `{results:[{id,ok,error?}],summary:{ok,failed}}` |
 | GET | `/servers/{id}/metrics` | `?from=<ms>&to=<ms>&step=raw\|1m\|1h` → `{series:[{metric,points:[{ts,value}]}],step}` |
+| GET | `/servers/{id}/access` | 登录信息 `{server_id,name,host,port,username,password,auth_type}`；**唯一回显 SSH 密码明文的接口**，需 `server.read` + 服务器在范围内，每次读取写审计 `server.access`（见 §67） |
+| `POST` | `/servers/{id}/login` | 执行该机 `login_script` → `{server_id,url,terminal,output}`；需 `server.write` + 在范围内，写审计 `server.login`（见 §68） |
+| PATCH | `/servers/{id}` | 可带 `login_script`（≤8192 字符、禁 NUL、空串=清空） |
 | GET | `/groups` | 由 servers 聚合出的分组名与数量（纳管 不建独立表） |
 
-**`POST /servers` 扩展字段**：`credential_id`、`mode`（`agent`/`ssh`）、`group`、`tags`、`host_key_policy`。
+**`POST /servers` 扩展字段**：`credential_id`、`mode`（`agent`/`ssh`）、`group`、`tags`、`host_key_policy`、`login_script`。
 **`GET /servers` 扩展**：支持 `?group=&tag=&status=&mode=` 过滤；每项新增 `mode`、`group`、`credential_id`、`last_error`、`host_info`（无则 `null`）。
 **agentless 行为**：`mode=ssh` 的服务器由控制端按 `LEADSTACK_SSH_INTERVAL`（默认 30s）采集，连续 3 次失败置 `offline` 并写 `last_error`；成功一次即恢复 `online`。
 
@@ -2598,3 +2601,198 @@ args = append(args, limit)
 
 回归测试都构造了「范围内那条排在全局窗口之外」这个关键形态：`internal/store/store_test.go` 的 `TestListReleasesFiltersByServerBeforeLimit` / `TestListAlertsFiltersByServerBeforeLimit`；`internal/api/api_releases_scope_test.go` 的 `TestListReleasesScopeFilterAppliesBeforeLimit`；`internal/api/api_alerts_scope_test.go` 的 `TestListAlertsScopeFilterAppliesBeforeLimit` / `TestListAlertsEmptyScopeReturnsEmptyPage`。反向验证很直接：把 `filter.ServerIDs` 的赋值注释掉，两个 API 测试立刻失败并打印 `{"data":[],"page":{…}}`——正是线上那个「暂无数据」的形态。
 
+## 67. 服务器登录信息：`GET /servers/{id}/access` 的权限、脱敏与审计
+
+> **这是全站唯一回显 SSH 登录密码明文的接口。** 库里只存密文，明文只在这条响应里出现一次。本节把「谁能读、读的时候留什么痕、为什么不得不给明文」写死；改这个接口前先读完本节。
+
+### 67.1 契约
+
+- 路由：`internal/api/router.go:60` → `r.With(permServerRead, inScope).Get("/servers/{serverID}/access", a.handleServerAccess)`
+- handler：`internal/api/handlers_servers.go:207`（`handleServerAccess`），返回体 `serverAccessPayload`（`internal/api/handlers_servers.go:193`）
+
+```json
+{"data":{"server_id":"srv_1a2b","name":"web-01","host":"10.0.0.11","port":22,
+         "username":"root","password":"password","auth_type":"password"}}
+```
+
+字段口径：
+
+| 字段 | 来源 | 说明 |
+|---|---|---|
+| `server_id` / `name` / `host` / `port` | `servers` 行 | 原样回显，够拼出 `ssh <username>@<host> -p <port>` |
+| `username` | `credential.Secret.Username`，为空时回落 `credentials.username` | 与 SSH 实际登录名一致 |
+| `password` | 解密后的 `credential.Secret.Password` 明文 | `auth_type=key` 时是**空串**（私钥认证没有密码），前端应显示「私钥认证」而不是给个空密码让人复制 |
+| `auth_type` | `credential.Secret.Kind` | `password` / `key`；宝塔 `baota` 被拒绝，不会出现在这里 |
+
+### 67.2 权限：`server.read` + 服务器在角色范围内
+
+- 权限点 `server.read`（`auth.PermServerRead`）。没有它 → `403 forbidden`，与其它服务器读接口同一把锁。
+- 范围：路由层挂 `inScope`（`requireServerInScope`，`internal/api/authz.go:202`）。服务器不在调用者角色的资源范围内 → **`404 not_found`「服务器不存在」**，不是 403：对象级越权不暴露「这台机器存在」这一事实（§53.3）。
+- 结论：**能读这台机器的登录信息 ⇔ 能读这台机器的详情**，与本组其它读接口同一道门（`server.read` + 同范围），没有第二把锁。这是刻意的：卡片是详情页的一部分，`server.read` 的定义就是「查看服务器、分组、指标、主机信息」（`internal/auth/perm.go:57`）；密码单独加门只会制造「能看详情但看不了登录信息」的假象。
+- **但有一处不对称要认清**：`server.read` 拿到的密码可以**绕过 `terminal.use`**（`internal/auth/perm.go:17`，管的是控制台内的终端/文件入口）。也就是说，一个只有 `server.read`、没有 `terminal.use` 的角色，仍然能取走密码从控制端之外直连目标机。如果要求「读详情 ≠ 能登机器」，那就得给这个端点换更强的权限点，而不是靠前端藏卡片——现在没有这么做，是因为默认假设「能看服务器的人就是运维」。这条假设写在这里，改权限模型时别当成 bug 顺手补。
+
+### 67.3 脱敏：明文只出现在这一个响应里
+
+| 位置 | 有明文吗 | 机制 |
+|---|---|---|
+| 数据库 `credentials.secret_enc` | 否 | AES-GCM 密文；主密钥 `master.key` 独立文件、不落库 |
+| `GET /credentials`、`GET /servers`、`GET /servers/{id}` | 否 | 只回元数据；`TestServerAccess` 显式断言服务器详情不含明文密码（`internal/api/api_server_access_test.go:65`） |
+| 请求日志 | 否 | handler 不打印 secret；失败路径只带错误串，例如 `fmt.Errorf("解密服务器 %s 的凭证失败: %w", id, err)` |
+| 审计 detail | 否 | 只有 `{"credential_id":"…","auth_type":"…"}`，绝不含密码/私钥（§67.4） |
+| `GET /servers/{id}/access` | **是** | 见 §67.5 |
+
+拒绝面（都返回结构化错误，不让前端猜）：
+
+| 场景 | 状态码 / code | message |
+|---|---|---|
+| 未绑定 SSH 凭证 | `409` / `conflict` | 服务器未绑定 SSH 凭证，无法获取登录信息 |
+| 绑定的是宝塔凭据 | `409` / `conflict` | 服务器绑定的凭证不是 SSH 凭证（防止把 `api_key` 当密码回显） |
+| 凭证加密未启用（缺主密钥，`a.cipher == nil`） | `503` / `internal` | 凭证加密未启用（缺少主密钥） |
+| 解密或解析凭证失败 | `500` / `internal` | 内部错误（含 request_id，不含明文） |
+
+认证方式上**不做二次确认**：没有「再输一次密码」，也没有一次性短时 token——理由见 §67.5 第 5 条。
+
+### 67.4 审计：`server.access`，GET 也要留痕
+
+- action 名 `server.access`，常量 `auditActionServerAccess` 在 `internal/api/audit.go:208`。
+- 为什么手动记：该接口是 **GET**，不在 `auditMiddleware` 的自动审计表里（自动表只收写操作）。因此 handler 在写响应前显式调用 `a.auditManual(r, auditActionServerAccess, "server", id, detail)`（`internal/api/handlers_servers.go:255`）。
+- detail 固定为 `{"credential_id":"<凭证 id>","auth_type":"<password|key>"}`：能回答「谁在什么时候看了哪台机器的哪份凭证」，但**不能**回答「密码是什么」——审计日志本身也要能被人安全地读。
+- 回归：`TestServerAccess` 断言审计里有 `server.access`、`resource_type=server`、`resource_id` 是那台机器、detail 不含机密（`internal/api/api_server_access_test.go:97-116`）。
+
+### 67.5 为什么密码可以被读出来（风险说明，必读）
+
+设计前提：**运维必须能把密码交给终端或 SSH 客户端用**。密文、指纹、哈希都不能直接登录；只要产品要「点一下复制登录命令」，控制端就必须持有可解密的通道。所以问题不是「要不要明文回显」，而是「爆炸半径多大、有没有留痕」。
+
+爆炸半径等价于：**读一次 `/access` = 拿到一次该账号在目标机上的登录能力**。`root` 凭证就是 root。由此有五条必须接受的结论：
+
+1. **不额外提权，但它是「持久凭据的导出通道」**——其它接口泄露的是数据，这个接口泄露的是「以后随时能再进来的钥匙」。在凭据被轮换之前，这把钥匙一直有效。
+2. **传输面必须可信**：明文走 HTTP 响应体。控制端跑在明文 HTTP 上（`--server http://…`，README 已写「等于 root」）时，链路上任何一跳都能看到密码。**生产必须上 HTTPS**，否则这个接口等于把 SSH 密码广播给中间人。
+3. **浏览器侧是短暂暴露**：明文会进内存、可能进 devtools 的网络面板；因此前端只在用户点开卡片时请求一次，不缓存（§67.6）。
+4. **审计是唯一追溯手段**：正因为它是 GET、读一次就拿到钥匙，才必须每次留 `server.access`。删掉这条审计 = 把「谁导出过凭据」变成不可查。
+5. **二次验证换不来真实增益**：它能防的只是「已登录会话被盗后顺手读密码」，防不了「攻击者已有 `server.read` 且能调接口」；反而会把密码逼进脚本与 `curl -d`（更容易进 shell history）。真正的防线是 HTTPS + 最小权限 + 审计。
+6. **泄露后只能轮换止损**：改目标机密码并重新录凭证（旧密文随即作废）。审计只告诉你「发生过」，不能让已经流出的密码失效。
+
+### 67.6 前端「登录信息卡片」的边界
+
+- 卡片**默认折叠**：只有用户点「展开查看」才 `GET /servers/{id}/access` 一次，收起即丢弃数据；**不随列表预取**，也不轮询。
+  这条是硬的——卡片若挂载即请求，「打开详情页」就等于「导出凭据」，`server.access` 审计会退化成「页面访问日志」，追溯价值归零。
+- 明文只放组件内存，收起/离开页面即丢弃；不写 `localStorage`/`sessionStorage`，不进 URL query，不写 console。
+- `auth_type=key` 时密码行显示「—」，并在卡片底部以 `server.access.keyAuthNote` 说明「该服务器用私钥认证，没有可复制的密码；私钥本身不会在任何接口回显。」（`password` 空串不算错误）。
+- 未绑定 SSH 凭证的服务器，卡片直接显示 409 的 `message`（「服务器未绑定 SSH 凭证…」），不摆空输入框。
+
+### 67.7 复现与验收
+
+```bash
+cd /Users/maliang/Documents/develop/maliang/LeadStack-领栈
+go test -count=1 -run TestServerAccess ./internal/api/
+# ok  github.com/maliang/leadstack/internal/api
+```
+
+手工验证（控制端本机，先把 `<server-id>` 换成一个绑定了 SSH 凭证的服务器 id）：
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' -d '{"username":"admin","password":"<password>"}' | jq -r .data.token)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8080/api/v1/servers/<server-id>/access | jq .data
+
+# 审计里应出现 server.access，detail 只有 credential_id + auth_type（需要 audit.read 且全局范围）：
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://127.0.0.1:8080/api/v1/audit-logs?action=server.access&limit=5' \
+  | jq '.data[0] | {action,resource_type,resource_id,detail}'
+```
+
+两条反向验证，改代码时先跑它们：
+
+- 把路由上的 `inScope` 去掉 → 范围内用户的 `/access` 从 404 变成 200（越权读密码）；
+- 把 `auditManual` 那行删掉 → 审计里再也查不到 `server.access`，而响应一切正常（静默失去追溯）。
+
+
+## 68. 一键登录：`POST /servers/{id}/login` 与服务器登录脚本
+
+> 目标：把「拿到登录信息 → 自己开终端/浏览器 → 手动输账号」这一步收敛成一次点击。
+> 关键取舍：**不在控制端内置各面板的登录协议**（宝塔、1Panel 的免密登录都用不了公开 API，见 §68.4），
+> 而是让每台服务器带一段**用户可编辑的脚本**，由控制端在目标机上执行并解析它的输出。
+> 这样新增面板/内网系统只需改脚本，不必改控制端、不必发版。
+
+### 68.1 契约
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `PATCH` | `/servers/{id}` | 请求体可带 `login_script`（字符串，空串=清空）；长度 ≤ 8192 个字符，禁止 NUL |
+| `POST` | `/servers/{id}/login` | 执行该机脚本 → 200 `{server_id,url,terminal,output}`；未配置 → 409；执行器未启用 → 503；目标机不可达/脚本非零退出 → 502 `remote_failure` |
+
+脚本 stdout 约定输出一个 **JSON 对象**，三种形态取其一（前端按「哪个字段非空」分派）：
+
+```json
+{"url": "https://panel.example.com/t/abc"}      // 浏览器打开（一次性登录链接）
+{"terminal": "ssh -p 22 root@1.2.3.4"}          // 交给终端执行
+{"output": "面板地址：https://…"}                // 纯文本展示
+```
+
+解析规则（`parseServerLoginOutput`，`internal/api/handlers_servers.go`）：
+
+- 输出不是 JSON 对象、或 JSON 解析失败 → **整段输出落到 `output`**，`url`/`terminal` 为空，**不报错**。
+  这是刻意的：脚本作者最可能的错误是 `echo` 了一段人类可读文本，此时「看到原文」比「500」有用得多。
+- 单字段按 `maxLoginOutputBytes` 截断（在 rune 边界回退，避免出现半个字符）。
+- 空输出 → 三个字段都为空，前端提示「脚本没有返回可用结果」。
+
+执行方式：复用发布执行器的**单步 plan**（`deploy.Plan` + `deploy.Step`，超时 `loginScriptTimeoutS`），
+因此 agent 与 SSH 两种接入方式都能用，不需要额外通道。
+
+### 68.2 权限与审计
+
+- **权限**：`server.write` + 服务器在角色范围内（路由层 `inScope`）。越界读/写一律 404，不泄露存在性。
+- **为什么不给 `server.read`**：执行脚本 = 在目标机上跑任意命令，等级等同 `server.write`；
+  若允许只读角色触发，等于用「查看登录信息」的名义拿到了命令执行。
+- **审计**：动作 `server.login`，`detail` 只记 `{server_id, script_bytes, has_url}`。
+  **脚本产出的 URL 可能带一次性令牌，绝不进审计**（与 §67.4 同一口径：凭据类明文不落日志）。
+- **脚本本身不是机密**：它随 `GET /servers/{id}` 回显，因此脚本里**不许写密码**——敏感值请放凭据（credentials）。
+
+### 68.3 前端交互
+
+- 卡片顶部一个按钮：未配置脚本时显示「配置一键登录」（直接开配置弹窗），已配置时显示「一键登录」+「编辑脚本」。
+- 点「一键登录」：`url` → `window.open` 新标签（被拦时提示允许弹窗）；`terminal` → 弹窗展示命令 + 复制 + 「打开网页终端」；
+  其余 → 弹窗展示 `output` 原文。
+- 配置弹窗内置两个示例（宝塔 / 1Panel），一键填入后用户只需改地址；
+  底部固定一段风险说明（脚本以服务进程权限执行、不要把密码写进脚本）。
+
+### 68.4 为什么不做「内置面板登录」（宝塔 / 1Panel 的实测结论）
+
+| 面板 | 免密网页登录 | 可编程生成 | 结论 |
+|---|---|---|---|
+| 宝塔 | 有「临时访问授权」（面板设置 → 安全设置，生成一次性链接，1 小时内有效、用后失效） | **无公开 API** | 只能让用户在面板里生成链接、粘进脚本（示例已按这个流程写） |
+| 1Panel | 无 | 仅 API Key 鉴权（`1Panel-Token = md5('1panel' + API-Key + UnixTimestamp)` + `1Panel-Timestamp` 头） | 只能给 `terminal`/`output` 形态 |
+
+也就是说：**脚本机制是通用的**（任何能 `ssh`/`curl` 到的系统都能接），但「一键直达面板首页」这件事在两家都没有公开接口，
+硬做只能靠模拟登录（脆弱、随面板升级就坏、且要保存面板管理员密码）。这个风险不值得为省一次点击承担。
+
+### 68.5 已知边界
+
+- 脚本执行依赖发布执行器：控制端以 `--no-deploy` 之类方式关闭执行器时，接口回 503 而不是假装成功。
+- 脚本是**每台服务器一段**，没有「全局模板」；同构机器请用同一个脚本内容（后续可考虑模板继承）。
+- 并发点两次「一键登录」会并发跑两次脚本；脚本本身应幂等（生成一次性链接的场景由面板侧决定语义）。
+- 迁移 `0013_server_login.sql` 只加一列 `servers.login_script TEXT NOT NULL DEFAULT ''`，老库自动补齐为空串（未配置）。
+
+### 68.6 复现与验收
+
+```bash
+cd /Users/maliang/Documents/develop/maliang/LeadStack-领栈
+go test -count=1 -run TestServerLogin ./internal/api/
+make build && make devssh && bash scripts/verify_servers.sh   # 第 15 节：三种形态 + 四条失败边界 + 审计
+```
+
+手工验证（把 `<server-id>` 换成一台能 `ssh` 的服务器）：
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' -d '{"username":"admin","password":"<password>"}' | jq -r .data.token)
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"login_script":"printf %s {\"terminal\":\"ssh -p 22 root@1.2.3.4\"}"}' \
+  http://127.0.0.1:8080/api/v1/servers/<server-id> >/dev/null
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8080/api/v1/servers/<server-id>/login | jq .data
+# 审计：server.login，detail 只有 script_bytes 与 has_url（不含脚本产出的 URL）
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://127.0.0.1:8080/api/v1/audit-logs?action=server.login&limit=5' | jq '.data[0] | {action,detail}'
+```

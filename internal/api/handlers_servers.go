@@ -16,6 +16,7 @@ import (
 	"github.com/maliang/leadstack/pkg/protocol"
 
 	"github.com/maliang/leadstack/internal/credential"
+	"github.com/maliang/leadstack/internal/deploy"
 )
 
 // 服务器字段的长度约束。
@@ -27,6 +28,12 @@ const (
 	maxGroupRunes      = 64
 	// maxBatchIDs 限制单次批量操作的服务器数量，避免一次请求打爆 SSH 连接池。
 	maxBatchIDs = 200
+	// maxLoginScriptRunes 限制服务器登录脚本长度，防止把整段程序塞进库里。
+	maxLoginScriptRunes = 8192
+	// maxLoginOutputBytes 限制登录脚本回显的字节数，避免一次响应塞进超大输出。
+	maxLoginOutputBytes = 64 << 10
+	// loginScriptTimeoutS 是登录脚本在目标机上的执行超时（秒）。
+	loginScriptTimeoutS = 60
 )
 
 // serverPayload 是服务器的对外表示，字段与契约第 3/10 节一致。
@@ -56,6 +63,8 @@ type serverPayload struct {
 	GroupNames []string `json:"group_names"`
 	// 宝塔面板凭据（kind=baota）：仅 provider=baota 的应用部署时使用。
 	PanelCredentialID *string `json:"panel_credential_id"`
+	// LoginScript 是服务器登录脚本（空串表示未配置）。
+	LoginScript string `json:"login_script"`
 }
 
 // createServerRequest 是新增服务器请求体（纳管 扩展 credential_id/mode/group/tags/host_key_policy）。
@@ -86,6 +95,8 @@ type patchServerRequest struct {
 	GroupIDs *[]string `json:"group_ids"`
 	// PanelCredentialID 绑定宝塔面板凭据（空串表示解绑）。
 	PanelCredentialID *string `json:"panel_credential_id"`
+	// LoginScript 设置服务器登录脚本（空串表示清除）。
+	LoginScript *string `json:"login_script"`
 }
 
 // handleListServers 处理 GET /api/v1/servers，支持 ?group=&tag=&status=&mode= 过滤。
@@ -184,6 +195,85 @@ func (a *API) handleGetServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, payloads[0])
+}
+
+// serverAccessPayload 是 GET /api/v1/servers/{id}/access 的返回体。
+//
+// 这是唯一回显 SSH 登录密码明文的接口：库内只存密文，明文仅在本次响应里出现，
+// 不写日志、不写审计 detail。
+type serverAccessPayload struct {
+	ServerID string `json:"server_id"`
+	Name     string `json:"name"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	AuthType string `json:"auth_type"`
+}
+
+// handleServerAccess 处理 GET /api/v1/servers/{id}/access：返回登录信息（含明文密码）。
+//
+// 鉴权：server.read + 服务器在角色范围内（路由层已挂 inScope）。
+// 审计：GET 不在自动审计范围，这里用 auditManual 显式补记 server.access（detail 不含密码）。
+func (a *API) handleServerAccess(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "serverID"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "缺少服务器 ID")
+		return
+	}
+	if a.cipher == nil {
+		writeError(w, http.StatusServiceUnavailable, codeInternal, "凭证加密未启用（缺少主密钥）")
+		return
+	}
+
+	ctx := r.Context()
+	srv, err := a.st.GetServer(ctx, id)
+	if err != nil {
+		a.writeStoreError(w, r, err)
+		return
+	}
+	if srv.CredentialID == nil || strings.TrimSpace(*srv.CredentialID) == "" {
+		writeError(w, http.StatusConflict, codeConflict, "服务器未绑定 SSH 凭证，无法获取登录信息")
+		return
+	}
+	cred, err := a.st.GetCredential(ctx, *srv.CredentialID)
+	if err != nil {
+		a.writeStoreError(w, r, err)
+		return
+	}
+	// 宝塔面板凭据不用于 SSH 登录，不能把 api_key 当成密码回显。
+	if cred.Kind == string(credential.KindBaota) {
+		writeError(w, http.StatusConflict, codeConflict, "服务器绑定的凭证不是 SSH 凭证")
+		return
+	}
+	plain, err := a.cipher.Decrypt(cred.SecretEnc)
+	if err != nil {
+		a.internalError(w, r, fmt.Errorf("解密服务器 %s 的凭证失败: %w", id, err))
+		return
+	}
+	secret, err := credential.Unmarshal(plain)
+	if err != nil {
+		a.internalError(w, r, fmt.Errorf("解析服务器 %s 的凭证失败: %w", id, err))
+		return
+	}
+	username := secret.Username
+	if username == "" {
+		username = cred.Username
+	}
+
+	// 敏感读取必须留痕：detail 只带凭证 id 与认证类型，绝不含密码/私钥。
+	detail := fmt.Sprintf(`{"credential_id":%q,"auth_type":%q}`, cred.ID, string(secret.Kind))
+	a.auditManual(r, auditActionServerAccess, "server", id, detail)
+
+	writeData(w, http.StatusOK, serverAccessPayload{
+		ServerID: srv.ID,
+		Name:     srv.Name,
+		Host:     srv.Host,
+		Port:     srv.Port,
+		Username: username,
+		Password: secret.Password,
+		AuthType: string(secret.Kind),
+	})
 }
 
 // handleCreateServer 处理 POST /api/v1/servers。
@@ -321,9 +411,9 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == nil && req.Tags == nil && req.Group == nil && req.GroupIDs == nil && req.PanelCredentialID == nil &&
 		req.HostKeyPolicy == nil && req.CredentialID == nil &&
-		req.Host == nil && req.Port == nil {
+		req.Host == nil && req.Port == nil && req.LoginScript == nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument,
-			"至少需要提供 name/tags/group/host_key_policy/credential_id/host/port 之一")
+			"至少需要提供 name/tags/group/host_key_policy/credential_id/host/port/login_script 之一")
 		return
 	}
 
@@ -371,6 +461,16 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		group = &g
+	}
+
+	var loginScript *string
+	if req.LoginScript != nil {
+		script := strings.TrimSpace(*req.LoginScript)
+		if err := validateLoginScript(script); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		loginScript = &script
 	}
 
 	ctx := r.Context()
@@ -437,6 +537,7 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 		PanelCredentialID: panelCredentialID,
 		Host:              hostPtr,
 		Port:              portPtr,
+		LoginScript:       loginScript,
 	})
 	if err != nil {
 		a.writeStoreError(w, r, err)
@@ -507,6 +608,7 @@ func toServerPayload(srv store.Server, nowMS int64, metrics map[string]float64, 
 		HostKeyPolicy:     srv.HostKeyPolicy,
 		LastError:         srv.LastError,
 		PanelCredentialID: srv.PanelCredentialID,
+		LoginScript:       srv.LoginScript,
 		HostInfo:          hostInfo,
 	}
 	if len(metrics) > 0 {
@@ -681,4 +783,153 @@ func (a *API) handleDiscoverServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, report)
+}
+
+// serverLoginPayload 是 POST /api/v1/servers/{id}/login 的返回体。
+//
+// 脚本约定输出一个 JSON 对象；解析失败时整段输出落到 output，url/terminal 为空。
+type serverLoginPayload struct {
+	ServerID string `json:"server_id"`
+	URL      string `json:"url"`
+	Terminal string `json:"terminal"`
+	Output   string `json:"output"`
+}
+
+// loginScriptRunner 是「在目标机执行任意脚本」的可选能力，由发布编排器实现。
+type loginScriptRunner interface {
+	RunLoginScript(ctx context.Context, serverID, script string) (string, error)
+}
+
+// RunLoginScript 在目标机上执行已配置的登录脚本并返回 stdout。
+//
+// 与 RunDiagnose 一样复用发布执行器：脚本以单步 plan 下发，超时 loginScriptTimeoutS 秒。
+func (o *deployOrchestrator) RunLoginScript(ctx context.Context, serverID, script string) (string, error) {
+	if o == nil || o.exec == nil {
+		return "", errOrchestratorDisabled
+	}
+	plan := deploy.Plan{
+		AppSlug: "login", ReleaseID: "login", Version: "0", Root: "/tmp",
+		Steps: []deploy.Step{{Name: "login", Command: script, TimeoutS: loginScriptTimeoutS}},
+	}
+	var sb strings.Builder
+	outcome, err := o.exec.RunPlan(ctx, serverID, plan, deploy.Hooks{OnLog: func(stream, chunk string) {
+		if stream == "stdout" {
+			sb.WriteString(chunk)
+		}
+	}})
+	if err != nil && outcome.Status == "" {
+		return "", fmt.Errorf("执行登录脚本失败: %w", err)
+	}
+	if outcome.Status != "" && outcome.Status != deploy.StatusSuccess {
+		return "", fmt.Errorf("执行登录脚本失败: %s", strings.TrimSpace(outcome.Message))
+	}
+	return sb.String(), nil
+}
+
+// RunLoginScript 见 handler。
+func (h *DeployOrchestratorHandle) RunLoginScript(ctx context.Context, serverID, script string) (string, error) {
+	if h == nil || h.inner == nil {
+		return "", errOrchestratorDisabled
+	}
+	return h.inner.RunLoginScript(ctx, serverID, script)
+}
+
+// validateLoginScript 校验服务器登录脚本：允许换行/制表符，禁止 NUL，长度受限。
+func validateLoginScript(script string) error {
+	if script == "" {
+		return nil
+	}
+	if strings.ContainsRune(script, 0) {
+		return errors.New("login_script 不能包含 NUL 字符")
+	}
+	if utf8.RuneCountInString(script) > maxLoginScriptRunes {
+		return fmt.Errorf("login_script 长度超过 %d 个字符", maxLoginScriptRunes)
+	}
+	return nil
+}
+
+// clampLoginOutput 按字节上限截断输出，并回退到 rune 边界避免产生非法 UTF-8。
+func clampLoginOutput(s string) string {
+	if len(s) <= maxLoginOutputBytes {
+		return s
+	}
+	cut := maxLoginOutputBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…(已截断)"
+}
+
+// parseServerLoginOutput 把脚本 stdout 解析成 url/terminal/output。
+//
+// 只接受 JSON 对象；字段缺失为空串，非字符串字段或非 JSON 输出整体落到 output。
+func parseServerLoginOutput(serverID, raw string) serverLoginPayload {
+	out := serverLoginPayload{ServerID: serverID}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return out
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		var parsed struct {
+			URL      string `json:"url"`
+			Terminal string `json:"terminal"`
+			Output   string `json:"output"`
+		}
+		if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
+			out.URL = clampLoginOutput(parsed.URL)
+			out.Terminal = clampLoginOutput(parsed.Terminal)
+			out.Output = clampLoginOutput(parsed.Output)
+			return out
+		}
+	}
+	out.Output = clampLoginOutput(trimmed)
+	return out
+}
+
+// handleServerLogin 处理 POST /api/v1/servers/{id}/login：执行该机配置的登录脚本，
+// 按 JSON 返回 url/terminal/output。
+//
+// 鉴权：server.write + 服务器在角色范围内（路由层已挂 inScope）。
+// 失败边界：未配置脚本 → 409；执行器未装配 → 503；目标机不可达/脚本失败 → 502 remote_failure。
+func (a *API) handleServerLogin(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "serverID"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "缺少服务器 ID")
+		return
+	}
+	ctx := r.Context()
+	srv, err := a.st.GetServer(ctx, id)
+	if err != nil {
+		a.writeStoreError(w, r, err)
+		return
+	}
+	if !a.requireServersInScope(w, r, []string{srv.ID}) {
+		return
+	}
+	script := strings.TrimSpace(srv.LoginScript)
+	if script == "" {
+		writeError(w, http.StatusConflict, codeConflict, "服务器 "+srv.ID+" 未配置登录脚本")
+		return
+	}
+	runner, ok := a.deploy.(loginScriptRunner)
+	if !ok {
+		writeUnavailable(w, "发布执行器未启用，无法执行登录脚本")
+		return
+	}
+	raw, err := runner.RunLoginScript(ctx, srv.ID, script)
+	if err != nil {
+		if errors.Is(err, errOrchestratorDisabled) {
+			writeUnavailable(w, "发布执行器未启用，无法执行登录脚本")
+			return
+		}
+		a.writeRemoteError(w, r, err, "执行登录脚本")
+		return
+	}
+	payload := parseServerLoginOutput(srv.ID, raw)
+	// 脚本输出可能带一次性登录 URL：detail 只记长度与是否产出 url，绝不落明文。
+	detail := fmt.Sprintf(`{"server_id":%q,"script_bytes":%d,"has_url":%t}`,
+		srv.ID, len(script), payload.URL != "")
+	a.setAuditDetail(r, "server.login", detail)
+	a.logger.Info("执行服务器登录脚本", "server_id", srv.ID, "script_bytes", len(script))
+	writeData(w, http.StatusOK, payload)
 }

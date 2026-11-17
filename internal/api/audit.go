@@ -201,6 +201,12 @@ var auditActionTable = map[string]string{
 	"POST /api/v1/scheduled-tasks/{taskID}/run":         "scheduled_task.run",
 }
 
+// auditActionServerAccess 是「查看服务器登录信息」的 action 名。
+//
+// 该接口是 GET，不在 auditMiddleware 的自动记录范围内；由 handler 用 auditManual 显式补记，
+// 因为它会把明文密码回显给调用方，必须留痕。
+const auditActionServerAccess = "server.access"
+
 // auditResourceIDParams 是可能承载资源 ID 的 URL 参数名（按优先级）。
 var auditResourceIDParams = []string{
 	"serverID", "credentialID", "checkID", "ruleID", "channelID", "alertID",
