@@ -38,6 +38,7 @@ import {
   CheckIcon,
   ClockIcon,
   InfoIcon,
+  LayoutDashboardIcon,
   RefreshIcon,
   TerminalIcon,
   WifiIcon,
@@ -410,14 +411,16 @@ const LOGIN_SCRIPT_SAMPLES: Array<{ key: string; labelKey: string; script: strin
     key: 'baota',
     labelKey: 'server.login.sampleBaota',
     script: `#!/usr/bin/env bash
-# 宝塔面板没有免密网页登录的公开 API，只能用「面板设置 → 临时访问授权」生成一次性链接，
-# 把链接粘到下面这行里，脚本就能把它交给浏览器打开。
-PANEL_URL='https://panel.example.com:8888'
-TEMP_LINK=''
-if [ -n "$TEMP_LINK" ]; then
-  printf '{"url":"%s"}' "$TEMP_LINK"
+# 宝塔面板 v14 起可用「bt 14」打印面板地址（含安全入口路径）；只提取其中的完整 URL。
+# 注意：不要把含初始密码的整段输出写进脚本，脚本输出会被记录到任务日志里。
+PREFIX=$(bt 14 2>/dev/null || /etc/init.d/bt 14 2>/dev/null)
+# bt 14 的输出常带颜色控制码，不清洗会把转义序列吃进 URL。
+PREFIX=$(printf '%s' "$PREFIX" | sed -E $'s/\\x1B\\[[0-9;]*[A-Za-z]//g')
+PANEL_URL=$(printf '%s' "$PREFIX" | grep -oE 'https?://[^ ]+' | head -n 1)
+if [ -n "$PANEL_URL" ]; then
+  printf '{"url":"%s"}' "$PANEL_URL"
 else
-  printf '{"output":"面板地址：%s\\n登录方式：面板设置 → 临时访问授权，生成一次性链接后填入脚本"}' "$PANEL_URL"
+  printf '{"output":"没有从 bt 14 的输出里找到面板地址，请到「面板设置」确认面板端口与安全入口"}'
 fi`,
   },
   {
@@ -602,9 +605,12 @@ function ServerAccessCard({ server, onRefreshServer }: ServerAccessCardProps) {
   const [scriptOpen, setScriptOpen] = useState(false)
   const [loginBusy, setLoginBusy] = useState(false)
   const [loginResult, setLoginResult] = useState<ServerLoginResult | null>(null)
+  const [panelBusy, setPanelBusy] = useState(false)
 
   const serverId = server.id
   const hasScript = server.login_script.trim() !== ''
+  // 只有绑定了面板凭证才显示入口：未绑定时后端会返回 409，按钮出现也只是噪音。
+  const hasPanel = (server.panel_credential_id ?? '') !== ''
 
   useEffect(() => {
     // 折叠状态一律不请求：否则「打开详情页」就等于「导出凭据」（契约 §67.6）。
@@ -681,6 +687,26 @@ function ServerAccessCard({ server, onRefreshServer }: ServerAccessCardProps) {
     }
   }
 
+  /**
+   * 打开面板：先向后端要一次面板地址（写 server.panel 审计），再新标签打开。
+   * 地址里含安全入口路径，等同口令，所以不落进 toast / 页面文案，只在回调里直接用掉。
+   */
+  const openPanel = async () => {
+    setPanelBusy(true)
+    try {
+      const panel = await api.serverPanel(serverId)
+      if (!panel.panel_url) {
+        toast(t('server.panel.failed'), 'error')
+        return
+      }
+      window.open(panel.panel_url, '_blank', 'noopener')
+    } catch (caught) {
+      toast(errorMessage(caught, t('server.panel.failed')), 'error')
+    } finally {
+      setPanelBusy(false)
+    }
+  }
+
   const hasPassword = access !== null && access.password !== ''
   const passwordText = !access
     ? '—'
@@ -704,6 +730,17 @@ function ServerAccessCard({ server, onRefreshServer }: ServerAccessCardProps) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
+          {hasPanel ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={panelBusy}
+              onClick={() => void openPanel()}
+              icon={<LayoutDashboardIcon className="h-4 w-4" />}
+            >
+              {panelBusy ? t('server.panel.opening') : t('server.panel.open')}
+            </Button>
+          ) : null}
           <Button
             size="sm"
             variant="secondary"

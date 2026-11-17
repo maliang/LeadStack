@@ -266,6 +266,25 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 - 配置弹窗内置**宝塔 / 1Panel** 两个示例可一键填入。为什么不做「内置面板免密登录」：宝塔的「临时访问授权」只能人工在面板里生成、无公开 API；1Panel 只有 API Key 鉴权，也没有免密网页登录接口。硬做只能靠模拟登录（脆弱、要存面板管理员密码），不如让脚本自己适配。详见 [架构契约 §68](docs/ARCHITECTURE.md)。
 - 脚本随服务器详情回显，因此**不要把密码写进脚本**——敏感值请放「凭证」。
 
+宝塔面板（v14 起）的示例脚本长这样：`bt 14` 会打印面板地址，脚本只用 `grep` 拎出完整 URL，**不打印含初始密码的整段输出**（脚本 stdout 会被记进任务日志）：
+
+```bash
+#!/usr/bin/env bash
+# 宝塔面板 v14 起可用「bt 14」打印面板地址（含安全入口路径）；只提取其中的完整 URL。
+# 注意：不要把含初始密码的整段输出写进脚本，脚本输出会被记录到任务日志里。
+PREFIX=$(bt 14 2>/dev/null || /etc/init.d/bt 14 2>/dev/null)
+# bt 14 的输出常带颜色控制码，不清洗会把转义序列吃进 URL。
+PREFIX=$(printf '%s' "$PREFIX" | sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g')
+PANEL_URL=$(printf '%s' "$PREFIX" | grep -oE 'https?://[^ ]+' | head -n 1)
+if [ -n "$PANEL_URL" ]; then
+  printf '{"url":"%s"}' "$PANEL_URL"
+else
+  printf '{"output":"没有从 bt 14 的输出里找到面板地址，请到「面板设置」确认面板端口与安全入口"}'
+fi
+```
+
+在目标机上可先手工验一步，确认 `grep` 只吐一行地址：`bt 14 | sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g' | grep -oE 'https?://[^ ]+' | head -n 1`。面板版本低于 14 时该子命令不存在，脚本会落到「没有找到面板地址」的提示，而不是静默输出空地址。
+
 ### 4. 建立检测
 
 「检测 → 新建检测项」，五类：
@@ -320,6 +339,8 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 宝塔补充：面板「设置 → API 接口」开 API 并把控制端出口 IP 加白名单；面板多为自签证书，内网可「跳过证书校验」；
 zip 制品 ≤16MB；v1 只覆盖 static/php，node/SSL/反代仍在面板里配。
+
+> 绑了面板凭证（`kind=baota`）的服务器，详情页「登录信息」卡片头部会出现**「打开面板」**按钮：点击时先 `GET /api/v1/servers/{id}/panel` 取一次面板地址（写审计 `server.panel`），再用新标签打开。接口只回显 `panel_url` 与 `auth_type`，**`api_key` 永不回显**；服务器不在你的角色范围内一律 404。详见 [架构契约 §67.8](docs/ARCHITECTURE.md)。
 
 内置 6 个部署预设（git pull / 静态接管 / 宝塔站点 / systemd / compose / LaravelS）可一键建模板并预填参数。
 

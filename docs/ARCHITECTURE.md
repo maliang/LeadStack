@@ -327,6 +327,7 @@ type HostInfo struct { // 字段与 hostinfo.Info 一一对应，json tag 相同
 | POST | `/servers/batch` | `{ids,action,params?}`，action ∈ `test-connection`/`refresh-host-info`/`add-tags`/`set-group`/`delete` → `{results:[{id,ok,error?}],summary:{ok,failed}}` |
 | GET | `/servers/{id}/metrics` | `?from=<ms>&to=<ms>&step=raw\|1m\|1h` → `{series:[{metric,points:[{ts,value}]}],step}` |
 | GET | `/servers/{id}/access` | 登录信息 `{server_id,name,host,port,username,password,auth_type}`；**唯一回显 SSH 密码明文的接口**，需 `server.read` + 服务器在范围内，每次读取写审计 `server.access`（见 §67） |
+| GET | `/servers/{id}/panel` | 绑定面板地址 `{server_id,panel_url,auth_type}`；**只回显面板入口 `panel_url`，绝不回显 `api_key`**，需 `server.read` + 服务器在范围内，写审计 `server.panel`（detail 只记 `credential_id`，见 §67.8） |
 | `POST` | `/servers/{id}/login` | 执行该机 `login_script` → `{server_id,url,terminal,output}`；需 `server.write` + 在范围内，写审计 `server.login`（见 §68） |
 | PATCH | `/servers/{id}` | 可带 `login_script`（≤8192 字符、禁 NUL、空串=清空） |
 | GET | `/groups` | 由 servers 聚合出的分组名与数量（纳管 不建独立表） |
@@ -2708,6 +2709,38 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 - 把 `auditManual` 那行删掉 → 审计里再也查不到 `server.access`，而响应一切正常（静默失去追溯）。
 
 
+### 67.8 面板入口：`GET /servers/{id}/panel` 只暴露 `panel_url`，绝不回显 `api_key`
+
+> 与 §67 方向相反的一条：这里回显的是「面板在哪」，不是「怎么进面板」。宝塔的 `api_key` 决定「能以面板 API 身份建站、传文件」，与 SSH 密码同级，**任何接口都不回显**；`panel_url` 只是面板入口地址（含安全入口路径），拿到它的人仍需面板账号密码才能登录。
+
+- 路由：`internal/api/router.go:61` → `r.With(permServerRead, inScope).Get("/servers/{serverID}/panel", a.handleServerPanel)`
+- handler：`internal/api/handlers_servers.go:293`（`handleServerPanel`），返回体 `serverPanelPayload`（`internal/api/handlers_servers.go:282`）
+
+```json
+{"data":{"server_id":"srv_1a2b","panel_url":"https://10.0.0.11:8888/8f3c2a1b","auth_type":"baota"}}
+```
+
+**权限：`server.read` + 服务器在角色范围内**（`inScope`，`internal/api/authz.go:202`）。与本组其它读接口同一道门：能看服务器详情就能看它的面板入口，没有第二把锁。越界返回 **`404 not_found`「服务器不存在」**，不是 403——对象级越权不暴露「这台机器存在」（§53.3）。这条口径与 §67.2 完全一致，改一处必须同改另一处。
+
+拒绝面：
+
+| 场景 | 状态码 / code | message |
+|---|---|---|
+| 服务器不存在 / 不在调用者范围内 | `404` / `not_found` | 服务器不存在 |
+| 未绑定任何凭证 | `409` / `conflict` | 服务器未绑定面板凭证 |
+| 绑定的是 SSH 凭证（`kind=password` / `key`） | `409` / `conflict` | 服务器绑定的不是宝塔面板凭证 |
+| `kind=baota` 但密文里没有 `panel_url` | `409` / `conflict` | 服务器绑定的宝塔面板凭证缺少面板地址 |
+| 凭证加密未启用（缺主密钥，`a.cipher == nil`） | `503` / `internal` | 凭证加密未启用（缺少主密钥） |
+| 解密/解析凭证失败 | `500` / `internal` | 内部错误（含 request_id，不含明文） |
+
+**审计：`server.panel`，detail 只有 `credential_id`**（常量 `auditActionServerPanel` 在 `internal/api/audit.go:214`，写入点 `internal/api/handlers_servers.go:341`）。GET 不在自动审计表里，handler 显式 `a.auditManual(...)` 补记，detail 形如 `{"credential_id":"cred_9x"}`：能回答「谁在什么时候看了哪台机器的面板入口」，但**不记 `panel_url`、不记 `api_key`**。审计日志本身要能被人安全地读；把面板地址（含安全入口路径）写进 detail，等于把一次性入口变成长期可查的记录。
+
+**为什么允许读 `panel_url`**：它等价于「面板入口地址」，不是凭据。真正的机密有两层——`api_key`（面板 API 身份，永不出现在任何响应里）与面板的管理员会话（只能人工登录）。所以这条接口的风险面是「暴露一个内网地址与入口路径」，而不是 §67 那种「导出可用登录能力」；代价是仍要留审计，且越界一律 404。
+
+**前端**：服务器详情页「登录信息」卡片头部，`server.panel_credential_id` 非空时显示「打开面板」按钮，点击调 `api.serverPanel(id)`，成功后 `window.open(panel_url, '_blank', 'noopener')`；失败走统一 toast。按钮不预取地址、不缓存。
+
+**回归**：`go test -count=1 -run TestServerPanel ./internal/api/`（`internal/api/api_server_panel_test.go:16`）覆盖：成功 200 且 `panel_url` 与创建时逐字相等、响应体不含 `api_key`、未绑定 409、`kind=key` 的服务器 409、组范围角色读组外 404、审计有 `server.panel` 且 detail 不含 `panel_url`/`api_key`。
+
 ## 68. 一键登录：`POST /servers/{id}/login` 与服务器登录脚本
 
 > 目标：把「拿到登录信息 → 自己开终端/浏览器 → 手动输账号」这一步收敛成一次点击。
@@ -2757,11 +2790,32 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 - 配置弹窗内置两个示例（宝塔 / 1Panel），一键填入后用户只需改地址；
   底部固定一段风险说明（脚本以服务进程权限执行、不要把密码写进脚本）。
 
+配置弹窗里宝塔示例的脚本原文（`web/src/pages/ServerDetailPage.tsx:413`）：
+
+```bash
+#!/usr/bin/env bash
+# 宝塔面板 v14 起可用「bt 14」打印面板地址（含安全入口路径）；只提取其中的完整 URL。
+# 注意：不要把含初始密码的整段输出写进脚本，脚本输出会被记录到任务日志里。
+PREFIX=$(bt 14 2>/dev/null || /etc/init.d/bt 14 2>/dev/null)
+# bt 14 的输出常带颜色控制码，不清洗会把转义序列吃进 URL。
+PREFIX=$(printf '%s' "$PREFIX" | sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g')
+PANEL_URL=$(printf '%s' "$PREFIX" | grep -oE 'https?://[^ ]+' | head -n 1)
+if [ -n "$PANEL_URL" ]; then
+  printf '{"url":"%s"}' "$PANEL_URL"
+else
+  printf '{"output":"没有从 bt 14 的输出里找到面板地址，请到「面板设置」确认面板端口与安全入口"}'
+fi
+```
+
+`bt 14` 只打印地址（含安全入口路径），不清洗颜色控制码就会把 `\x1b[0m` 之类吃进 `url`，浏览器打开必然是 404。
+清洗用 `sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g'`：`$'…'` 由 shell 生成真转义字符，BSD/GNU sed 都认；写成 `\x1B` 字面量 BSD sed 不认。
+面板低于 14 时该子命令不存在，脚本落到 `output` 分支提示去「面板设置」确认，而不是输出空地址。
+
 ### 68.4 为什么不做「内置面板登录」（宝塔 / 1Panel 的实测结论）
 
 | 面板 | 免密网页登录 | 可编程生成 | 结论 |
 |---|---|---|---|
-| 宝塔 | 有「临时访问授权」（面板设置 → 安全设置，生成一次性链接，1 小时内有效、用后失效） | **无公开 API** | 只能让用户在面板里生成链接、粘进脚本（示例已按这个流程写） |
+| 宝塔 | 有「临时访问授权」（面板设置 → 安全设置，生成一次性链接，1 小时内有效、用后失效） | **无公开 API**：只能在面板 UI 里人工点出来，没有接口可调 | 临时访问授权只能从面板 UI 生成、无公开 API，所以内置示例改用 `bt 14` 打印完整面板地址（含安全入口路径），用户仍需手输密码 |
 | 1Panel | 无 | 仅 API Key 鉴权（`1Panel-Token = md5('1panel' + API-Key + UnixTimestamp)` + `1Panel-Timestamp` 头） | 只能给 `terminal`/`output` 形态 |
 
 也就是说：**脚本机制是通用的**（任何能 `ssh`/`curl` 到的系统都能接），但「一键直达面板首页」这件事在两家都没有公开接口，

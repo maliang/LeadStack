@@ -519,6 +519,105 @@ LOGIN_AUDIT_LEAK="$(printf '%s' "$LOGIN_AUDIT" | jq -r --arg id "$LOGIN_SRV_ID" 
 
 dist_has "登录信息卡片含一键登录入口" 'server.login.action' 'server.login.scriptTitle'
 
+# ---------------------------------------------------------------- 16. 服务器面板入口
+step "16. 服务器面板入口（GET /servers/{id}/panel）"
+# 面板入口只回显面板地址与认证类型：api_key 任何响应/审计里都不许出现；
+# 未绑定面板凭证给 409 并说明原因；组范围角色读组外服务器 404。
+PANEL_URL="https://panel.example.test:8888/abcd1234"
+PANEL_API_KEY="{{SECRET_avgnlwz5}}"
+PANEL_CRED_BODY="$(jq -n --arg name "verify-panel" --arg u "$PANEL_URL" --arg k "$PANEL_API_KEY" \
+  '{name:$name,kind:"baota",panel_url:$u,api_key:$k}')"
+PANEL_CRED="$(api POST /api/v1/credentials "$PANEL_CRED_BODY" "$TOKEN")"
+PANEL_CRED_ID="$(jget "$PANEL_CRED" '.data.id')"
+[ -n "$PANEL_CRED_ID" ] && pass "创建宝塔面板凭证（kind=baota）" || fail "创建宝塔面板凭证失败：$PANEL_CRED"
+
+PANEL_SRV_BODY="$(jq -n --arg host "127.0.0.1" --argjson port "$SSH_PORT" --arg pcid "$PANEL_CRED_ID" \
+  '{name:"verify-panel-srv",host:$host,port:$port,mode:"ssh",panel_credential_id:$pcid}')"
+PANEL_SRV="$(api POST /api/v1/servers "$PANEL_SRV_BODY" "$TOKEN")"
+PANEL_SRV_ID="$(jget "$PANEL_SRV" '.data.id')"
+[ -n "$PANEL_SRV_ID" ] && pass "创建服务器并绑定面板凭证" || fail "创建面板验收服务器失败：$PANEL_SRV"
+
+PANEL_CODE="$(status_of -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/servers/${PANEL_SRV_ID}/panel")"
+PANEL_BODY="$(api GET "/api/v1/servers/${PANEL_SRV_ID}/panel" "" "$TOKEN")"
+PANEL_GOT_URL="$(jget "$PANEL_BODY" '.data.panel_url')"
+if [ "$PANEL_CODE" = "200" ] && [ "$PANEL_GOT_URL" = "$PANEL_URL" ]; then
+  pass "GET /servers/{id}/panel 返回 200 且 panel_url 与创建值逐字相等"
+else
+  fail "GET panel 返回 ${PANEL_CODE}，panel_url='${PANEL_GOT_URL}'，期望 ${PANEL_URL}"
+fi
+PANEL_GOT_SID="$(jget "$PANEL_BODY" '.data.server_id')"
+PANEL_GOT_AUTH="$(jget "$PANEL_BODY" '.data.auth_type')"
+[ "$PANEL_GOT_SID" = "$PANEL_SRV_ID" ] && [ "$PANEL_GOT_AUTH" = "baota" ] \
+  && pass "面板入口字段齐全（server_id/auth_type=baota）" \
+  || fail "面板入口字段不符：server_id='${PANEL_GOT_SID}' auth_type='${PANEL_GOT_AUTH}'"
+if printf '%s' "$PANEL_BODY" | grep -qF -- "$PANEL_API_KEY"; then
+  fail "GET /servers/{id}/panel 响应泄露了 api_key 明文"
+else
+  pass "GET /servers/{id}/panel 响应不含 api_key 明文"
+fi
+
+PANEL_NOCRED_CODE="$(status_of -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/servers/${NOCRED_SRV_ID}/panel")"
+PANEL_NOCRED_BODY="$(api GET "/api/v1/servers/${NOCRED_SRV_ID}/panel" "" "$TOKEN")"
+PANEL_NOCRED_MSG="$(jget "$PANEL_NOCRED_BODY" '.error.message')"
+if [ "$PANEL_NOCRED_CODE" = "409" ] && printf '%s' "$PANEL_NOCRED_MSG" | grep -q '面板凭证'; then
+  pass "未绑定面板凭证返回 409 并说明原因（${PANEL_NOCRED_MSG}）"
+else
+  fail "未绑定面板凭证应 409 且 message 含「面板凭证」，实际 ${PANEL_NOCRED_CODE}：$PANEL_NOCRED_BODY"
+fi
+
+# 独立用例：先绑定面板凭证、再显式解绑（PATCH panel_credential_id=""），GET 仍须 409。
+PANEL_UNBIND_BODY="$(jq -n --arg host "127.0.0.1" --argjson port "$SSH_PORT" --arg pcid "$PANEL_CRED_ID" \
+  '{name:"verify-panel-unbind",host:$host,port:$port,mode:"ssh",panel_credential_id:$pcid}')"
+PANEL_UNBIND_SRV="$(api POST /api/v1/servers "$PANEL_UNBIND_BODY" "$TOKEN")"
+PANEL_UNBIND_ID="$(jget "$PANEL_UNBIND_SRV" '.data.id')"
+api PATCH "/api/v1/servers/${PANEL_UNBIND_ID}" '{"panel_credential_id":""}' "$TOKEN" >/dev/null
+PANEL_UNBIND_LEFT="$(jget "$(api GET "/api/v1/servers/${PANEL_UNBIND_ID}" "" "$TOKEN")" '.data.panel_credential_id')"
+PANEL_UNBIND_CODE="$(status_of -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/servers/${PANEL_UNBIND_ID}/panel")"
+PANEL_UNBIND_GET="$(api GET "/api/v1/servers/${PANEL_UNBIND_ID}/panel" "" "$TOKEN")"
+PANEL_UNBIND_MSG="$(jget "$PANEL_UNBIND_GET" '.error.message')"
+if [ -n "$PANEL_UNBIND_ID" ] && [ -z "$PANEL_UNBIND_LEFT" ] && [ "$PANEL_UNBIND_CODE" = "409" ] \
+  && printf '%s' "$PANEL_UNBIND_MSG" | grep -q '面板凭证'; then
+  pass "解绑面板凭证后 GET /servers/{id}/panel 返回 409 并说明原因"
+else
+  fail "解绑面板凭证后应 409 且 message 含「面板凭证」，实际 ${PANEL_UNBIND_CODE}：panel_credential_id='${PANEL_UNBIND_LEFT}' ${PANEL_UNBIND_GET}"
+fi
+
+# 组外对照服务器：同样绑定面板凭证（管理员能 200），这样组范围角色的 404 只能来自范围判定。
+PANEL_OUT_BODY="$(jq -n --arg host "127.0.0.1" --argjson port "$SSH_PORT" --arg pcid "$PANEL_CRED_ID" \
+  '{name:"verify-panel-out",host:$host,port:$port,mode:"ssh",panel_credential_id:$pcid}')"
+PANEL_OUT_SRV="$(api POST /api/v1/servers "$PANEL_OUT_BODY" "$TOKEN")"
+PANEL_OUT_SRV_ID="$(jget "$PANEL_OUT_SRV" '.data.id')"
+[ -n "$PANEL_OUT_SRV_ID" ] && pass "创建组外面板验收服务器" || fail "创建组外面板服务器失败：$PANEL_OUT_SRV"
+PANEL_OUT_ADMIN="$(status_of -H "Authorization: Bearer ${TOKEN}" "${BASE}/api/v1/servers/${PANEL_OUT_SRV_ID}/panel")"
+[ "$PANEL_OUT_ADMIN" = "200" ] && pass "组外服务器管理员读面板 200（证明后续 404 来自范围判定）" \
+  || fail "组外服务器管理员读面板返回 ${PANEL_OUT_ADMIN}，期望 200"
+
+if [ -n "$ACCESS_GRP_ID" ] && [ -n "$PANEL_SRV_ID" ]; then
+  api PUT "/api/v1/server-groups/${ACCESS_GRP_ID}/servers" \
+    "$(jq -n --arg a "$ACCESS_SRV_ID" --arg p "$PANEL_SRV_ID" '{server_ids:[$a,$p]}')" "$TOKEN" >/dev/null
+fi
+if [ -n "$VTOKEN" ] && [ -n "$PANEL_SRV_ID" ] && [ -n "$PANEL_OUT_SRV_ID" ]; then
+  PANEL_SCOPE_IN="$(status_of -H "Authorization: Bearer ${VTOKEN}" "${BASE}/api/v1/servers/${PANEL_SRV_ID}/panel")"
+  PANEL_SCOPE_OUT="$(status_of -H "Authorization: Bearer ${VTOKEN}" "${BASE}/api/v1/servers/${PANEL_OUT_SRV_ID}/panel")"
+  [ "$PANEL_SCOPE_IN" = "200" ] && pass "组范围角色读组内服务器面板 200（正向对照）" \
+    || fail "组内面板入口返回 ${PANEL_SCOPE_IN}，期望 200（否则 404 断言失去意义）"
+  [ "$PANEL_SCOPE_OUT" = "404" ] && pass "组范围角色读组外服务器面板返回 404（不泄露存在性）" \
+    || fail "组外面板入口返回 ${PANEL_SCOPE_OUT}，期望 404"
+else
+  fail "缺少组范围角色 token，无法验证面板入口的组外 404"
+fi
+
+PANEL_AUDIT="$(api GET "/api/v1/audit-logs?action=server.panel" "" "$TOKEN")"
+PANEL_AUDIT_N="$(printf '%s' "$PANEL_AUDIT" | jq -r --arg id "$PANEL_SRV_ID" \
+  '[.data[] | select(.action=="server.panel" and .resource_id==$id)] | length' 2>/dev/null)"
+[ "${PANEL_AUDIT_N:-0}" -ge 1 ] 2>/dev/null \
+  && pass "GET /audit-logs 含有 server.panel 记录（${PANEL_AUDIT_N} 条）" \
+  || fail "审计缺少 server.panel：$PANEL_AUDIT"
+PANEL_AUDIT_LEAK="$(printf '%s' "$PANEL_AUDIT" | jq -r --arg id "$PANEL_SRV_ID" --arg u "$PANEL_URL" --arg k "$PANEL_API_KEY" \
+  '[.data[] | select(.action=="server.panel" and .resource_id==$id) | ((.detail // "") | (contains($u) or contains($k)))] | any' 2>/dev/null)"
+[ "$PANEL_AUDIT_LEAK" = "false" ] && pass "server.panel 审计 detail 不含 panel_url / api_key 明文" \
+  || fail "server.panel 审计 detail 泄露了面板地址或密钥（jq=${PANEL_AUDIT_LEAK:-解析失败}）"
+
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"

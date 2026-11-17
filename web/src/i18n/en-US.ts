@@ -2028,6 +2028,11 @@ const enUS: Record<string, string> = {
   'server.access.keyAuthNote':
     'This server authenticates with a private key, so there is no password to copy; the key itself is never returned by any endpoint.',
 
+  // Panel entry (GET /servers/{id}/panel): returns the panel URL only, never the credential api_key
+  'server.panel.open': 'Open panel',
+  'server.panel.opening': 'Opening panel…',
+  'server.panel.failed': 'Failed to open panel: ',
+
   // One-click login (POST /servers/{id}/login): the script runs on the target and prints url/terminal/output
   'server.login.action': 'One-click login',
   'server.login.configure': 'Set up login',

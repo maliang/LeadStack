@@ -207,6 +207,12 @@ var auditActionTable = map[string]string{
 // 因为它会把明文密码回显给调用方，必须留痕。
 const auditActionServerAccess = "server.access"
 
+// auditActionServerPanel 是「查看服务器绑定面板地址」的 action 名。
+//
+// 同样是 GET，不在自动审计范围内；由 handler 用 auditManual 显式补记。
+// detail 只记 credential_id，绝不记 panel_url（面板地址本身即攻击面，不入审计明文）。
+const auditActionServerPanel = "server.panel"
+
 // auditResourceIDParams 是可能承载资源 ID 的 URL 参数名（按优先级）。
 var auditResourceIDParams = []string{
 	"serverID", "credentialID", "checkID", "ruleID", "channelID", "alertID",

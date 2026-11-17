@@ -58,6 +58,7 @@ func (a *API) Router() http.Handler {
 			r.With(permServerRead).Get("/servers", a.handleListServers)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}", a.handleGetServer)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}/access", a.handleServerAccess)
+			r.With(permServerRead, inScope).Get("/servers/{serverID}/panel", a.handleServerPanel)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}/metrics", a.handleServerMetrics)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}/checks", a.handleServerChecks)
 			r.With(permServerRead).Get("/credentials", a.handleListCredentials)

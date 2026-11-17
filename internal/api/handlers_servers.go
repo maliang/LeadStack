@@ -276,6 +276,78 @@ func (a *API) handleServerAccess(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// serverPanelPayload 是 GET /api/v1/servers/{id}/panel 的返回体。
+//
+// 只回显面板地址与认证类型：panel_url 供调用方跳转/展示，api_key 永不回显。
+type serverPanelPayload struct {
+	ServerID string `json:"server_id"`
+	PanelURL string `json:"panel_url"`
+	AuthType string `json:"auth_type"`
+}
+
+// handleServerPanel 处理 GET /api/v1/servers/{id}/panel：返回绑定的宝塔面板地址。
+//
+// 鉴权：server.read + 服务器在角色范围内（路由层已挂 inScope）。
+// 审计：GET 不在自动审计范围，这里用 auditManual 显式补记 server.panel；
+// detail 只带 credential_id，绝不含 panel_url 与 api_key。
+func (a *API) handleServerPanel(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "serverID"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "缺少服务器 ID")
+		return
+	}
+	if a.cipher == nil {
+		writeError(w, http.StatusServiceUnavailable, codeInternal, "凭证加密未启用（缺少主密钥）")
+		return
+	}
+
+	ctx := r.Context()
+	srv, err := a.st.GetServer(ctx, id)
+	if err != nil {
+		a.writeStoreError(w, r, err)
+		return
+	}
+	if srv.PanelCredentialID == nil || strings.TrimSpace(*srv.PanelCredentialID) == "" {
+		writeError(w, http.StatusConflict, codeConflict, "服务器未绑定面板凭证")
+		return
+	}
+	cred, err := a.st.GetCredential(ctx, *srv.PanelCredentialID)
+	if err != nil {
+		a.writeStoreError(w, r, err)
+		return
+	}
+	// 只有宝塔面板凭据才有面板地址；SSH 凭据没有 panel_url 可返回。
+	if cred.Kind != string(credential.KindBaota) {
+		writeError(w, http.StatusConflict, codeConflict, "服务器绑定的不是宝塔面板凭证")
+		return
+	}
+	plain, err := a.cipher.Decrypt(cred.SecretEnc)
+	if err != nil {
+		a.internalError(w, r, fmt.Errorf("解密服务器 %s 的面板凭证失败: %w", id, err))
+		return
+	}
+	secret, err := credential.Unmarshal(plain)
+	if err != nil {
+		a.internalError(w, r, fmt.Errorf("解析服务器 %s 的面板凭证失败: %w", id, err))
+		return
+	}
+	panelURL := strings.TrimSpace(secret.PanelURL)
+	if secret.Kind != credential.KindBaota || panelURL == "" {
+		// 库里 kind 与密文内容不一致属数据损坏，按冲突返回而不是回显空地址。
+		writeError(w, http.StatusConflict, codeConflict, "服务器绑定的宝塔面板凭证缺少面板地址")
+		return
+	}
+
+	a.auditManual(r, auditActionServerPanel, "server", id,
+		fmt.Sprintf(`{"credential_id":%q}`, cred.ID))
+
+	writeData(w, http.StatusOK, serverPanelPayload{
+		ServerID: srv.ID,
+		PanelURL: panelURL,
+		AuthType: string(secret.Kind),
+	})
+}
+
 // handleCreateServer 处理 POST /api/v1/servers。
 func (a *API) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 	var req createServerRequest

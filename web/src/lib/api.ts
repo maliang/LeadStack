@@ -533,6 +533,19 @@ export interface ServerAccess {
   auth_type: string
 }
 
+/**
+ * GET /servers/{id}/panel 的返回体：服务器绑定的面板入口。
+ *
+ * 与 ServerAccess 的区别：这里只有面板地址与鉴权方式，绝不返回凭证 api_key；
+ * 面板地址本身含安全入口路径（等同口令），服务端写 `server.panel` 审计。
+ */
+export interface ServerPanel {
+  server_id: string
+  panel_url: string
+  /** 面板鉴权方式：baota（宝塔面板）等，取后端返回原值 */
+  auth_type: string
+}
+
 export type CredentialKind = 'password' | 'key' | 'baota' | string
 
 /** 凭证对外元数据：接口绝不返回密钥内容。 */
@@ -2451,6 +2464,16 @@ export function normalizeServerAccess(input: unknown): ServerAccess {
   }
 }
 
+/** 逐字段解包面板入口：缺字段降级为空串，界面据此决定按钮是否可用。 */
+export function normalizeServerPanel(input: unknown): ServerPanel {
+  const raw = toRecord(input) ?? {}
+  return {
+    server_id: toText(raw.server_id) ?? '',
+    panel_url: toText(raw.panel_url) ?? '',
+    auth_type: toText(raw.auth_type) ?? '',
+  }
+}
+
 /**
  * POST /servers/{id}/login 的返回体：服务端在目标机执行登录脚本，把 stdout 解析成三选一。
  *
@@ -2854,6 +2877,14 @@ export const api = {
    */
   serverAccess(id: string): Promise<ServerAccess> {
     return request<unknown>(`/servers/${encodeURIComponent(id)}/access`).then(normalizeServerAccess)
+  },
+
+  /**
+   * GET /servers/{id}/panel —— 服务器绑定的面板入口地址（不含 api_key）。
+   * 未绑定面板凭证 / 凭证不是宝塔 / cipher 未启用时后端返回 409 / 503，界面按 errorMessage 展示。
+   */
+  serverPanel(id: string): Promise<ServerPanel> {
+    return request<unknown>(`/servers/${encodeURIComponent(id)}/panel`).then(normalizeServerPanel)
   },
 
   /** 执行该服务器配置的登录脚本（POST，非幂等只读：服务端会在目标机跑一次命令）。 */

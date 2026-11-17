@@ -2027,6 +2027,11 @@ const zhCN: Record<string, string> = {
   'server.access.collapse': '收起',
   'server.access.keyAuthNote': '该服务器用私钥认证，没有可复制的密码；私钥本身不会在任何接口回显。',
 
+  // 面板入口（GET /servers/{id}/panel）：只返回面板地址，不含凭证 api_key
+  'server.panel.open': '打开面板',
+  'server.panel.opening': '正在打开面板…',
+  'server.panel.failed': '打开面板失败：',
+
   // 一键登录（POST /servers/{id}/login）：脚本在目标机执行，返回 url/terminal/output 三选一
   'server.login.action': '一键登录',
   'server.login.configure': '配置一键登录',
