@@ -514,6 +514,10 @@ export interface Server {
   host_info: HostInfo | null
   /** 服务器登录脚本（迁移 0013）；空串表示未配置一键登录 */
   login_script: string
+  /** 运维备注（详情接口专属，列表不返回） */
+  notes: string
+  /** 自定义字段（详情接口专属整包对象，列表不返回） */
+  custom_fields: Record<string, string>
 }
 
 /**
@@ -2447,7 +2451,21 @@ export function normalizeServer(input: unknown): Server {
     last_error: toText(raw.last_error),
     host_info: normalizeHostInfo(raw.host_info),
     login_script: toText(raw.login_script) ?? '',
+    notes: toText(raw.notes) ?? '',
+    custom_fields: normalizeCustomFields(raw.custom_fields),
   }
+}
+
+/** 逐字段解包服务器档案的 custom_fields：非对象/缺字段降级为空对象，只保留字符串值。 */
+export function normalizeCustomFields(input: unknown): Record<string, string> {
+  const raw = toRecord(input)
+  if (!raw) return {}
+  const fields: Record<string, string> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (key.trim() === '') continue
+    fields[key] = typeof value === 'string' ? value : value === null || value === undefined ? '' : String(value)
+  }
+  return fields
 }
 
 /** 逐字段解包登录信息：缺字段一律降级为空串/空端口，不把原始信封交给界面。 */
@@ -2553,6 +2571,10 @@ export interface UpdateServerPayload {
   panel_credential_id?: string | null
   /** 服务器登录脚本（空串清除）；只在用户显式编辑时提交，避免误清 */
   login_script?: string
+  /** 运维备注（≤2000 字，空串清除）；PATCH 响应不回显，保存后需重新读详情 */
+  notes?: string
+  /** 自定义字段整包替换（空对象清空）：≤32 键 / 键 ≤40 字 / 值 ≤200 字 */
+  custom_fields?: Record<string, string>
 }
 
 /** POST /servers 请求体（纳管 扩展字段，契约第 10 节）。 */

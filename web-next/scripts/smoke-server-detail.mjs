@@ -1,0 +1,566 @@
+#!/usr/bin/env node
+/**
+ * 服务器详情页冒烟（hermetic：Playwright 无头 + 内存 mock API，不碰真后端）。
+ *
+ * 覆盖：默认列表视图 / 卡片⇄列表切换与 localStorage 记忆 / 纯前端筛选与清除 /
+ * 无 terminal.use 时两个面板的占位 / 有权限时内嵌终端与文件浏览 / 320px 无横向滚动。
+ * 用法：pnpm --dir web-next run build && node web-next/scripts/smoke-servers.mjs [--headed]
+ */
+import { createServer } from 'node:http'
+import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { homedir, platform } from 'node:os'
+import { dirname, extname, join, normalize, resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const WEB_ROOT = resolve(HERE, '..')
+const require = createRequire(import.meta.url)
+
+const argv = process.argv.slice(2)
+const flag = (name, fallback = null) => {
+  const index = argv.indexOf(`--${name}`)
+  if (index === -1) return fallback
+  const next = argv[index + 1]
+  return next && !next.startsWith('--') ? next : true
+}
+const HEADED = flag('headed', false) === true
+const DIST = resolve(WEB_ROOT, String(flag('dist', 'dist')))
+const REQUESTED_PORT = Number(flag('port', 0)) || 0
+const VIEW_KEY = 'leadstack.servers.view'
+const SHOTS = typeof flag('shots', null) === 'string' ? resolve(String(flag('shots'))) : null
+const shot = async (page, name) => {
+  if (!SHOTS) return
+  await page.screenshot({ path: resolve(SHOTS, `${name}.png`), fullPage: true })
+}
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json; charset=utf-8',
+}
+
+const TOKEN = 'smoke-servers-token'
+const PASSWORD = 'smoke-servers-password'
+
+function user() {
+  return {
+    id: 'smoke-servers-user',
+    username: 'admin',
+    role: 'admin',
+    role_name: '管理员',
+    permissions: ['server.read', 'server.write', 'server.update', 'server.edit', 'terminal.use'],
+    scope: { mode: 'all', group_ids: [], server_ids: [] },
+  }
+}
+
+function serverFixture(overrides) {
+  return {
+    id: 'srv-alpha',
+    name: 'alpha-node',
+    host: '10.0.0.11',
+    port: 22,
+    mode: 'agent',
+    status: 'online',
+    last_seen_at: Date.now() - 30_000,
+    agent_version: '1.4.0',
+    os: 'linux',
+    arch: 'amd64',
+    kernel: '6.8.0',
+    tags: ['prod', 'edge'],
+    metrics_summary: { cpu_pct: 12.5, mem_pct: 33.1, disk_pct: 40 },
+    created_at: Date.now() - 86_400_000,
+    group: '默认分组',
+    group_ids: ['grp-default'],
+    group_names: ['默认分组'],
+    ...overrides,
+  }
+}
+
+
+const PANEL_URL = 'https://panel.example.com:8888/alpha'
+const LOGIN_TERMINAL = 'cd /www/wwwroot/alpha && bt 14 && echo ok'
+
+const SERVER = serverFixture({
+  id: 'srv-alpha',
+  name: 'alpha-node',
+  host: '10.0.0.11',
+  status: 'online',
+  panel_credential_id: 'cred-panel-1',
+  credential_id: 'cred-ssh-1',
+  notes: '存量备注：只读巡检机',
+  login_script: 'cd /www/wwwroot/alpha && bt 14',
+  custom_fields: { location: 'beijing' },
+  host_info: {
+    hostname: 'alpha-node',
+    os: 'ubuntu',
+    os_version: '24.04',
+    kernel: '6.8.0',
+    arch: 'amd64',
+    cpu_model: 'Xeon',
+    cpu_cores: 8,
+    mem_total_bytes: 8 * 1024 ** 3,
+    disk_total_bytes: 200 * 1024 ** 3,
+    disk_used_bytes: 40 * 1024 ** 3,
+    uptime_s: 3600,
+    timezone: 'Asia/Shanghai',
+    docker: true,
+    docker_version: '27.0.0',
+    ip_addrs: ['10.0.0.11'],
+    collected_at: Date.now() - 60_000,
+  },
+})
+
+const ACCESS = {
+  server_id: 'srv-alpha',
+  name: 'alpha-node',
+  host: '10.0.0.11',
+  port: 22,
+  username: 'root',
+  password: 'p@ssw0rd-LEAK',
+  auth_type: 'password',
+}
+
+const CHECKS = [
+  {
+    id: 'chk-1',
+    name: 'alpha tcp 22',
+    kind: 'tcp',
+    target: '10.0.0.11:22',
+    interval_s: 60,
+    timeout_s: 5,
+    params: {},
+    enabled: true,
+    created_at: Date.now() - 86_400_000,
+    server_ids: ['srv-alpha'],
+    server_count: 1,
+    state: 'up',
+    availability_24h: 99.95,
+    last_result: { ok: true, latency_ms: 12, status_code: null, message: '', ts: Date.now() - 30_000 },
+  },
+  {
+    id: 'chk-2',
+    name: 'beta ping',
+    kind: 'ping',
+    target: '10.0.0.12',
+    interval_s: 60,
+    timeout_s: 5,
+    params: {},
+    enabled: true,
+    created_at: Date.now() - 86_400_000,
+    server_ids: ['srv-beta'],
+    server_count: 1,
+    state: 'down',
+    availability_24h: 88,
+    last_result: { ok: false, latency_ms: null, status_code: null, message: 'timeout', ts: Date.now() - 30_000 },
+  },
+]
+
+
+function log(step, message) {
+  console.log(`  [${step}] ${message}`)
+}
+
+/** 从本地或全局 node_modules 载入 playwright；找不到按环境缺失处理（退出码 2）。 */
+function loadPlaywright() {
+  const candidates = ['playwright']
+  try {
+    candidates.push(join(execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim(), 'playwright'))
+  } catch {
+    /* 没有 npm 也能继续尝试本地包 */
+  }
+  const errors = []
+  for (const id of candidates) {
+    try {
+      return require(id)
+    } catch (error) {
+      errors.push(`${id}: ${error.message}`)
+    }
+  }
+  try {
+    const globalRoot = execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim()
+    return { __esm: pathToFileURL(join(globalRoot, 'playwright', 'index.mjs')).href }
+  } catch {
+    /* ignore */
+  }
+  return {
+    error: ['找不到 playwright —— 这是环境缺失，不是断言失败。', ...errors.map((line) => `  尝试过 ${line}`)].join(
+      '\n',
+    ),
+  }
+}
+
+async function resolvePlaywright() {
+  const loaded = loadPlaywright()
+  if (loaded && loaded.error) throw new Error(loaded.error)
+  if (loaded && loaded.__esm) {
+    const mod = await import(loaded.__esm)
+    return mod.chromium ? mod : mod.default
+  }
+  return loaded
+}
+
+/** playwright 自带的 revision 与缓存不一致时，退到缓存里最新的 chromium。 */
+function findCachedChromium() {
+  const roots = [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    platform() === 'darwin'
+      ? join(homedir(), 'Library', 'Caches', 'ms-playwright')
+      : join(homedir(), '.cache', 'ms-playwright'),
+  ].filter(Boolean)
+
+  const candidates = []
+  for (const root of roots) {
+    if (!existsSync(root)) continue
+    let entries = []
+    try {
+      entries = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory())
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      const match = /^(?:chromium_headless_shell|chromium)-(\d+)$/.exec(entry.name)
+      if (!match) continue
+      const base = join(root, entry.name)
+      const paths =
+        platform() === 'darwin'
+          ? [
+              join(base, 'chrome-headless-shell-mac-arm64', 'chrome-headless-shell'),
+              join(base, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
+            ]
+          : [join(base, 'chrome-linux', 'chrome-headless-shell'), join(base, 'chrome-linux', 'chrome')]
+      for (const path of paths) {
+        if (existsSync(path)) candidates.push({ revision: Number(match[1]), path })
+      }
+    }
+  }
+  candidates.sort((left, right) => right.revision - left.revision)
+  return candidates.length > 0 ? candidates[0].path : null
+}
+
+async function launchChromium(chromium, headless) {
+  try {
+    return await chromium.launch({ headless })
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error)
+    if (!/Executable doesn't exist|is not found at/i.test(message)) throw error
+    const cached = findCachedChromium()
+    if (!cached) throw error
+    console.warn(`! playwright 自带 chromium 缺失，改用缓存版本：${cached}`)
+    return await chromium.launch({ headless, executablePath: cached })
+  }
+}
+
+/** 托管 dist 的静态服务器；未知路径回 index.html（hash 路由）。 */
+function createStaticServer(distDir) {
+  const indexFile = join(distDir, 'index.html')
+  return createServer((request, response) => {
+    const urlPath = decodeURIComponent((request.url || '/').split('?')[0].split('#')[0])
+    const relative = urlPath === '/' ? '/index.html' : urlPath
+    const target = normalize(join(distDir, relative))
+    const inside = target.startsWith(distDir)
+    const found = inside && existsSync(target) && statSync(target).isFile() ? target : indexFile
+    if (!existsSync(found)) {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+      response.end('not found')
+      return
+    }
+    response.writeHead(200, {
+      'content-type': MIME[extname(found)] || 'application/octet-stream',
+      'cache-control': 'no-store',
+    })
+    createReadStream(found).pipe(response)
+  })
+}
+
+/** 假后端：服务器详情页端点。未覆盖的一律 404，避免静默放过。 */
+async function installMockApi(context, state) {
+  await context.route('**/api/v1/**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const method = request.method()
+    const path = url.pathname
+    const json = (status, body) =>
+      route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) })
+
+    if (path === '/api/v1/auth/login' && method === 'POST') {
+      return json(200, { token: TOKEN, user: user() })
+    }
+    if (path === '/api/v1/auth/me' && method === 'GET') {
+      return json(200, { data: user() })
+    }
+    if (path === '/api/v1/auth/logout' && method === 'POST') {
+      return route.fulfill({ status: 204, body: '' })
+    }
+    if (path === '/api/v1/servers' && method === 'GET') {
+      return json(200, { data: [state.server] })
+    }
+    if (path === '/api/v1/checks' && method === 'GET') {
+      state.checkCalls += 1
+      return json(200, { data: CHECKS })
+    }
+
+    const detail = /^\/api\/v1\/servers\/([^/]+)$/.exec(path)
+    if (detail && method === 'GET') {
+      state.detailCalls += 1
+      if (decodeURIComponent(detail[1]) !== state.server.id) {
+        return json(404, { error: { code: 'not_found', message: 'server not found' } })
+      }
+      return json(200, { data: state.server })
+    }
+    if (detail && method === 'PATCH') {
+      const body = JSON.parse(request.postData() || '{}')
+      state.patchBodies.push(body)
+      // 契约：PATCH 响应不含档案字段，档案必须重新 GET 详情读回
+      state.server = {
+        ...state.server,
+        ...(typeof body.notes === 'string' ? { notes: body.notes } : {}),
+        ...(body.custom_fields && typeof body.custom_fields === 'object'
+          ? { custom_fields: body.custom_fields }
+          : {}),
+      }
+      return json(200, { data: { ...state.server, notes: undefined, custom_fields: undefined } })
+    }
+
+    const access = /^\/api\/v1\/servers\/([^/]+)\/access$/.exec(path)
+    if (access && method === 'GET') {
+      state.accessCalls += 1
+      return json(200, { data: ACCESS })
+    }
+
+    const panel = /^\/api\/v1\/servers\/([^/]+)\/panel$/.exec(path)
+    if (panel && method === 'GET') {
+      state.panelCalls += 1
+      return json(200, { data: { server_id: state.server.id, panel_url: PANEL_URL, auth_type: 'session' } })
+    }
+
+    const login = /^\/api\/v1\/servers\/([^/]+)\/login$/.exec(path)
+    if (login && method === 'POST') {
+      state.loginCalls += 1
+      return json(200, { data: { server_id: state.server.id, url: '', terminal: LOGIN_TERMINAL, output: '' } })
+    }
+
+    return json(404, { error: { code: 'not_found', message: `mock api 未覆盖 ${method} ${path}` } })
+  })
+}
+
+async function run() {
+  if (!existsSync(join(DIST, 'index.html'))) {
+    console.error(`✗ 没有构建产物：${join(DIST, 'index.html')}\n  先跑：pnpm --dir web-next run build`)
+    process.exitCode = 2
+    return
+  }
+
+  let chromium
+  try {
+    const playwright = await resolvePlaywright()
+    chromium = playwright && playwright.chromium
+  } catch (error) {
+    console.error(`✗ ${error.message}`)
+    process.exitCode = 2
+    return
+  }
+  if (!chromium) {
+    console.error('✗ playwright 已加载但没有 chromium 导出 —— 环境异常。')
+    process.exitCode = 2
+    return
+  }
+
+  const results = []
+  const check = (name, ok, detail = '') => {
+    results.push({ name, ok, detail })
+    console.log(`${ok ? '✓' : '✗'} ${name}${detail ? `：${detail}` : ''}`)
+  }
+
+  const server = createStaticServer(DIST)
+  await new Promise((done, fail) => {
+    server.once('error', fail)
+    server.listen(REQUESTED_PORT, '127.0.0.1', done)
+  })
+  const base = `http://127.0.0.1:${server.address().port}`
+  log('serve', `${DIST} → ${base}`)
+
+  let browser
+  try {
+    browser = await launchChromium(chromium, !HEADED)
+  } catch (error) {
+    console.error(`✗ 启动 chromium 失败：${error && error.message ? error.message.split('\n')[0] : error}`)
+    await new Promise((done) => server.close(done))
+    process.exitCode = 2
+    return
+  }
+
+  const state = {
+    server: structuredClone(SERVER),
+    detailCalls: 0,
+    accessCalls: 0,
+    panelCalls: 0,
+    loginCalls: 0,
+    checkCalls: 0,
+    patchBodies: [],
+  }
+  const context = await browser.newContext({ viewport: { width: 320, height: 800 } })
+  await installMockApi(context, state)
+  const page = await context.newPage()
+  const pageErrors = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.addInitScript(() => {
+    window.__opened = []
+    window.open = (target) => {
+      window.__opened.push(String(target))
+      return null
+    }
+  })
+
+  const noHorizontalScroll = () =>
+    page.evaluate(() => {
+      const root = document.documentElement
+      return { overflow: root.scrollWidth - root.clientWidth, width: window.innerWidth }
+    })
+
+  try {
+    // 1) 登录 → 详情页（320px 视口）
+    await page.goto(`${base}/#/login`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('#login-username', { timeout: 15000 })
+    await page.fill('#login-username', 'admin')
+    await page.fill('#login-password', PASSWORD)
+    await page.click('#login-submit')
+    await page.waitForSelector('.ls-shell', { timeout: 15000 })
+    await page.goto(`${base}/#/servers/srv-alpha`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.ls-detail__title', { timeout: 15000 })
+    check('详情页渲染标题', (await page.locator('.ls-detail__title').innerText()).includes('alpha-node'))
+    check('详情只拉一次 /servers/{id}', state.detailCalls === 1, `${state.detailCalls} 次`)
+    check('五个 tab 都在', (await page.locator('.ls-tabs__btn').count()) === 5, String(await page.locator('.ls-tabs__btn').count()))
+    await shot(page, '01-overview')
+    check('概览 tab 默认选中', (await page.locator('#server-tab-overview').getAttribute('aria-selected')) === 'true')
+
+    // 2) 概览：面板按钮存在（有 panel_credential_id）
+    const panelButton = page.locator('.ls-card button', { hasText: '打开面板' }).first()
+    check('有面板凭据时显示「打开面板」', (await panelButton.count()) === 1)
+    await panelButton.click()
+    await page.waitForTimeout(300)
+    const opened = await page.evaluate(() => window.__opened.slice())
+    check('打开面板走 window.open(panel_url)', opened.includes(PANEL_URL), opened.join(',').slice(0, 60))
+    check('面板地址不进页面文案', !(await page.locator('body').innerText()).includes(PANEL_URL))
+
+    // 3) 登录信息：默认折叠且不发请求
+    await page.click('#server-tab-access')
+    await page.waitForSelector('.ls-card', { timeout: 5000 })
+    await shot(page, '02-access-collapsed')
+    check('登录信息默认折叠（无内容块）', (await page.locator('.ls-access').count()) === 0)
+    check('折叠态不请求 /access', state.accessCalls === 0, `${state.accessCalls} 次`)
+
+    await page.locator('.ls-card button[aria-expanded="false"]').first().click()
+    await page.waitForSelector('.ls-access', { timeout: 5000 })
+    await page.waitForSelector('.ls-access__foot', { timeout: 5000 })
+    check('展开后才请求 /access', state.accessCalls === 1, `${state.accessCalls} 次`)
+    const accessText = await page.locator('.ls-access').innerText()
+    await shot(page, '03-access-expanded')
+    check('密码默认掩码', accessText.includes('••••••••'))
+    check('明文密码不在 DOM 文案里', !accessText.includes(ACCESS.password))
+    check('有复制入口', (await page.locator('.ls-kv__tools button').count()) >= 4)
+
+    await page.locator('.ls-card button[aria-expanded="true"]').first().click()
+    await page.waitForTimeout(200)
+    check('收起后丢弃内容', (await page.locator('.ls-access').count()) === 0)
+    check('收起不重复请求', state.accessCalls === 1, `${state.accessCalls} 次`)
+    const narrowAccess = await noHorizontalScroll()
+    check('320px 登录信息无横向滚动', narrowAccess.overflow <= 0, `溢出 ${narrowAccess.overflow}px`)
+
+    // 4) 一键登录：terminal 态给命令 + 复制
+    await page.click('#server-tab-login')
+    await page.waitForSelector('.ls-card button.ls-btn--primary', { timeout: 5000 })
+    await page.locator('.ls-card button.ls-btn--primary').first().click()
+    await page.waitForSelector('.ls-code', { timeout: 5000 })
+    await shot(page, '04-login')
+    check('一键登录发出 POST /login', state.loginCalls === 1, `${state.loginCalls} 次`)
+    check('terminal 态渲染命令', (await page.locator('.ls-code').innerText()).includes('bt 14'))
+    check('命令带复制按钮', (await page.locator('button', { hasText: '复制命令' }).count()) >= 1)
+    check('320px 登录结果无横向滚动', (await noHorizontalScroll()).overflow <= 0)
+
+    // 5) 服务器档案：PATCH 后必须重新读回详情
+    await page.click('#server-tab-meta')
+    await page.waitForSelector('#server-meta-notes', { timeout: 5000 })
+    const beforeDetail = state.detailCalls
+    await shot(page, '05-meta')
+    check('档案回填 notes', (await page.inputValue('#server-meta-notes')).includes('存量备注'))
+    await page.fill('#server-meta-notes', '改过的备注 2000 上限')
+    await page.locator('button', { hasText: '添加字段' }).first().click()
+    await page.locator('.ls-meta-row__key').last().fill('datacenter')
+    await page.locator('.ls-meta-row__value').last().fill('shanghai')
+    await page.locator('.ls-card button.ls-btn--primary', { hasText: '保存档案' }).first().click()
+    await page.waitForTimeout(600)
+    const patch = state.patchBodies[0] || {}
+    check('PATCH 带 notes', patch.notes === '改过的备注 2000 上限', String(patch.notes))
+    const patchFields = patch.custom_fields || {}
+    check(
+      'PATCH 带 custom_fields（保留原字段 + 新字段）',
+      patchFields.location === 'beijing' && patchFields.datacenter === 'shanghai',
+      JSON.stringify(patchFields),
+    )
+    check('保存后重新读回详情', state.detailCalls === beforeDetail + 1, `${beforeDetail} → ${state.detailCalls}`)
+    check('读回后草稿跟着更新', (await page.inputValue('#server-meta-notes')) === '改过的备注 2000 上限')
+    const narrowMeta = await noHorizontalScroll()
+    check('320px 档案页无横向滚动', narrowMeta.overflow <= 0, `溢出 ${narrowMeta.overflow}px`)
+
+    // 6) 检测：只读展示本服务器命中的检测项，无执行按钮
+    await page.click('#server-tab-checks')
+    await page.waitForSelector('.ls-checks', { timeout: 5000 })
+    await shot(page, '06-checks')
+    check('检测只拉一次 /checks', state.checkCalls === 1, `${state.checkCalls} 次`)
+    check('只显示本服务器的检测项', (await page.locator('.ls-checks__row').count()) === 1)
+    check('检测项名称正确', (await page.locator('.ls-checks__name').innerText()) === 'alpha tcp 22')
+    check('只读标识可见', (await page.locator('.ls-card').innerText()).includes('只读'))
+    check('没有执行检测按钮', (await page.locator('.ls-checks button', { hasText: '执行' }).count()) === 0)
+    const narrowChecks = await noHorizontalScroll()
+    check('320px 检测页无横向滚动', narrowChecks.overflow <= 0, `溢出 ${narrowChecks.overflow}px`)
+
+    // 7) 键盘可达：ArrowRight 切 tab
+    await page.locator('#server-tab-checks').focus()
+    await page.keyboard.press('ArrowRight')
+    await page.waitForTimeout(150)
+    const activeTab = await page.evaluate(() => document.activeElement && document.activeElement.id)
+    check('ArrowRight 焦点回到 tabs 内', String(activeTab).startsWith('server-tab-'), String(activeTab))
+
+    // 8) 未知服务器 id → 404 提示而不是白屏
+    await page.goto(`${base}/#/servers/does-not-exist`, { waitUntil: 'domcontentloaded' })
+    await page.waitForTimeout(2000)
+    const notFoundText = await page.locator('body').innerText()
+    log('debug-404', `${page.url()} | ${notFoundText.replace(/\s+/g, ' ').slice(0, 160)}`)
+    check(
+      '不存在的服务器给可读 404 文案',
+      (await page.locator('.ls-notice').count()) >= 1 && notFoundText.includes('不存在'),
+      notFoundText.replace(/\s+/g, ' ').slice(0, 80),
+    )
+
+    check('页面无未捕获异常', pageErrors.length === 0, pageErrors.join(' | ').slice(0, 120))
+  } catch (error) {
+    console.error(`✗ 冒烟中断：${error && error.message ? error.message.split('\n')[0] : error}`)
+    for (const item of results.filter((entry) => !entry.ok)) console.error(`  已失败：${item.name}`)
+    throw error
+  } finally {
+    await context.close().catch(() => {})
+    await browser.close().catch(() => {})
+    await new Promise((done) => server.close(done))
+  }
+
+  const failed = results.filter((item) => !item.ok)
+  console.log('')
+  if (failed.length > 0) {
+    console.error(`✗ 服务器详情页冒烟失败 ${failed.length} 项：`)
+    for (const item of failed) console.error(`  - ${item.name}${item.detail ? `（${item.detail}）` : ''}`)
+    process.exitCode = 1
+    return
+  }
+  console.log(`✓ 服务器详情页冒烟全部通过（${results.length} 项）`)
+}
+
+run().catch((error) => {
+  console.error(error)
+  process.exitCode = 1
+})
