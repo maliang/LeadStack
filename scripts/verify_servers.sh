@@ -618,6 +618,97 @@ PANEL_AUDIT_LEAK="$(printf '%s' "$PANEL_AUDIT" | jq -r --arg id "$PANEL_SRV_ID" 
 [ "$PANEL_AUDIT_LEAK" = "false" ] && pass "server.panel 审计 detail 不含 panel_url / api_key 明文" \
   || fail "server.panel 审计 detail 泄露了面板地址或密钥（jq=${PANEL_AUDIT_LEAK:-解析失败}）"
 
+# ---------------------------------------------------------------- 17. 登录脚本示例三处一致
+step "17. 登录脚本示例：三处示例一致 + CRLF/颜色码实测"
+# 内置示例（ServerDetailPage.tsx 的 LOGIN_SCRIPT_SAMPLES）与 README.md、docs/ARCHITECTURE.md
+# 里的示例必须是同一份脚本：用户从文档复制到的与点按钮填入的，行为不能有差别。
+# 比对前只做两种归一（都会显式说明，避免把真差异洗掉）：
+#   1) 去掉每行尾部空白（编辑器自动 trim 不该判定为内容漂移）；
+#   2) TSX 模板字面量里的 \\ 还原成 \（JS 字符串转义，用户实际填入的是单个反斜杠）。
+SAMPLE_DIR="$DATA_DIR/sample17"; mkdir -p "$SAMPLE_DIR"
+SAMPLE_README="$SAMPLE_DIR/readme.sh"; SAMPLE_DOCS="$SAMPLE_DIR/docs.sh"; SAMPLE_TSX="$SAMPLE_DIR/tsx.sh"
+
+extract_md_sample() { # <md 文件> <输出文件>：取含「宝塔面板 v14 起可用」注释的 ```bash 围栏内原文
+  local md="$1" out="$2" ln start end
+  : > "$out"
+  ln="$(grep -n '# 宝塔面板 v14 起可用' "$md" | head -1 | cut -d: -f1)"
+  [ -z "$ln" ] && return 0
+  start="$(awk -v m="$ln" 'NR<=m && /^```bash/ {s=NR} END{print s}' "$md")"
+  end="$(awk -v m="$ln" 'NR>m && /^```/ {print NR; exit}' "$md")"
+  [ -z "$start" ] && return 0
+  [ -z "$end" ] && return 0
+  sed -n "$((start + 1)),$((end - 1))p" "$md" | sed -E 's/[[:space:]]+$//' > "$out"
+}
+
+extract_tsx_sample() { # <tsx 文件> <输出文件>：取 key:'baota' 那项的模板字面量原文
+  local tsx="$1" out="$2" key_ln script_ln end_ln
+  : > "$out"
+  key_ln="$(grep -n "key: 'baota'" "$tsx" | head -1 | cut -d: -f1)"
+  [ -z "$key_ln" ] && return 0
+  script_ln="$(awk -v s="$key_ln" 'NR>s && /script: `/ {print NR; exit}' "$tsx")"
+  end_ln="$(awk -v s="$script_ln" 'NR>s && /`[,]?[[:space:]]*$/ {print NR; exit}' "$tsx")"
+  [ -z "$script_ln" ] && return 0
+  [ -z "$end_ln" ] && return 0
+  sed -n "${script_ln},${end_ln}p" "$tsx" \
+    | sed -e '1s/^[^`]*`//' -e '$s/`[,[:space:]]*$//' \
+    | sed -E 's/[[:space:]]+$//' \
+    | while IFS= read -r line; do printf '%s\n' "${line//\\\\/\\}"; done > "$out"
+}
+
+extract_md_sample README.md "$SAMPLE_README"
+extract_md_sample docs/ARCHITECTURE.md "$SAMPLE_DOCS"
+extract_tsx_sample web/src/pages/ServerDetailPage.tsx "$SAMPLE_TSX"
+
+SAMPLE_LINES="$(wc -l < "$SAMPLE_TSX" 2>/dev/null | tr -d ' ')"
+if [ "${SAMPLE_LINES:-0}" -ge 10 ] 2>/dev/null \
+  && cmp -s "$SAMPLE_README" "$SAMPLE_DOCS" && cmp -s "$SAMPLE_DOCS" "$SAMPLE_TSX"; then
+  pass "三处示例一致（README.md / docs/ARCHITECTURE.md / ServerDetailPage.tsx 逐字节相同，${SAMPLE_LINES} 行）"
+else
+  SAMPLE_DIFF="$(diff -u "$SAMPLE_README" "$SAMPLE_DOCS" | sed -n '3,8p'; diff -u "$SAMPLE_DOCS" "$SAMPLE_TSX" | sed -n '3,8p')"
+  fail "三处示例不一致（tsx 抽取 ${SAMPLE_LINES:-0} 行）：$(printf '%s' "$SAMPLE_DIFF" | tr '\n' '|')"
+fi
+
+# 实测清洗效果：假 bt 14 同时吐颜色控制码与 CRLF，这正是把 0x1b / 0x0d 粘进 URL 的两种字节。
+FAKE_BIN="$DATA_DIR/fakebin17"; mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/bt" <<'FAKE_BT'
+#!/usr/bin/env bash
+printf '\033[32mhttps://panel.example.test:8888/abcd1234\033[0m\r\n'
+FAKE_BT
+chmod +x "$FAKE_BIN/bt"
+SAMPLE_URL="https://panel.example.test:8888/abcd1234"
+
+ctrl_bytes_of() { printf '%s' "$1" | od -An -v -tx1 | tr -s ' ' '\n' | grep -xE '0d|1b' | head -1; }
+# 失败信息里把控制字节转成可见文本，避免 \r / \033 直接打断日志行
+vis_of() { local v="$1"; v="${v//$'\033'/\\x1b}"; v="${v//$'\r'/\\x0d}"; printf '%s' "$v"; }
+tail_hex_of() { printf '%s' "$1" | tail -c 4 | od -An -v -tx1 | tr -s ' ' '\n' | tr -d '\n'; }
+
+for pair in "README.md|$SAMPLE_README" "docs/ARCHITECTURE.md|$SAMPLE_DOCS" "ServerDetailPage.tsx|$SAMPLE_TSX"; do
+  sample_label="${pair%%|*}"; sample_file="${pair#*|}"
+  sample_out="$(PATH="$FAKE_BIN:$PATH" bash "$sample_file" 2>/dev/null)"
+  sample_urlv="$(printf '%s' "$sample_out" | jq -r '.url // empty' 2>/dev/null)"
+  # JSON 若被控制字节破坏，jq 取不到 url：退回原文提取，让失败信息能说清粘上的是哪个字节。
+  [ -z "$sample_urlv" ] && sample_urlv="$(printf '%s' "$sample_out" | grep -oE 'https?://[^"]+' | head -n 1)"
+  sample_ctrl="$(ctrl_bytes_of "$sample_urlv")"
+  if [ "$sample_urlv" = "$SAMPLE_URL" ] && [ -z "$sample_ctrl" ]; then
+    pass "CRLF/颜色码实测：${sample_label} 产出的 URL 正确且无 0x1b/0x0d 字节（末尾 $(tail_hex_of "$sample_urlv")）"
+  else
+    fail "CRLF/颜色码实测：${sample_label} 产出 url='$(vis_of "$sample_urlv")'，控制字节=${sample_ctrl:-无}"
+  fi
+done
+
+# 负向对照：把清洗管道整行删掉，同一份假 bt 输出必须让 URL 粘上 0x1b/0x0d——
+# 否则上面的 od 断言没有判别力（改回错误实现也不会变红）。
+MUTANT="$SAMPLE_DIR/mutant-no-clean.sh"
+grep -v -F "tr -d" "$SAMPLE_README" > "$MUTANT"
+MUT_OUT="$(PATH="$FAKE_BIN:$PATH" bash "$MUTANT" 2>/dev/null)"
+MUT_URL="$(printf '%s' "$MUT_OUT" | grep -oE 'https?://[^"]+' | head -n 1)"
+MUT_CTRL="$(ctrl_bytes_of "$MUT_URL")"
+if [ -n "$MUT_CTRL" ]; then
+  pass "负向对照：去掉清洗管道后 URL 粘上 0x${MUT_CTRL}（证明 0x1b/0x0d 断言会变红）"
+else
+  fail "负向对照失效：去掉清洗管道后 URL 仍无 0x1b/0x0d，od 断言不具判别力"
+fi
+
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"

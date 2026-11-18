@@ -273,8 +273,8 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 # 宝塔面板 v14 起可用「bt 14」打印面板地址（含安全入口路径）；只提取其中的完整 URL。
 # 注意：不要把含初始密码的整段输出写进脚本，脚本输出会被记录到任务日志里。
 PREFIX=$(bt 14 2>/dev/null || /etc/init.d/bt 14 2>/dev/null)
-# bt 14 的输出常带颜色控制码，不清洗会把转义序列吃进 URL。
-PREFIX=$(printf '%s' "$PREFIX" | sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g')
+# bt 14 的输出常带颜色控制码，不清洗会把转义序列吃进 URL；部分系统输出是 CRLF，\r 也会被 grep 吃进 URL 尾部。
+PREFIX=$(printf '%s' "$PREFIX" | tr -d '\r' | sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g')
 PANEL_URL=$(printf '%s' "$PREFIX" | grep -oE 'https?://[^ ]+' | head -n 1)
 if [ -n "$PANEL_URL" ]; then
   printf '{"url":"%s"}' "$PANEL_URL"
@@ -283,7 +283,7 @@ else
 fi
 ```
 
-在目标机上可先手工验一步，确认 `grep` 只吐一行地址：`bt 14 | sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g' | grep -oE 'https?://[^ ]+' | head -n 1`。面板版本低于 14 时该子命令不存在，脚本会落到「没有找到面板地址」的提示，而不是静默输出空地址。
+在目标机上可先手工验一步，确认 `grep` 只吐一行地址：`bt 14 | tr -d '\r' | sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g' | grep -oE 'https?://[^ ]+' | head -n 1`。面板版本低于 14 时该子命令不存在，脚本会落到「没有找到面板地址」的提示，而不是静默输出空地址。
 
 ### 4. 建立检测
 

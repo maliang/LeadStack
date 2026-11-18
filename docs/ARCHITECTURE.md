@@ -2790,15 +2790,15 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 - 配置弹窗内置两个示例（宝塔 / 1Panel），一键填入后用户只需改地址；
   底部固定一段风险说明（脚本以服务进程权限执行、不要把密码写进脚本）。
 
-配置弹窗里宝塔示例的脚本原文（`web/src/pages/ServerDetailPage.tsx:413`）：
+配置弹窗里宝塔示例的脚本原文（`web/src/pages/ServerDetailPage.tsx` 的 `LOGIN_SCRIPT_SAMPLES` 中 `key: 'baota'` 一项）：
 
 ```bash
 #!/usr/bin/env bash
 # 宝塔面板 v14 起可用「bt 14」打印面板地址（含安全入口路径）；只提取其中的完整 URL。
 # 注意：不要把含初始密码的整段输出写进脚本，脚本输出会被记录到任务日志里。
 PREFIX=$(bt 14 2>/dev/null || /etc/init.d/bt 14 2>/dev/null)
-# bt 14 的输出常带颜色控制码，不清洗会把转义序列吃进 URL。
-PREFIX=$(printf '%s' "$PREFIX" | sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g')
+# bt 14 的输出常带颜色控制码，不清洗会把转义序列吃进 URL；部分系统输出是 CRLF，\r 也会被 grep 吃进 URL 尾部。
+PREFIX=$(printf '%s' "$PREFIX" | tr -d '\r' | sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g')
 PANEL_URL=$(printf '%s' "$PREFIX" | grep -oE 'https?://[^ ]+' | head -n 1)
 if [ -n "$PANEL_URL" ]; then
   printf '{"url":"%s"}' "$PANEL_URL"
@@ -2809,6 +2809,7 @@ fi
 
 `bt 14` 只打印地址（含安全入口路径），不清洗颜色控制码就会把 `\x1b[0m` 之类吃进 `url`，浏览器打开必然是 404。
 清洗用 `sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g'`：`$'…'` 由 shell 生成真转义字符，BSD/GNU sed 都认；写成 `\x1B` 字面量 BSD sed 不认。
+颜色码之前先过一道 `tr -d '\r'`：`bt 14` 在部分系统上按 CRLF 输出，`\r` 不是空格，会被 `grep -oE 'https?://[^ ]+'` 留在 URL 末尾，浏览器打开同样是 404。
 面板低于 14 时该子命令不存在，脚本落到 `output` 分支提示去「面板设置」确认，而不是输出空地址。
 
 ### 68.4 为什么不做「内置面板登录」（宝塔 / 1Panel 的实测结论）
