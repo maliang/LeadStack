@@ -1881,6 +1881,7 @@ const enUS: Record<string, string> = {
   'setup.version': 'Control plane {version}',
   'terminal.connectFailed': 'Terminal connection failed',
   'terminal.connecting': 'Requesting a one-time ticket and connecting…',
+  'terminal.disconnected': 'Connection closed; you can reconnect.',
   'terminal.disabledHint': 'Start the control plane with LEADSTACK_TERMINAL_ENABLED=true to use the terminal here.',
   'terminal.disabledTitle': 'Web terminal is disabled on the control plane',
   'terminal.footerHint': 'Terminal data travels over WebSocket; closing the tab or switching servers ends the session.',

@@ -16,6 +16,12 @@ import { useI18n } from '@/i18n'
  *   - 打开后发 {type:'resize',cols,rows}，输入发 {type:'input',data}，尺寸变化重发 resize；
  *   - 下行 JSON type=output|data 写屏、error 红字、exit 结束，ArrayBuffer 直接解码。
  * 连接失败/断开都给出可读文案与「重新连接」入口，不留白屏。
+ *
+ * 「已连接」的判据是**服务端首帧**而不是 ws.onopen：后端 handlers_terminal.go 没有
+ * 独立的 ready 帧，接受会话时直接转发 PTY 输出（成功路径第一帧是 output/data 或二进制），
+ * 拒绝开 session 时先发 {type:'error',data}（见 openTerminalSession 失败分支）。因此
+ * onopen 只代表 TCP/WS 握手完成，此时仍停在「连接中」，收到第一帧（非 error）才置「已连接」，
+ * error 帧/onerror/onclose 一律回「已断开」并保留重试入口。
  */
 const props = defineProps<{
   serverId: string
@@ -69,6 +75,20 @@ function fit(): void {
   }
 }
 
+/** 服务端首帧到达：会话确实被接受，这时才算「已连接」。 */
+function markConnected(): void {
+  state.value = 'connected'
+  fit()
+  term?.focus()
+}
+
+/** 拒绝帧 / onerror / onclose 的统一收口：回「已断开」，给出可读文案与重试入口。 */
+function markDisconnected(message: string): void {
+  state.value = 'closed'
+  error.value = message
+  write(`\r\n\x1b[31m${message}\x1b[0m\r\n`)
+}
+
 function markDisabled(caught: unknown): void {
   const message = errorMessage(caught, t('terminal.connectFailed'))
   error.value = message
@@ -102,42 +122,53 @@ async function connect(): Promise<void> {
 
     ws.onopen = () => {
       if (current !== session) return
-      state.value = 'connected'
+      // 握手成功 ≠ 服务端接受了终端会话：保持「连接中」，等第一帧就绪信号。
       fit()
       send({ type: 'resize', cols: active.cols, rows: active.rows })
-      active.focus()
     }
 
     ws.onmessage = (event) => {
       if (current !== session) return
+      const first = state.value === 'connecting'
       if (typeof event.data === 'string') {
         try {
           const message = JSON.parse(event.data) as { type?: string; data?: string }
+          if (message.type === 'error') {
+            markDisconnected(message.data || t('terminal.connectFailed'))
+            return
+          }
+          // 后端目前不发显式就绪帧，这里只做兜底：若将来补发 hello/ready 类帧，
+          // 视为会话已接受且不把原始 JSON 写进屏幕（常量见 pkg/protocol/protocol.go）。
+          if (message.type === 'hello' || message.type === 'hello_ack' || message.type === 'ready') {
+            if (first) markConnected()
+            return
+          }
+          if (first) markConnected()
           if (message.type === 'output' || message.type === 'data') write(message.data ?? '')
-          else if (message.type === 'error') {
-            write(`\r\n\x1b[31m${message.data ?? ''}\x1b[0m\r\n`)
-          } else if (message.type === 'exit') {
+          else if (message.type === 'exit') {
             state.value = 'closed'
             write(`\r\n\x1b[90m${t('terminal.sessionClosed')}\x1b[0m\r\n`)
           } else write(event.data)
         } catch {
+          if (first) markConnected()
           write(event.data)
         }
       } else if (event.data instanceof ArrayBuffer) {
+        if (first) markConnected()
         write(new TextDecoder().decode(event.data))
       }
     }
 
     ws.onerror = () => {
       if (current !== session) return
-      state.value = 'error'
-      error.value = t('terminal.connectFailed')
-      write(`\r\n\x1b[31m${t('terminal.connectFailed')}\x1b[0m\r\n`)
+      markDisconnected(t('terminal.connectFailed'))
     }
 
     ws.onclose = () => {
       if (current !== session) return
-      if (state.value !== 'error') state.value = 'closed'
+      // 连接未就绪就被关掉（服务端拒绝或网络断了）：回「已断开」，可重试。
+      if (state.value === 'connected') markDisconnected(t('terminal.disconnected'))
+      else if (state.value === 'connecting') markDisconnected(t('terminal.connectFailed'))
     }
   } catch (caught) {
     if (current !== session) return

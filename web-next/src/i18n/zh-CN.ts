@@ -1883,6 +1883,7 @@ const zhCN: Record<string, string> = {
   'setup.version': '控制端版本 {version}',
   'terminal.connectFailed': '终端连接失败',
   'terminal.connecting': '正在申请一次性票据并连接…',
+  'terminal.disconnected': '连接已断开，可重新连接',
   'terminal.disabledHint': '需要以 LEADSTACK_TERMINAL_ENABLED=true 启动控制端后，才能在此打开终端。',
   'terminal.disabledTitle': '控制端未开启 Web 终端',
   'terminal.footerHint': '终端数据通过 WebSocket 传输；关闭标签页或切换服务器会结束会话。',

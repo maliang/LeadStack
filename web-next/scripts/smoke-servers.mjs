@@ -339,10 +339,16 @@ async function run() {
     }
   })
 
-  // 内嵌终端的 WS 也走 mock：握手成功并回一条 banner，避免依赖真 agent。
+  // 内嵌终端的 WS 也走 mock：连上后**不主动发帧**——后端没有独立 ready 帧，
+  // 接受会话时第一帧就是 PTY 输出，拒绝时第一帧是 {type:'error'}（见 handlers_terminal.go）。
+  // 首帧由用例显式注入，才能验证「未收到就绪帧前不得显示已连接」（t28 回归）。
+  const terminalSockets = []
+  const terminalFrames = []
   await page.routeWebSocket(/\/api\/v1\/servers\/[^/]+\/terminal\?ticket=/, (ws) => {
-    ws.onMessage(() => {})
-    ws.send(JSON.stringify({ type: 'output', data: 'mock shell ready\r\n' }))
+    terminalSockets.push(ws)
+    ws.onMessage((message) => {
+      terminalFrames.push(typeof message === 'string' ? message : message.toString())
+    })
   })
 
   try {
@@ -445,6 +451,43 @@ async function run() {
     await page.waitForSelector('.xterm', { timeout: 10000 })
     check('有权限时终端挂载 xterm', (await page.locator('.ls-srv-term .xterm').count()) === 1)
     check('终端拿到 ticket 并发起 WS', apiCalls.some((line) => line.includes('POST /api/v1/servers/srv-alpha/terminal-ticket')))
+
+    // 7.1) 服务端就绪帧：WS 已 open 但服务端尚未发第一帧时，状态只能是「连接中」
+    const termStateText = async () => (await page.locator('.ls-srv-term__state').innerText()).trim()
+    const waitTermState = (text) =>
+      page.waitForFunction(
+        (expected) => document.querySelector('.ls-srv-term__state')?.textContent?.trim() === expected,
+        text,
+        { timeout: 5000 },
+      )
+    await page.waitForTimeout(600)
+    const opened = terminalFrames.some((frame) => frame.includes('"type":"resize"'))
+    check('服务端就绪帧：ws.onopen 已执行（mock 收到 resize 帧）', opened, terminalFrames.join(' | ').slice(0, 80))
+    const beforeReady = await termStateText()
+    check(
+      '服务端就绪帧：未收到就绪帧时状态为「连接中」（不得显示「已连接」）',
+      beforeReady === '连接中',
+      beforeReady,
+    )
+
+    // 7.2) 服务端第一帧（接受会话后的 PTY 输出）才允许置位「已连接」
+    const readySocket = terminalSockets[terminalSockets.length - 1]
+    check('服务端就绪帧：mock WS 已建立（可注入首帧）', Boolean(readySocket))
+    readySocket?.send(JSON.stringify({ type: 'output', data: 'mock shell ready\r\n' }))
+    await waitTermState('已连接')
+    const afterReady = await termStateText()
+    check('服务端就绪帧：收到就绪帧后状态变为「已连接」', afterReady === '已连接', afterReady)
+
+    // 7.3) 拒绝帧（如 agent 拒绝开 session）必须把「已连接」打回「已断开」并保留重试
+    readySocket?.send(JSON.stringify({ type: 'error', data: 'agent 拒绝打开终端会话' }))
+    await waitTermState('已断开')
+    const afterReject = await termStateText()
+    const retryCount = await page.locator('.ls-srv-term__bar button', { hasText: '重新连接' }).count()
+    check(
+      '服务端就绪帧：拒绝帧后回「已断开」并给出重试入口',
+      afterReject === '已断开' && retryCount === 1,
+      `${afterReject} / retry=${retryCount}`,
+    )
 
     await page.waitForSelector('.ls-srv-files__entry', { timeout: 10000 })
     check('文件面板列出根目录', (await page.locator('.ls-srv-files__entry').count()) === 2)
