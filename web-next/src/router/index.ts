@@ -21,8 +21,13 @@ declare module 'vue-router' {
     permission?: string
     /** 版式：blank 不打外壳（登录页 / 独立错误页），缺省进 AppShell */
     layout?: 'shell' | 'blank'
+    /** 运维工具入口页的 kind：/terminal /files /logs 共用 ToolsEntryPage */
+    toolKind?: ServerToolKind
   }
 }
+
+/** 终端 / 文件 / 日志三个入口页共用的工具类型（页面从 meta.toolKind 读取，不写三份页）。 */
+export type ServerToolKind = 'terminal' | 'files' | 'logs'
 
 const routes: RouteRecordRaw[] = [
   // ── 监控 ────────────────────────────────────────────────────────────────
@@ -55,20 +60,20 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/terminal',
     name: 'terminal',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '终端', permission: 'terminal.use' },
+    component: () => import('@/pages/ToolsEntryPage.vue'),
+    meta: { title: '终端', permission: 'terminal.use', toolKind: 'terminal' },
   },
   {
     path: '/files',
     name: 'files',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '文件', permission: 'terminal.use' },
+    component: () => import('@/pages/ToolsEntryPage.vue'),
+    meta: { title: '文件', permission: 'terminal.use', toolKind: 'files' },
   },
   {
     path: '/logs',
     name: 'logs',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '日志', permission: 'terminal.use' },
+    component: () => import('@/pages/ToolsEntryPage.vue'),
+    meta: { title: '日志', permission: 'terminal.use', toolKind: 'logs' },
   },
   {
     path: '/scheduled-tasks',
@@ -196,6 +201,53 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '页面不存在' },
   },
 ]
+
+/**
+ * 服务器详情页的面板契约（深链 `?tab=` 与页内切换共用一份）。
+ *
+ * 页面只拿这里的结果读写 URL，避免「URL 里能写、页面不认」：
+ * - 读：normalizeServerDetailTab(route.query.tab)，未知值一律回 overview；
+ * - 写：SERVER_DETAIL_TAB_QUERY[tab]；overview 是默认值，写回时省略参数让地址干净。
+ */
+export type ServerDetailTab =
+  | 'overview'
+  | 'access'
+  | 'login'
+  | 'meta'
+  | 'checks'
+  | 'terminal'
+  | 'files'
+  | 'logs'
+
+export const SERVER_DETAIL_TABS: readonly ServerDetailTab[] = [
+  'overview',
+  'access',
+  'login',
+  'meta',
+  'checks',
+  'terminal',
+  'files',
+  'logs',
+]
+
+export const SERVER_DETAIL_TAB_QUERY: Record<ServerDetailTab, { tab: ServerDetailTab } | null> = {
+  overview: null,
+  access: { tab: 'access' },
+  login: { tab: 'login' },
+  meta: { tab: 'meta' },
+  checks: { tab: 'checks' },
+  terminal: { tab: 'terminal' },
+  files: { tab: 'files' },
+  logs: { tab: 'logs' },
+}
+
+/** 深链值归一化：`?tab=logs` / `?tab=files` 等原样认，其他（含数组首值）回 overview。 */
+export function normalizeServerDetailTab(raw: unknown): ServerDetailTab {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  return typeof value === 'string' && (SERVER_DETAIL_TABS as readonly string[]).includes(value)
+    ? (value as ServerDetailTab)
+    : 'overview'
+}
 
 const router = createRouter({
   // 构建产物由 Go 二进制在子路径下托管，hash 路由不依赖服务端 rewrite。

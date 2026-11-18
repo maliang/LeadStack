@@ -6,8 +6,8 @@ import { useI18n } from '@/i18n'
 import type { Server } from '@/lib/api'
 import { formatRelativeTime, serverAddress } from '@/lib/format'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
-import ServerInlineTerminal from './ServerInlineTerminal.vue'
-import ServerInlineFiles from './ServerInlineFiles.vue'
+import ServerTerminalPanel from '@/components/server-tools/ServerTerminalPanel.vue'
+import ServerFilesPanel from '@/components/server-tools/ServerFilesPanel.vue'
 
 /**
  * 列表行：摘要 + 可展开的内嵌终端（左）与文件浏览（右）。
@@ -109,7 +109,7 @@ function openDetailFromRow(event: MouseEvent): void {
           <AppIcon name="terminal" size="0.875rem" />
           {{ t('nav.terminal') }}
         </h3>
-        <ServerInlineTerminal :server-id="server.id" :allowed="terminalAllowed" />
+        <ServerTerminalPanel :server-id="server.id" :allowed="terminalAllowed" />
       </section>
 
       <section class="ls-srv-panel" :aria-label="`${server.name} · ${t('nav.files')}`">
@@ -117,7 +117,7 @@ function openDetailFromRow(event: MouseEvent): void {
           <AppIcon name="folder" size="0.875rem" />
           {{ t('nav.files') }}
         </h3>
-        <ServerInlineFiles :server-id="server.id" :allowed="terminalAllowed" />
+        <ServerFilesPanel :server-id="server.id" :allowed="terminalAllowed" />
       </section>
     </div>
   </li>

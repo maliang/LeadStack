@@ -1,4 +1,4 @@
-import { onScopeDispose, ref, type Ref } from 'vue'
+import { onScopeDispose, ref, watch, type Ref } from 'vue'
 import { api, type Server, type ServerStatus } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import { t } from '@/i18n'
@@ -129,7 +129,16 @@ export interface UseServers {
   refresh: () => Promise<void>
 }
 
-export function useServers(): UseServers {
+export interface UseServersOptions {
+  /**
+   * 权限闸：返回 false 时**一次请求都不发**，轮询定时器也直接跳过。
+   * 终端/文件/日志入口页靠它保证「无 terminal.use 的账号不在网络面板里看到 /servers」。
+   */
+  enabled?: () => boolean
+}
+
+export function useServers(options: UseServersOptions = {}): UseServers {
+  const allowed = (): boolean => options.enabled?.() ?? true
   const servers = ref<Server[]>([])
   const status = ref<ServersStatus>('loading')
   const error = ref<string | null>(null)
@@ -141,6 +150,7 @@ export function useServers(): UseServers {
   let timer: ReturnType<typeof setInterval> | null = null
 
   const refresh = (): Promise<void> => {
+    if (!allowed()) return Promise.resolve()
     if (inflight) return inflight
     refreshing.value = true
     inflight = (async () => {
@@ -165,9 +175,15 @@ export function useServers(): UseServers {
   }
 
   timer = setInterval(() => {
+    if (!allowed()) return
     if (document.visibilityState === 'hidden') return
     void refresh()
   }, SERVERS_POLL_MS)
+
+  // 权限可能在会话刷新后才到位：从「不允许」变「允许」时补一次拉取。
+  watch(allowed, (on) => {
+    if (on) void refresh()
+  })
 
   onScopeDispose(() => {
     disposed = true
@@ -175,7 +191,7 @@ export function useServers(): UseServers {
     timer = null
   })
 
-  void refresh()
+  if (allowed()) void refresh()
 
   return { servers, status, error, loaded, refreshing, refresh }
 }

@@ -1717,6 +1717,153 @@ body.ls-scroll-locked {
   white-space: nowrap;
 }
 
+/* 可复用日志面板（详情页「日志」tab） */
+
+.ls-logs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-3);
+  min-width: 0;
+}
+
+.ls-logs__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--ls-space-2);
+  padding: var(--ls-space-3);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-lg);
+  background: var(--ls-surface);
+}
+
+.ls-logs__path {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.ls-logs__grep {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.ls-logs__lines {
+  flex: 0 0 6.5rem;
+}
+
+.ls-logs__mono {
+  font-family: var(--ls-font-mono);
+  font-size: var(--ls-text-xs);
+}
+
+.ls-logs__actions {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-3);
+}
+
+.ls-logs__auto {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ls-space-1);
+  min-height: var(--ls-hit-size);
+  color: var(--ls-text-muted);
+  font: 400 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  cursor: pointer;
+}
+
+.ls-logs__auto input {
+  inline-size: 1rem;
+  block-size: 1rem;
+  accent-color: var(--ls-primary);
+}
+
+.ls-logs__output {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--ls-border-strong);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-text);
+}
+
+.ls-logs__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ls-space-2);
+  padding: var(--ls-space-2) var(--ls-space-3);
+  border-bottom: 1px solid var(--ls-border-strong);
+}
+
+.ls-logs__file {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ls-bg);
+  font: 400 var(--ls-text-2xs) / 1.4 var(--ls-font-mono);
+  opacity: 0.75;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ls-logs__stats {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--ls-space-2);
+  color: var(--ls-bg);
+  font: 500 var(--ls-text-2xs) / 1.4 var(--ls-font-sans);
+  opacity: 0.75;
+}
+
+.ls-logs__truncated {
+  padding: 0 var(--ls-space-1);
+  border-radius: var(--ls-radius-sm);
+  background: var(--ls-warning-soft);
+  color: var(--ls-warning);
+  opacity: 1;
+}
+
+.ls-logs__count {
+  font-variant-numeric: tabular-nums;
+}
+
+.ls-logs__pre {
+  max-height: 24rem;
+  min-height: 6rem;
+  margin: 0;
+  padding: var(--ls-space-3);
+  overflow: auto;
+  color: var(--ls-bg);
+  font: 400 var(--ls-terminal-font-size, 0.75rem) / 1.6 var(--ls-font-mono);
+  white-space: pre;
+}
+
+.ls-logs__empty {
+  margin: 0;
+  padding: 0 var(--ls-space-3) var(--ls-space-3);
+  color: var(--ls-bg);
+  font: 400 var(--ls-text-xs) / 1.5 var(--ls-font-sans);
+  opacity: 0.6;
+}
+
+.ls-logs__hint {
+  margin: 0;
+  color: var(--ls-text-subtle);
+  font: 400 var(--ls-text-2xs) / 1.5 var(--ls-font-sans);
+}
+
+@media (max-width: 639.98px) {
+  .ls-logs__path,
+  .ls-logs__grep {
+    flex-basis: 100%;
+  }
+}
+
 @media (max-width: 1023.98px) {
   .ls-srv-row__main {
     grid-template-columns: minmax(0, 1fr);
@@ -2462,6 +2609,14 @@ body.ls-scroll-locked {
   border-bottom-color: var(--ls-primary);
   color: var(--ls-primary);
   font-weight: 600;
+}
+
+/* 详情页八个 tab 在 320px 下横向滚动会把两端标签切掉；窄宽改为换行，保证全部可见可点。 */
+@media (max-width: 639.98px) {
+  .ls-tabs {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
 }
 
 /* ---------- 窄宽（320px 基准） ---------- */
@@ -3631,5 +3786,154 @@ body.ls-scroll-locked {
 
   .ls-alertspage-drawer__meta {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- 运维工具入口页（/terminal /files /logs 共用） ---------- */
+
+.ls-toolspage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-4);
+}
+
+.ls-toolspage__heading {
+  min-width: 0;
+}
+
+.ls-toolspage__title {
+  margin: 0;
+  font: 600 var(--ls-text-xl) / 1.3 var(--ls-font-sans);
+}
+
+.ls-toolspage__subtitle {
+  max-width: 44rem;
+  margin: var(--ls-space-1) 0 0;
+  color: var(--ls-text-muted);
+  font: 400 var(--ls-text-sm) / 1.6 var(--ls-font-sans);
+}
+
+.ls-toolspage__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ls-space-2);
+  padding: var(--ls-space-3);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-lg);
+  background: var(--ls-surface);
+}
+
+.ls-toolspage__search {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.ls-toolspage__count {
+  color: var(--ls-text-subtle);
+  font: 400 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  white-space: nowrap;
+}
+
+/* 条目多时在容器内滚动，不把整页撑长；60vh 是「一屏内」的布局约束而非视觉尺寸。 */
+.ls-toolspage__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  max-height: 60vh;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.ls-toolspage__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ls-space-2) var(--ls-space-3);
+  padding: var(--ls-space-3);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-lg);
+  background: var(--ls-surface);
+  color: var(--ls-text);
+  text-decoration: none;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.ls-toolspage__row:hover {
+  border-color: var(--ls-border-strong);
+  background: var(--ls-surface-muted);
+}
+
+.ls-toolspage__row:active {
+  border-color: var(--ls-primary-fill);
+}
+
+.ls-toolspage__row:focus-visible {
+  outline: 2px solid var(--ls-primary-fill);
+  outline-offset: 2px;
+}
+
+.ls-toolspage__row-main {
+  display: flex;
+  flex: 1 1 14rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ls-space-1) var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-toolspage__name {
+  max-width: 100%;
+  overflow: hidden;
+  font: 600 var(--ls-text-sm) / 1.4 var(--ls-font-sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ls-toolspage__host {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ls-text-subtle);
+  font: 400 var(--ls-text-xs) / 1.4 var(--ls-font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ls-toolspage__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-1) var(--ls-space-2);
+}
+
+.ls-toolspage__seen {
+  color: var(--ls-text-subtle);
+  font: 400 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  white-space: nowrap;
+}
+
+.ls-toolspage__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+}
+
+.ls-toolspage__skeleton-row {
+  min-height: calc(var(--ls-hit-size) * 2);
+}
+
+@media (max-width: 480px) {
+  .ls-toolspage__row-main {
+    flex-basis: 100%;
+  }
+
+  .ls-toolspage__meta {
+    width: 100%;
   }
 }

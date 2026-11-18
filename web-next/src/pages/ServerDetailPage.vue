@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import ServerOverviewTab from '@/components/server-detail/ServerOverviewTab.vue'
@@ -7,12 +7,20 @@ import ServerAccessTab from '@/components/server-detail/ServerAccessTab.vue'
 import ServerLoginTab from '@/components/server-detail/ServerLoginTab.vue'
 import ServerMetaTab from '@/components/server-detail/ServerMetaTab.vue'
 import ServerChecksTab from '@/components/server-detail/ServerChecksTab.vue'
+import ServerFilesPanel from '@/components/server-tools/ServerFilesPanel.vue'
+import ServerLogsPanel from '@/components/server-tools/ServerLogsPanel.vue'
+import ServerTerminalPanel from '@/components/server-tools/ServerTerminalPanel.vue'
 import { useCan } from '@/composables/useCan'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 import { useI18n } from '@/i18n'
 import { api, type CheckItem, type Server, type ServerAccess, type ServerLoginResult } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import { serverAddress } from '@/lib/format'
+import {
+  SERVER_DETAIL_TAB_QUERY,
+  normalizeServerDetailTab,
+  type ServerDetailTab,
+} from '@/router'
 import {
   checksForServer,
   loginResultMode,
@@ -21,21 +29,30 @@ import {
 } from '@/lib/server-detail'
 
 /**
- * 服务器详情页：五个 tab（概览 / 登录信息 / 一键登录 / 服务器档案 / 检测）。
+ * 服务器详情页：八个 tab（概览 / 登录信息 / 一键登录 / 服务器档案 / 检测 / 终端 / 文件 / 日志）。
  *
  * 本页是唯一的数据 owner：详情、登录信息、一键登录、面板、档案、检测项的
- * 异步状态都在这里，五个 tab 组件只负责渲染与派发。这样「登录信息收起即丢弃」
+ * 异步状态都在这里，各 tab 组件只负责渲染与派发。这样「登录信息收起即丢弃」
  * 与「档案保存后重新读回详情」只有一处实现，不会在组件之间走样。
+ *
+ * 终端 / 文件 / 日志共用 terminal.use：没权限时三个 tab 依然可见（用户要知道有这功能），
+ * 但内容区只给说明、不挂载面板 —— 面板一旦挂载就会发 ticket / files / logs 请求。
+ * 深链 ?tab=terminal|files|logs|overview|access|login|meta|checks 直接落到对应 tab，
+ * 页内切换再 router.replace 写回（query 契约集中在 src/router/index.ts）。
  */
-type TabKey = 'overview' | 'access' | 'login' | 'meta' | 'checks'
-
-const TABS: { key: TabKey; labelKey: string }[] = [
+const TABS: { key: ServerDetailTab; labelKey: string }[] = [
   { key: 'overview', labelKey: 'server.tab.overview' },
   { key: 'access', labelKey: 'server.tab.access' },
   { key: 'login', labelKey: 'server.tab.login' },
   { key: 'meta', labelKey: 'server.tab.meta' },
   { key: 'checks', labelKey: 'server.tab.checks' },
+  { key: 'terminal', labelKey: 'server.tab.terminal' },
+  { key: 'files', labelKey: 'server.tab.files' },
+  { key: 'logs', labelKey: 'server.tab.logs' },
 ]
+
+/** 需要 terminal.use 的面板；缺权限时只渲染说明，不挂载组件。 */
+const TOOL_TABS: readonly ServerDetailTab[] = ['terminal', 'files', 'logs']
 
 const route = useRoute()
 const router = useRouter()
@@ -43,7 +60,21 @@ const { t } = useI18n()
 const { can } = useCan()
 
 const serverId = computed(() => String(route.params.id ?? ''))
-const tab = ref<TabKey>('overview')
+const tab = ref<ServerDetailTab>(normalizeServerDetailTab(route.query.tab))
+
+/** 320px 下八个 tab 会横向滚动：深链直达时把选中的 tab 滚进可视区，避免「看不到谁选中」。 */
+const tablist = ref<HTMLDivElement | null>(null)
+
+async function revealActiveTab(): Promise<void> {
+  await nextTick()
+  const list = tablist.value
+  const active = list?.querySelector<HTMLElement>('[aria-selected="true"]')
+  if (!list || !active) return
+  const listRect = list.getBoundingClientRect()
+  const activeRect = active.getBoundingClientRect()
+  if (activeRect.left < listRect.left) list.scrollLeft -= listRect.left - activeRect.left
+  else if (activeRect.right > listRect.right) list.scrollLeft += activeRect.right - listRect.right
+}
 
 /* 详情 ------------------------------------------------------------ */
 const server = ref<Server | null>(null)
@@ -83,6 +114,7 @@ const checksError = ref<string | null>(null)
 const checksLoaded = ref(false)
 
 const canWrite = computed(() => can('server.write'))
+const canTerminal = computed(() => can('terminal.use'))
 const serverChecks = computed(() => checksForServer(checks.value, serverId.value))
 const title = computed(() => server.value?.name || serverId.value)
 const address = computed(() => (server.value ? serverAddress(server.value) : ''))
@@ -246,12 +278,31 @@ async function loadChecks(): Promise<void> {
   }
 }
 
-/* tab 切换：离开「登录信息」立即丢弃明文；进入「检测」按需加载 -------- */
+/* tab 切换：离开「登录信息」立即丢弃明文；进入「检测」按需加载；query 同步 ---- */
+
+/**
+ * 把当前 tab 写回 URL：用 replace 不新增历史记录。
+ * 与深链读取共用 SERVER_DETAIL_TAB_QUERY，overview 为默认值、不写参数。
+ */
+function syncTabQuery(next: ServerDetailTab): void {
+  const desired = SERVER_DETAIL_TAB_QUERY[next]
+  const current = typeof route.query.tab === 'string' ? route.query.tab : ''
+  if (current === (desired ? desired.tab : '')) return
+  const query = { ...route.query }
+  if (desired) query.tab = desired.tab
+  else delete query.tab
+  void router.replace({ query })
+}
 
 watch(tab, (next) => {
   if (next !== 'access') discardAccess()
   if (next === 'checks' && !checksLoaded.value && !checksLoading.value) void loadChecks()
+  syncTabQuery(next)
+  void revealActiveTab()
 })
+
+// 详情读回来之后 tab 栏才挂载，深链要在这时再滚一次。
+watch(server, () => void revealActiveTab())
 
 watch(serverId, () => {
   server.value = null
@@ -359,7 +410,7 @@ onMounted(() => {
         <span>{{ loadError }}</span>
       </p>
 
-      <div class="ls-tabs" role="tablist" :aria-label="t('server.detail.tabs')">
+      <div ref="tablist" class="ls-tabs" role="tablist" :aria-label="t('server.detail.tabs')">
         <button
           v-for="(item, index) in TABS"
           :id="`server-tab-${item.key}`"
@@ -429,6 +480,25 @@ onMounted(() => {
           :error="checksError"
           @reload="loadChecks"
         />
+
+        <!-- 终端 / 文件 / 日志：缺 terminal.use 时只给说明，绝不挂载面板（避免发请求）。 -->
+        <div
+          v-else-if="TOOL_TABS.includes(tab) && !canTerminal"
+          class="ls-banner ls-banner--warning"
+          role="status"
+        >
+          <div class="ls-banner__body">
+            <p class="ls-banner__title">{{ t('server.detail.needTerminal') }}</p>
+            <p class="ls-banner__text">{{ t('server.detail.needTerminalHint') }}</p>
+          </div>
+        </div>
+        <ServerTerminalPanel
+          v-else-if="tab === 'terminal'"
+          :server-id="serverId"
+          :allowed="canTerminal"
+        />
+        <ServerFilesPanel v-else-if="tab === 'files'" :server-id="serverId" :allowed="canTerminal" />
+        <ServerLogsPanel v-else-if="tab === 'logs'" :server-id="serverId" :allowed="canTerminal" />
       </div>
     </template>
   </section>

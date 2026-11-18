@@ -8,7 +8,10 @@ import { errorMessage } from '@/lib/errors'
 import { useI18n } from '@/i18n'
 
 /**
- * 列表行内嵌终端：一次性 ticket 换 WebSocket，xterm + fit addon。
+ * 可复用终端面板：一次性 ticket 换 WebSocket，xterm + fit addon。
+ *
+ * 两处使用：服务器列表行内展开（ServerRow）与详情页「终端」tab。组件只认
+ * serverId / allowed，不依赖列表上下文；切走即卸载、断开 ws。
  *
  * 握手/控制帧与旧界面 web/src/components/server/TerminalTab.tsx 保持一致：
  *   - 先 POST /servers/{id}/terminal-ticket 拿 60s 单次 ticket；

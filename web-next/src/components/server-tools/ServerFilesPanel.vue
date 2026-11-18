@@ -7,9 +7,14 @@ import { formatBytes, formatDateTime } from '@/lib/format'
 import { useI18n } from '@/i18n'
 
 /**
- * 列表行内嵌文件浏览：api.listFiles(serverId, path) + 面包屑逐级进入。
+ * 可复用文件面板：api.listFiles(serverId, path) + 面包屑逐级进入。
  *
- * 只读：目录点击进入，文件点击只展开元信息，不触发下载。
+ * 两处使用：服务器列表行内展开（ServerRow）与详情页「文件」tab；组件只认
+ * serverId / allowed，不依赖列表上下文。
+ *
+ * 只读：目录点击进入，文件点击只展开元信息，不触发下载。旧界面 FilesTab 的
+ * 上传/下载/删除不在本次复用范围内（与现有列表面板保持一致），需要时按
+ * api.uploadServerFile / downloadServerFile / deleteServerFile 单独补入口。
  * 加载 / 失败（可重试）/ 空目录三态都有可见文案；无 terminal.use 时显示统一占位。
  */
 const props = defineProps<{

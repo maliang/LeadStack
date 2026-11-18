@@ -48,13 +48,15 @@ const MIME = {
 const TOKEN = 'smoke-servers-token'
 const PASSWORD = 'smoke-servers-password'
 
-function user() {
+const ALL_PERMISSIONS = ['server.read', 'server.write', 'server.update', 'server.edit', 'terminal.use']
+
+function user(permissions = ALL_PERMISSIONS) {
   return {
     id: 'smoke-servers-user',
     username: 'admin',
     role: 'admin',
     role_name: '管理员',
-    permissions: ['server.read', 'server.write', 'server.update', 'server.edit', 'terminal.use'],
+    permissions: [...permissions],
     scope: { mode: 'all', group_ids: [], server_ids: [] },
   }
 }
@@ -289,10 +291,10 @@ async function installMockApi(context, state) {
       route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) })
 
     if (path === '/api/v1/auth/login' && method === 'POST') {
-      return json(200, { token: TOKEN, user: user() })
+      return json(200, { token: TOKEN, user: user(state.permissions) })
     }
     if (path === '/api/v1/auth/me' && method === 'GET') {
-      return json(200, { data: user() })
+      return json(200, { data: user(state.permissions) })
     }
     if (path === '/api/v1/auth/logout' && method === 'POST') {
       return route.fulfill({ status: 204, body: '' })
@@ -343,6 +345,34 @@ async function installMockApi(context, state) {
     if (login && method === 'POST') {
       state.loginCalls += 1
       return json(200, { data: { server_id: state.server.id, url: '', terminal: LOGIN_TERMINAL, output: '' } })
+    }
+
+    const ticket = /^\/api\/v1\/servers\/([^/]+)\/terminal-ticket$/.exec(path)
+    if (ticket && method === 'POST') {
+      state.ticketCalls += 1
+      return json(200, { data: { ticket: 'one-shot-ticket', expires_in: 60 } })
+    }
+
+    const files = /^\/api\/v1\/servers\/([^/]+)\/files$/.exec(path)
+    if (files && method === 'GET') {
+      state.filesCalls += 1
+      const dir = url.searchParams.get('path') || '/'
+      const entries =
+        dir === '/'
+          ? [
+              { name: 'etc', is_dir: true, size: 0, mod_time: Date.now() - 60_000, mode: 'drwxr-xr-x' },
+              { name: 'app.log', is_dir: false, size: 4096, mod_time: Date.now() - 30_000, mode: '-rw-r--r--' },
+            ]
+          : []
+      return json(200, { data: entries })
+    }
+
+    const logs = /^\/api\/v1\/servers\/([^/]+)\/logs$/.exec(path)
+    if (logs && method === 'GET') {
+      state.logsCalls += 1
+      return json(200, {
+        data: { lines: ['2026-11-18T10:00:00 line-one', '2026-11-18T10:00:05 line-two'], truncated: false },
+      })
     }
 
     return json(404, { error: { code: 'not_found', message: `mock api 未覆盖 ${method} ${path}` } })
@@ -397,11 +427,15 @@ async function run() {
 
   const state = {
     server: structuredClone(SERVER),
+    permissions: ALL_PERMISSIONS,
     detailCalls: 0,
     accessCalls: 0,
     panelCalls: 0,
     loginCalls: 0,
     checkCalls: 0,
+    ticketCalls: 0,
+    filesCalls: 0,
+    logsCalls: 0,
     patchBodies: [],
   }
   const context = await browser.newContext({ viewport: { width: 320, height: 800 } })
@@ -423,6 +457,17 @@ async function run() {
       return { overflow: root.scrollWidth - root.clientWidth, width: window.innerWidth }
     })
 
+  /** 320px 下 tab 栏横向滚动：选中的 tab 必须完整落在可视区内。 */
+  const activeTabVisible = () =>
+    page.evaluate(() => {
+      const list = document.querySelector('.ls-tabs')
+      const active = list && list.querySelector('[aria-selected="true"]')
+      if (!list || !active) return false
+      const listRect = list.getBoundingClientRect()
+      const activeRect = active.getBoundingClientRect()
+      return activeRect.left >= listRect.left - 1 && activeRect.right <= listRect.right + 1
+    })
+
   try {
     // 1) 登录 → 详情页（320px 视口）
     await page.goto(`${base}/#/login`, { waitUntil: 'domcontentloaded' })
@@ -435,7 +480,7 @@ async function run() {
     await page.waitForSelector('.ls-detail__title', { timeout: 15000 })
     check('详情页渲染标题', (await page.locator('.ls-detail__title').innerText()).includes('alpha-node'))
     check('详情只拉一次 /servers/{id}', state.detailCalls === 1, `${state.detailCalls} 次`)
-    check('五个 tab 都在', (await page.locator('.ls-tabs__btn').count()) === 5, String(await page.locator('.ls-tabs__btn').count()))
+    check('八个 tab 都在', (await page.locator('.ls-tabs__btn').count()) === 8, String(await page.locator('.ls-tabs__btn').count()))
     await shot(page, '01-overview')
     check('概览 tab 默认选中', (await page.locator('#server-tab-overview').getAttribute('aria-selected')) === 'true')
 
@@ -527,6 +572,65 @@ async function run() {
     const activeTab = await page.evaluate(() => document.activeElement && document.activeElement.id)
     check('ArrowRight 焦点回到 tabs 内', String(activeTab).startsWith('server-tab-'), String(activeTab))
 
+    // 8) 深链：?tab=terminal 直达终端（整页刷新＝用户直接粘贴地址）
+    state.ticketCalls = 0
+    await page.goto(`${base}/#/servers/srv-alpha?tab=terminal`, { waitUntil: 'domcontentloaded' })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('#server-tab-terminal[aria-selected="true"]', { timeout: 15000 })
+    await page.waitForSelector('.ls-srv-term', { timeout: 15000 })
+    await page.waitForTimeout(400)
+    check(
+      '?tab=terminal 直达打开终端 tab',
+      (await page.locator('#server-tab-terminal').getAttribute('aria-selected')) === 'true',
+    )
+    await shot(page, '07-terminal')
+    check('终端 tab 只申请一次 terminal-ticket', state.ticketCalls === 1, `${state.ticketCalls} 次`)
+    check('URL 保留 ?tab=terminal', page.url().includes('?tab=terminal'), page.url().split('#')[1] || '')
+    check('320px 下选中的终端 tab 在可视区', await activeTabVisible())
+    check('320px 终端 tab 无横向滚动', (await noHorizontalScroll()).overflow <= 0)
+
+    // 9) 深链：?tab=files 打开文件 tab
+    state.filesCalls = 0
+    await page.goto(`${base}/#/servers/srv-alpha?tab=files`, { waitUntil: 'domcontentloaded' })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('#server-tab-files[aria-selected="true"]', { timeout: 15000 })
+    await page.waitForSelector('.ls-srv-files__list', { timeout: 15000 })
+    check(
+      '?tab=files 打开文件 tab',
+      (await page.locator('#server-tab-files').getAttribute('aria-selected')) === 'true',
+    )
+    await shot(page, '08-files')
+    check('320px 下选中的文件 tab 在可视区', await activeTabVisible())
+    check('文件 tab 只请求一次 /files', state.filesCalls === 1, `${state.filesCalls} 次`)
+    check('文件面板列出目录与文件', (await page.locator('.ls-srv-files__entry').count()) === 2)
+    check('320px 文件 tab 无横向滚动', (await noHorizontalScroll()).overflow <= 0)
+
+    // 10) 切 tab 写回 URL（replace，不新增历史）
+    state.logsCalls = 0
+    const historyBefore = await page.evaluate(() => history.length)
+    await page.click('#server-tab-logs')
+    await page.waitForSelector('.ls-logs', { timeout: 5000 })
+    await page.waitForFunction(() => location.hash.includes('tab=logs'), null, { timeout: 5000 })
+    check('切到日志 tab 后 URL 同步 ?tab=logs', page.url().includes('?tab=logs'))
+    const historyAfter = await page.evaluate(() => history.length)
+    check('切 tab 用 replace 不新增历史', historyAfter === historyBefore, `${historyBefore} → ${historyAfter}`)
+    check('日志 tab 只请求一次 /logs', state.logsCalls === 1, `${state.logsCalls} 次`)
+    await page.waitForFunction(
+      () => (document.querySelector('.ls-logs__pre')?.textContent || '').includes('line-one'),
+      null,
+      { timeout: 5000 },
+    )
+    check('日志渲染 mock 行', (await page.locator('.ls-logs__pre').innerText()).includes('line-one'))
+    await shot(page, '09-logs')
+    check('自动刷新默认关闭', (await page.locator('.ls-logs__auto input').isChecked()) === false)
+    check('日志行数默认 200', (await page.locator('#server-logs-lines').inputValue()) === '200')
+    check('320px 日志 tab 无横向滚动', (await noHorizontalScroll()).overflow <= 0)
+
+    await page.click('#server-tab-overview')
+    await page.waitForSelector('.ls-card', { timeout: 5000 })
+    await page.waitForFunction(() => !location.hash.includes('tab='), null, { timeout: 5000 })
+    check('切回概览后 URL 去掉 tab 参数', !page.url().includes('tab='))
+
     // 8) 未知服务器 id → 404 提示而不是白屏
     await page.goto(`${base}/#/servers/does-not-exist`, { waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(2000)
@@ -537,6 +641,64 @@ async function run() {
       (await page.locator('.ls-notice').count()) >= 1 && notFoundText.includes('不存在'),
       notFoundText.replace(/\s+/g, ' ').slice(0, 80),
     )
+
+    // 12) 无 terminal.use：三个 tab 可见、只给说明、不发任何请求
+    const limitedState = {
+      server: structuredClone(SERVER),
+      permissions: ['server.read', 'server.write', 'server.update', 'server.edit'],
+      detailCalls: 0,
+      accessCalls: 0,
+      panelCalls: 0,
+      loginCalls: 0,
+      checkCalls: 0,
+      ticketCalls: 0,
+      filesCalls: 0,
+      logsCalls: 0,
+      patchBodies: [],
+    }
+    const limitedContext = await browser.newContext({ viewport: { width: 320, height: 800 } })
+    await installMockApi(limitedContext, limitedState)
+    const limitedPage = await limitedContext.newPage()
+    const limitedErrors = []
+    limitedPage.on('pageerror', (error) => limitedErrors.push(error.message))
+    try {
+      await limitedPage.goto(`${base}/#/login`, { waitUntil: 'domcontentloaded' })
+      await limitedPage.waitForSelector('#login-username', { timeout: 15000 })
+      await limitedPage.fill('#login-username', 'admin')
+      await limitedPage.fill('#login-password', PASSWORD)
+      await limitedPage.click('#login-submit')
+      await limitedPage.waitForSelector('.ls-shell', { timeout: 15000 })
+      await limitedPage.goto(`${base}/#/servers/srv-alpha?tab=terminal`, { waitUntil: 'domcontentloaded' })
+      await limitedPage.waitForSelector('.ls-detail__title', { timeout: 15000 })
+      await limitedPage.waitForSelector('.ls-banner--warning', { timeout: 5000 })
+      check('缺权限时八个 tab 仍可见', (await limitedPage.locator('.ls-tabs__btn').count()) === 8)
+      check(
+        '缺权限时 ?tab=terminal 仍选中终端',
+        (await limitedPage.locator('#server-tab-terminal').getAttribute('aria-selected')) === 'true',
+      )
+      check(
+        '缺权限内容区给「需要终端权限」说明',
+        (await limitedPage.locator('.ls-banner--warning').innerText()).includes('需要终端权限'),
+      )
+      check('缺权限不挂载终端面板', (await limitedPage.locator('.ls-srv-term').count()) === 0)
+      check('缺权限不发 terminal-ticket', limitedState.ticketCalls === 0, `${limitedState.ticketCalls} 次`)
+      check('缺权限不发 /files', limitedState.filesCalls === 0, `${limitedState.filesCalls} 次`)
+      check('缺权限不发 /logs', limitedState.logsCalls === 0, `${limitedState.logsCalls} 次`)
+
+      await limitedPage.click('#server-tab-files')
+      await limitedPage.waitForTimeout(300)
+      check('缺权限切文件 tab 也不发请求', limitedState.filesCalls === 0, `${limitedState.filesCalls} 次`)
+      check(
+        '缺权限文件 tab 同样给说明',
+        (await limitedPage.locator('.ls-banner--warning').innerText()).includes('需要终端权限'),
+      )
+      await limitedPage.click('#server-tab-logs')
+      await limitedPage.waitForTimeout(300)
+      check('缺权限切日志 tab 也不发请求', limitedState.logsCalls === 0, `${limitedState.logsCalls} 次`)
+      check('缺权限页面无未捕获异常', limitedErrors.length === 0, limitedErrors.join(' | ').slice(0, 120))
+    } finally {
+      await limitedContext.close().catch(() => {})
+    }
 
     check('页面无未捕获异常', pageErrors.length === 0, pageErrors.join(' | ').slice(0, 120))
   } catch (error) {
