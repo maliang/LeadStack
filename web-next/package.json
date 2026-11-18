@@ -1,0 +1,31 @@
+{
+  "name": "leadstack-web-next",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "LeadStack 领栈 · Vue 3 + Vite + Vean UI 新版控制台前端",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "typecheck": "vue-tsc -b",
+    "preview": "vite preview",
+    "smoke:login": "node scripts/smoke-login.mjs"
+  },
+  "dependencies": {
+    "@vean/ui": "^0.51.5",
+    "vue": "^3.5.45",
+    "vue-router": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@vitejs/plugin-vue": "^6.0.11",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.8",
+    "vue-tsc": "^3.3.14"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

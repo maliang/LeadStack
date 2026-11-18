@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.vite/
+*.local
+
+# 品牌绿调色板验收截图（scripts/palette-check.mjs 产出）
+.palette-check/
