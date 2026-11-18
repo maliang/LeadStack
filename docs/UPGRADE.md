@@ -102,7 +102,11 @@ agent 是独立二进制，可在控制台里一键升级（见第 5 节），�
 sudo sh deploy/install.sh --version v0.2.0 --server http://<控制端>:8080 --token <令牌>
 ```
 
-`install.sh` 支持 `--version`（默认 `latest`）、`--base-url`（自建镜像源）、`--uninstall`，幂等可重跑。
+`install.sh` 支持 `--version`（默认 `latest`）、`--base-url`（自建镜像源）、`--from-file <本地 leadstack-agent 裸二进制>`（离线）、`--uninstall`，幂等可重跑。
+重跑就是升级：写 `leadstack-agent.new` → 停服务 → `mv` 原子替换 → 起服务，旧二进制留 `leadstack-agent.bak` 作回滚点（启动失败自动换回）；
+**换文件前必须先停服务，换完必须重启**：文件被替换后，仍在运行的旧进程用的还是旧映像，不重启不会生效。
+`Text file busy`（ETXTBSY）只在 Linux 上「原地写运行中的可执行文件」时出现（`cp` 与 open-for-write 都会中招）；
+GNU `install`（`install -m 0755`）先 unlink 再装，Linux 上能成功；macOS 上 `cp` 与 `install` 都成功——**没报错不等于已生效**，别把「装完了」当成「跑的是新版」。
 
 ---
 
@@ -136,11 +140,12 @@ docker cp leadstack:/data/backup.pass ./backup.pass             # 口令单独�
 
 控制端只下发「下载 + 校验 + 替换」的指令，agent 侧用 **A/B 替换**：
 
-1. 下载新版本到**可执行文件同目录**的临时文件；
-2. 校验发布包 sha256；
-3. 把当前可执行文件 `rename` 成 `.old`，把新文件 `rename` 到位（同一文件系统内原子）；
-4. 任一步失败 → **保留旧版本、不断连**，回报失败原因；
-5. 成功后按需重启（systemd/launchd 负责拉起；也可由 agent 自行 exec）。
+1. 下载升级包到**可执行文件同目录**的临时文件；
+2. 校验发布包 sha256（校验的是**下载到的包本体**）；
+3. 按魔数解包：`tar.gz`、`.zip`（Windows）或裸二进制，取其中的 `leadstack-agent`，写到同目录的临时文件；
+4. 把当前可执行文件 `rename` 成 `.old`，把新文件 `rename` 到位（同一文件系统内原子）；
+5. 任一步失败 → **保留旧版本、不断连**，回报失败原因；
+6. 成功后按需重启（systemd/launchd 负责拉起；也可由 agent 自行 exec）。
 
 操作位置：控制台「服务器 → 批量操作 → Agent 升级」（可按当前版本筛选），或单台服务器详情。
 升级记录会写入审计日志（`agent.upgrade`）。

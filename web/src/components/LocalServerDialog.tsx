@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type LocalServerResult } from '../lib/api'
+import { writeClipboard } from '../lib/clipboard'
 import { useNow } from '../lib/hooks'
 import { errorMessage } from '../lib/errors'
 import { formatDuration } from '../lib/format'
@@ -91,13 +92,13 @@ export function LocalServerDialog({ open, onClose, onChanged }: LocalServerDialo
 
   const handleCopy = async () => {
     if (!result) return
-    try {
-      await navigator.clipboard.writeText(result.command)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 2_000)
-    } catch {
+    const ok = await writeClipboard(result.command)
+    if (!ok) {
       toast(t('localServer.copyFailed'), 'error')
+      return
     }
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2_000)
   }
 
   return (

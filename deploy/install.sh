@@ -202,6 +202,17 @@ esac
 if [ -n "$ENV_DIR_OVERRIDE" ]; then ENV_DIR="$ENV_DIR_OVERRIDE"; fi
 ENV_FILE="${ENV_DIR}/agent.env"
 BIN_PATH="${INSTALL_DIR}/${BIN_NAME}"
+# 升级替换二进制必须走「.new → 停服务 → mv 原子替换 → 起服务」：
+# 先停不是为了躲 ETXTBSY —— Linux 上只有原地写（cp/open-for-write）覆盖
+# 正在执行的二进制才 ETXTBSY，GNU install 先 unlink 后新建所以能成功，
+# macOS 两种写法都成功。真正理由是换完文件后运行中的进程仍跑旧映像，
+# 必须重启才生效，所以换前停服务、换后起服务。
+# 旧文件留存为 .bak 作为回滚点，替换失败时原样换回来。
+# 注意：不能复用 .old —— agent 启动时会主动删除 <exe>.old
+# （internal/agent/upgrade.go 的 cleanupOldExecutable），
+# 脚本刚留下的回滚点会在新 agent 启动几秒后被它自己清掉。
+NEW_BIN="${BIN_PATH}.new"
+OLD_BIN="${BIN_PATH}.bak"
 
 # ---------------------------------------------------------------------------
 # 执行封装：dry-run 只打印；sudo 先检测，绝不静默提权
@@ -284,8 +295,10 @@ run_priv() {
 			return 0
 		fi
 		log "以 root 执行：sudo $*"
+		# 必须把真实退出码传出去：调用方靠它决定是否回滚，`return 0` 会把
+		# 失败伪装成成功（升级替换、回滚都需要准确的状态）。
 		sudo "$@"
-		return 0
+		return $?
 	fi
 	run "$@"
 }
@@ -419,13 +432,166 @@ download_tool_stdout() {
 }
 
 # ---------------------------------------------------------------------------
+# 服务生命周期（仅升级替换二进制时使用；单元注册仍由 install_service 负责）
+# ---------------------------------------------------------------------------
+# 是否已注册过服务：首次安装没有单元文件，停 / 起都应当是无操作，
+# 绝不能因为「没有服务可启」把一次干净的首装回滚掉。
+service_registered() {
+	if [ "$NO_SERVICE" -eq 1 ]; then return 1; fi
+	if [ ! -f "$UNIT_PATH" ]; then return 1; fi
+	case "$OS" in
+		linux)  command -v systemctl >/dev/null 2>&1 ;;
+		darwin) command -v launchctl >/dev/null 2>&1 ;;
+		*) return 1 ;;
+	esac
+}
+
+# 等运行中的进程真正释放旧二进制（stop 返回后内核仍可能极短时间持有它）
+wait_binary_idle() {
+	command -v pgrep >/dev/null 2>&1 || return 0
+	_wbi=0
+	while [ "$_wbi" -lt 25 ]; do
+		if ! pgrep -f "$BIN_PATH" >/dev/null 2>&1; then return 0; fi
+		_wbi=$((_wbi + 1))
+		sleep 0.2 2>/dev/null || sleep 1
+	done
+	warn "仍有进程在运行 ${BIN_PATH}，继续用 mv 原子替换（mv 不写原文件句柄，不会 ETXTBSY）"
+	return 0
+}
+
+# 已有服务在跑：先停下来。只有确实停成功才置 SERVICE_STOPPED=1，
+# 回滚时据此只恢复「本来在跑」的服务，不擅自启动运维手动停掉的服务。
+SERVICE_STOPPED=0
+stop_service() {
+	SERVICE_STOPPED=0
+	if ! service_registered; then return 0; fi
+	case "$OS" in
+		linux)
+			log "停止服务 ${SERVICE_NAME}（换完文件后旧进程仍跑旧映像，必须先停再替换）"
+			if run_priv systemctl stop "${SERVICE_NAME}.service"; then
+				SERVICE_STOPPED=1
+				wait_binary_idle
+			else
+				warn "systemctl stop ${SERVICE_NAME} 未成功，继续原子替换（失败则回滚）"
+			fi
+			;;
+		darwin)
+			log "停止 launchd 任务 ${LAUNCHD_LABEL}（替换二进制前先停）"
+			if run_priv launchctl bootout "system/${LAUNCHD_LABEL}" 2>/dev/null; then
+				SERVICE_STOPPED=1
+				wait_binary_idle
+			fi
+			;;
+	esac
+	return 0
+}
+
+# 启动新版本；返回非 0 表示启动失败（调用方据此回滚到旧二进制）
+start_service() {
+	if ! service_registered; then return 0; fi
+	case "$OS" in
+		linux)
+			if run_priv systemctl start "${SERVICE_NAME}.service"; then return 0; fi
+			warn "systemctl start ${SERVICE_NAME} 失败，请查看 systemctl status ${SERVICE_NAME}"
+			return 1
+			;;
+		darwin)
+			if run_priv launchctl bootstrap system "$UNIT_PATH" 2>/dev/null; then return 0; fi
+			if run_priv launchctl load -w "$UNIT_PATH" 2>/dev/null; then return 0; fi
+			warn "launchctl 启动 ${LAUNCHD_LABEL} 失败，请检查 ${UNIT_PATH}"
+			return 1
+			;;
+	esac
+	return 0
+}
+
+# 回滚：把 .bak 原样换回 BIN_PATH，清掉 .new，并恢复替换前的服务运行状态
+rollback_binary() {
+	if [ -f "$OLD_BIN" ]; then
+		if run_priv mv -f "$OLD_BIN" "$BIN_PATH"; then
+			warn "已回滚到替换前的二进制：${BIN_PATH}"
+		else
+			warn "回滚未能自动完成，请手动执行：mv -f ${OLD_BIN} ${BIN_PATH}"
+		fi
+	fi
+	run_priv rm -f "$NEW_BIN" 2>/dev/null || true
+	if [ "$SERVICE_STOPPED" -eq 1 ]; then
+		SERVICE_STOPPED=0
+		start_service || warn "旧版本未能自动重启，请手动启动：systemctl start ${SERVICE_NAME}"
+	fi
+	return 0
+}
+
+# ---------------------------------------------------------------------------
 # 安装二进制
 # ---------------------------------------------------------------------------
+# 落地 <源二进制>：写 .new → 停服务 → mv 原子替换 → 起服务；旧文件留 .bak 作回滚点。
+# 下载与 --from-file 共用这一条路径，任一环失败都回滚且不改动现有安装。
+install_binary_publish() {
+	_pub_src=$1
+	if [ "$DRY_RUN" -eq 1 ]; then
+		printf '  + install -m 0755 %s %s（先落地 .new，不碰现有二进制）\n' "$_pub_src" "$NEW_BIN"
+		stop_service
+		printf '  + mv -f %s %s（旧二进制留作回滚点，回滚命令见安装结束提示）\n' "$BIN_PATH" "$OLD_BIN"
+		printf '  + mv -f %s %s（同目录 rename，原子替换）\n' "$NEW_BIN" "$BIN_PATH"
+		start_service
+		return 0
+	fi
+	[ -f "$_pub_src" ] || die "待安装的二进制不存在：${_pub_src}"
+	[ -s "$_pub_src" ] || die "待安装的二进制为空：${_pub_src}（下载或 $FROM_FILE 可能损坏）"
+
+	if [ ! -d "$INSTALL_DIR" ]; then run_priv mkdir -p "$INSTALL_DIR"; fi
+	# 上次中断可能留下半截 .new，先清掉，避免把旧内容当成新版本
+	if ! run_priv rm -f "$NEW_BIN"; then
+		warn "清理上次残留的 ${NEW_BIN} 失败，将尝试直接覆盖"
+	fi
+
+	log "写入新二进制：${NEW_BIN}"
+	if ! run_priv install -m 0755 "$_pub_src" "$NEW_BIN"; then
+		run_priv rm -f "$NEW_BIN" 2>/dev/null || true
+		die "写入 ${NEW_BIN} 失败，现有安装未改动（${BIN_PATH} 保持原样）"
+	fi
+	if ! run_priv test -s "$NEW_BIN"; then
+		run_priv rm -f "$NEW_BIN" 2>/dev/null || true
+		die "新二进制写入后为空：${NEW_BIN}，现有安装未改动"
+	fi
+
+	stop_service
+
+	_swap=0
+	if [ -e "$BIN_PATH" ] || [ -L "$BIN_PATH" ]; then
+		if ! run_priv mv -f "$BIN_PATH" "$OLD_BIN"; then
+			rollback_binary
+			die "无法把现有二进制移出 ${BIN_PATH}（现有安装未改动）"
+		fi
+		_swap=1
+	fi
+	if ! run_priv mv -f "$NEW_BIN" "$BIN_PATH"; then
+		if [ "$_swap" -eq 1 ]; then
+			rollback_binary
+			die "原子替换 ${BIN_PATH} 失败（已回滚，旧版本仍在 ${BIN_PATH}）"
+		fi
+		run_priv rm -f "$NEW_BIN" 2>/dev/null || true
+		die "原子替换 ${BIN_PATH} 失败（首次安装未完成，未留残缺文件）"
+	fi
+	if [ "$_swap" -eq 1 ]; then
+		log "已原子替换 ${BIN_PATH}（回滚点 ${OLD_BIN}；新版本启动失败会自动换回）"
+	else
+		log "已原子替换 ${BIN_PATH}（首次安装，无旧版本可留存）"
+	fi
+
+	if ! start_service; then
+		rollback_binary
+		die "新版本启动失败，已回滚到替换前的二进制；请检查日志后重试"
+	fi
+	return 0
+}
+
 install_binary() {
 	if [ -n "$FROM_FILE" ]; then
 		[ -f "$FROM_FILE" ] || die "--from-file 指定的文件不存在：$FROM_FILE"
 		log "使用本地二进制：$FROM_FILE"
-		run_priv install -m 0755 "$FROM_FILE" "$BIN_PATH"
+		install_binary_publish "$FROM_FILE"
 		return 0
 	fi
 
@@ -447,7 +613,7 @@ install_binary() {
 		log "[dry-run] 下载 ${_url}"
 		log "[dry-run] 校验 ${BASE_URL}/v${_version_label}/checksums.txt（存在时校验 sha256）"
 		log "[dry-run] 解压 ${_archive} 并取其中的 ${BIN_NAME}"
-		printf '  + install -m 0755 <解压出的 %s> %s\n' "$BIN_NAME" "$BIN_PATH"
+		install_binary_publish "<解压出的 ${BIN_NAME}>"
 		return 0
 	fi
 
@@ -494,7 +660,7 @@ install_binary() {
 	fi
 	[ -n "$_src" ] && [ -f "$_src" ] || die "压缩包内未找到 ${BIN_NAME} 可执行文件"
 
-	run_priv install -m 0755 "$_src" "$BIN_PATH"
+	install_binary_publish "$_src"
 }
 
 # ---------------------------------------------------------------------------
@@ -667,6 +833,11 @@ uninstall_service() {
 		run_priv rm -f "$BIN_PATH"
 		_removed=1
 	fi
+	# 升级残留：.new（半截）与 .bak（回滚点）一并清掉，避免下次安装被误判
+	if [ -f "$NEW_BIN" ] || [ -f "$OLD_BIN" ]; then
+		run_priv rm -f "$NEW_BIN" "$OLD_BIN"
+		_removed=1
+	fi
 	if [ -f "$ENV_FILE" ]; then
 		run_priv rm -f "$ENV_FILE"
 		_removed=1
@@ -792,6 +963,17 @@ do_install() {
 	_total=$(( $(date +%s) - STEP_ALL_T0 ))
 	log "安装完成（总耗时 ${_total}s）。"
 	log "  二进制：${BIN_PATH}"
+	# 回滚点只在做过一次替换（升级）时才存在；给出可直接复制的回滚命令
+	if [ -f "$OLD_BIN" ]; then
+		log "  回滚点：${OLD_BIN}"
+		if [ "$NO_SERVICE" -eq 1 ]; then
+			log "  回滚命令：${SUDO} mv -f ${OLD_BIN} ${BIN_PATH}"
+		elif [ "$OS" = "linux" ]; then
+			log "  回滚命令：${SUDO} mv -f ${OLD_BIN} ${BIN_PATH} && ${SUDO} systemctl restart ${SERVICE_NAME}"
+		else
+			log "  回滚命令：${SUDO} mv -f ${OLD_BIN} ${BIN_PATH} && ${SUDO} launchctl kickstart -k system/${LAUNCHD_LABEL}"
+		fi
+	fi
 	if [ "$NO_SERVICE" -eq 0 ]; then log "  服务单元：${UNIT_PATH}"; fi
 	if [ "$NO_SERVICE" -eq 1 ]; then
 		log "  手动启动：${BIN_PATH} --server ${SERVER} --token <token>${AGENT_EXTRA}"

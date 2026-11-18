@@ -659,13 +659,19 @@ extract_md_sample README.md "$SAMPLE_README"
 extract_md_sample docs/ARCHITECTURE.md "$SAMPLE_DOCS"
 extract_tsx_sample web/src/pages/ServerDetailPage.tsx "$SAMPLE_TSX"
 
+SAMPLE_LINES_README="$(wc -l < "$SAMPLE_README" 2>/dev/null | tr -d ' ')"
+SAMPLE_LINES_DOCS="$(wc -l < "$SAMPLE_DOCS" 2>/dev/null | tr -d ' ')"
 SAMPLE_LINES="$(wc -l < "$SAMPLE_TSX" 2>/dev/null | tr -d ' ')"
-if [ "${SAMPLE_LINES:-0}" -ge 10 ] 2>/dev/null \
+# 三份各自都要 ≥10 行：只校验 tsx 时，两条 md 同时抽取失败会让 cmp 空对空通过，
+# 把「示例被删/围栏改坏」洗成「一致」。
+if [ "${SAMPLE_LINES_README:-0}" -ge 10 ] 2>/dev/null \
+  && [ "${SAMPLE_LINES_DOCS:-0}" -ge 10 ] 2>/dev/null \
+  && [ "${SAMPLE_LINES:-0}" -ge 10 ] 2>/dev/null \
   && cmp -s "$SAMPLE_README" "$SAMPLE_DOCS" && cmp -s "$SAMPLE_DOCS" "$SAMPLE_TSX"; then
-  pass "三处示例一致（README.md / docs/ARCHITECTURE.md / ServerDetailPage.tsx 逐字节相同，${SAMPLE_LINES} 行）"
+  pass "三处示例一致（README ${SAMPLE_LINES_README} 行 / ARCHITECTURE ${SAMPLE_LINES_DOCS} 行 / ServerDetailPage.tsx ${SAMPLE_LINES} 行，逐字节相同）"
 else
   SAMPLE_DIFF="$(diff -u "$SAMPLE_README" "$SAMPLE_DOCS" | sed -n '3,8p'; diff -u "$SAMPLE_DOCS" "$SAMPLE_TSX" | sed -n '3,8p')"
-  fail "三处示例不一致（tsx 抽取 ${SAMPLE_LINES:-0} 行）：$(printf '%s' "$SAMPLE_DIFF" | tr '\n' '|')"
+  fail "三处示例不一致（行数 README=${SAMPLE_LINES_README:-0} / docs=${SAMPLE_LINES_DOCS:-0} / tsx=${SAMPLE_LINES:-0}）：$(printf '%s' "$SAMPLE_DIFF" | tr '\n' '|')"
 fi
 
 # 实测清洗效果：假 bt 14 同时吐颜色控制码与 CRLF，这正是把 0x1b / 0x0d 粘进 URL 的两种字节。
@@ -696,17 +702,25 @@ for pair in "README.md|$SAMPLE_README" "docs/ARCHITECTURE.md|$SAMPLE_DOCS" "Serv
   fi
 done
 
-# 负向对照：把清洗管道整行删掉，同一份假 bt 输出必须让 URL 粘上 0x1b/0x0d——
-# 否则上面的 od 断言没有判别力（改回错误实现也不会变红）。
-MUTANT="$SAMPLE_DIR/mutant-no-clean.sh"
-grep -v -F "tr -d" "$SAMPLE_README" > "$MUTANT"
+# 负向对照：同一行只删 tr 片段（`| tr -d '\r' |` → `|`），保留该行的 sed 清洗与其余管道。
+# 整行删除会把 sed 一起带走、且偏离真实误改；只删 tr 才能把「URL 粘 0x0d」归因到 tr 缺失。
+MUTANT="$SAMPLE_DIR/mutant-no-trd.sh"
+sed -E "s/\\| tr -d '\\\\r' \\|/|/" "$SAMPLE_README" > "$MUTANT"
+# 夹具自检：行数不变 + tr 片段已消失 + 同一行的 sed 仍在，防止 sed 未命中导致夹具=原件或整行丢失。
+MUT_LINES="$(wc -l < "$MUTANT" | tr -d ' ')"
+if [ "$MUT_LINES" -eq "${SAMPLE_LINES_README:-0}" ] 2>/dev/null \
+  && ! grep -q -F "tr -d" "$MUTANT" && grep -q -F "sed -E" "$MUTANT"; then
+  pass "变异夹具：同一行只删 tr 片段（sed 保留，${MUT_LINES} 行）"
+else
+  fail "变异夹具构造失败：行数 ${MUT_LINES}/${SAMPLE_LINES_README:-0}，tr 残留 $(grep -c -F 'tr -d' "$MUTANT") 行，sed 保留 $(grep -c -F 'sed -E' "$MUTANT") 行"
+fi
 MUT_OUT="$(PATH="$FAKE_BIN:$PATH" bash "$MUTANT" 2>/dev/null)"
 MUT_URL="$(printf '%s' "$MUT_OUT" | grep -oE 'https?://[^"]+' | head -n 1)"
 MUT_CTRL="$(ctrl_bytes_of "$MUT_URL")"
-if [ -n "$MUT_CTRL" ]; then
-  pass "负向对照：去掉清洗管道后 URL 粘上 0x${MUT_CTRL}（证明 0x1b/0x0d 断言会变红）"
+if [ "$MUT_CTRL" = "0d" ]; then
+  pass "负向对照：只删 tr 片段后 URL 尾部粘上 0x0d（证明 tr 清洗是这条断言的前提）"
 else
-  fail "负向对照失效：去掉清洗管道后 URL 仍无 0x1b/0x0d，od 断言不具判别力"
+  fail "负向对照失效：只删 tr 片段后 URL 控制字节=${MUT_CTRL:-无}（期望 0d），无法证明 tr 的必要性"
 fi
 
 # ---------------------------------------------------------------- 汇总

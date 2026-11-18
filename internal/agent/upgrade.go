@@ -13,6 +13,10 @@ package agent
 // run_id 使用保留前缀 "agent.upgrade:"，backend 可据此识别并写审计/推送前端。
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -162,7 +166,9 @@ func (a *Agent) notifyUpgrade(ctx context.Context, w *wsConn, runID string, ok b
 	}))
 }
 
-// perform 执行一次升级：校验参数 → 下载到临时文件 → sha256 校验 → A/B 替换。
+// perform 执行一次升级：校验参数 → 下载到临时文件 → sha256 校验 → 解包 → A/B 替换。
+// 升级包可以是 tar.gz（gzip 魔数）、zip（PK 魔数）或裸二进制；sha256 始终校验下载到的
+// 归档本体，解出的 leadstack-agent 再走与裸二进制相同的替换流程。
 // 返回 nil error 表示文件替换成功（可能需要重启才生效）。
 func (u *upgrader) perform(ctx context.Context, currentVersion string, spec protocol.AgentUpgrade) (*upgradeOutcome, error) {
 	// 同一时刻只允许一个升级任务。
@@ -195,42 +201,47 @@ func (u *upgrader) perform(ctx context.Context, currentVersion string, spec prot
 		return nil, err
 	}
 
-	// 临时文件必须与正式文件同目录，保证 rename 是同一文件系统内的原子操作。
-	tmp, err := os.CreateTemp(filepath.Dir(exePath), ".leadstack-agent-new-*")
+	dir := filepath.Dir(exePath)
+	// 升级包先落到与正式文件同目录的临时文件：保证后续 rename 是同一文件系统内的原子操作。
+	pkg, err := os.CreateTemp(dir, ".leadstack-agent-pkg-*")
 	if err != nil {
 		return nil, fmt.Errorf("创建临时文件失败（目录不可写？）: %w", err)
 	}
-	tmpPath := tmp.Name()
-	success := false
-	defer func() {
-		if !success {
-			_ = os.Remove(tmpPath)
-		}
-	}()
+	pkgPath := pkg.Name()
+	// 裸二进制会被 rename 走，归档与失败路径则由这里清理（not exist 忽略）。
+	defer func() { _ = os.Remove(pkgPath) }()
 
-	// 新文件需要可执行权限；Windows 上 chmod 无副作用。
-	if err := tmp.Chmod(0o755); err != nil {
-		_ = tmp.Close()
-		return nil, fmt.Errorf("设置临时文件权限失败: %w", err)
-	}
-
-	if err := u.download(ctx, spec.URL, sha, tmp); err != nil {
-		_ = tmp.Close()
+	if err := u.download(ctx, spec.URL, sha, pkg); err != nil {
+		_ = pkg.Close()
 		return nil, err
 	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
+	if err := pkg.Sync(); err != nil {
+		_ = pkg.Close()
 		return nil, fmt.Errorf("刷新临时文件失败: %w", err)
 	}
-	if err := tmp.Close(); err != nil {
+	if err := pkg.Close(); err != nil {
 		return nil, fmt.Errorf("关闭临时文件失败: %w", err)
 	}
 
-	oldPath, err := replaceExecutable(exePath, tmpPath)
+	// 按魔数识别发布包形态：gzip(tar.gz) / zip / 裸二进制。
+	// 坏归档或缺条目在这里失败，旧版本与运行中的连接都不受影响。
+	binPath, err := extractAgentBinary(pkgPath, dir)
 	if err != nil {
 		return nil, err
 	}
-	success = true
+	if binPath != pkgPath {
+		// 解出的文件被 rename 成正式文件后这里已不存在；失败路径借此清理残骸。
+		defer func() { _ = os.Remove(binPath) }()
+	}
+	// 新文件需要可执行权限；Windows 上 chmod 无副作用。
+	if err := os.Chmod(binPath, 0o755); err != nil {
+		return nil, fmt.Errorf("设置新版本可执行权限失败: %w", err)
+	}
+
+	oldPath, err := replaceExecutable(exePath, binPath)
+	if err != nil {
+		return nil, err
+	}
 	return &upgradeOutcome{ExePath: exePath, OldPath: oldPath}, nil
 }
 
@@ -275,6 +286,145 @@ func (u *upgrader) download(ctx context.Context, rawURL, wantSHA string, dst *os
 		return fmt.Errorf("sha256 校验失败：期望 %s，实际 %s", wantSHA, hex.EncodeToString(got))
 	}
 	return nil
+}
+
+// 归档魔数：gzip 为 1f 8b；zip 以 "PK" 开头（本地文件头/空归档/分卷标记都是 PK 前缀）。
+var (
+	archiveGzipMagic = []byte{0x1f, 0x8b}
+	archiveZipMagic  = []byte("PK")
+)
+
+// errAgentBinaryMissing 表示归档本身可读，但里面没有 agent 可执行文件。
+var errAgentBinaryMissing = errors.New("升级包中未找到 leadstack-agent 可执行文件（已中止）")
+
+// extractAgentBinary 按魔数识别升级包形态，返回可直接交给 A/B 替换的可执行文件路径：
+//   - gzip（.tar.gz）：解压后遍历 tar，取 basename 为 leadstack-agent[/.exe] 的常规文件；
+//   - zip（Windows 发布包）：取同名条目；
+//   - 其它：视为裸二进制，原样返回 pkgPath，保持旧的直传升级方式。
+//
+// 解出的文件写在 dir 下的临时文件里（与正式文件同目录，保证 rename 原子），权限 0755。
+// 坏归档与缺条目都返回可定位的错误，调用方据此保留旧版本、不换文件。
+func extractAgentBinary(pkgPath, dir string) (string, error) {
+	file, err := os.Open(pkgPath)
+	if err != nil {
+		return "", fmt.Errorf("打开升级包失败: %w", err)
+	}
+	head := make([]byte, 4)
+	n, err := io.ReadFull(file, head)
+	_ = file.Close()
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "", fmt.Errorf("读取升级包失败: %w", err)
+	}
+	head = head[:n]
+
+	switch {
+	case bytes.HasPrefix(head, archiveGzipMagic):
+		return extractAgentFromTarGz(pkgPath, dir)
+	case bytes.HasPrefix(head, archiveZipMagic):
+		return extractAgentFromZip(pkgPath, dir)
+	default:
+		return pkgPath, nil
+	}
+}
+
+// extractAgentFromTarGz 从 gzip 压缩的 tar 包中解出 agent 可执行文件。
+func extractAgentFromTarGz(pkgPath, dir string) (string, error) {
+	file, err := os.Open(pkgPath)
+	if err != nil {
+		return "", fmt.Errorf("打开升级包失败: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	gz, err := gzip.NewReader(file)
+	if err != nil {
+		return "", fmt.Errorf("解压升级包失败（gzip 头非法）: %w", err)
+	}
+	defer func() { _ = gz.Close() }()
+
+	reader := tar.NewReader(gz)
+	for {
+		hdr, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return "", errAgentBinaryMissing
+		}
+		if err != nil {
+			return "", fmt.Errorf("遍历升级包失败（tar 已损坏）: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg || !isAgentBinaryName(hdr.Name) {
+			continue
+		}
+		if hdr.Size <= 0 || hdr.Size > upgradeMaxBytes {
+			return "", fmt.Errorf("升级包内 leadstack-agent 大小非法（%d 字节）", hdr.Size)
+		}
+		return writeExtractedAgent(dir, reader, hdr.Size)
+	}
+}
+
+// extractAgentFromZip 从 zip 包中解出 agent 可执行文件。
+func extractAgentFromZip(pkgPath, dir string) (string, error) {
+	zr, err := zip.OpenReader(pkgPath)
+	if err != nil {
+		return "", fmt.Errorf("解压升级包失败（zip 结构非法）: %w", err)
+	}
+	defer func() { _ = zr.Close() }()
+
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() || !isAgentBinaryName(f.Name) {
+			continue
+		}
+		if f.UncompressedSize64 == 0 || f.UncompressedSize64 > uint64(upgradeMaxBytes) {
+			return "", fmt.Errorf("升级包内 leadstack-agent 大小非法（%d 字节）", f.UncompressedSize64)
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return "", fmt.Errorf("解压升级包内 leadstack-agent 失败: %w", err)
+		}
+		path, err := writeExtractedAgent(dir, rc, int64(f.UncompressedSize64))
+		_ = rc.Close()
+		return path, err
+	}
+	return "", errAgentBinaryMissing
+}
+
+// writeExtractedAgent 把归档里的可执行文件写成 dir 下的临时文件（0755），返回其路径。
+func writeExtractedAgent(dir string, r io.Reader, size int64) (string, error) {
+	out, err := os.CreateTemp(dir, ".leadstack-agent-new-*")
+	if err != nil {
+		return "", fmt.Errorf("创建临时文件失败（目录不可写？）: %w", err)
+	}
+	path := out.Name()
+	ok := false
+	defer func() {
+		_ = out.Close()
+		if !ok {
+			_ = os.Remove(path)
+		}
+	}()
+
+	if err := out.Chmod(0o755); err != nil {
+		return "", fmt.Errorf("设置临时文件权限失败: %w", err)
+	}
+	n, err := io.Copy(out, io.LimitReader(r, size))
+	if err != nil {
+		return "", fmt.Errorf("解出 leadstack-agent 失败: %w", err)
+	}
+	if n != size {
+		return "", fmt.Errorf("解出 leadstack-agent 失败：内容不完整（%d/%d 字节）", n, size)
+	}
+	if err := out.Sync(); err != nil {
+		return "", fmt.Errorf("刷新新版本文件失败: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("关闭新版本文件失败: %w", err)
+	}
+	ok = true
+	return path, nil
+}
+
+// isAgentBinaryName 判断归档条目是否为 agent 可执行文件（允许目录前缀与 Windows 的 .exe 后缀）。
+func isAgentBinaryName(name string) bool {
+	base := filepath.Base(name)
+	return base == "leadstack-agent" || base == "leadstack-agent.exe"
 }
 
 // resolveExePath 返回当前可执行文件的真实路径（解析符号链接，替换真实文件）。

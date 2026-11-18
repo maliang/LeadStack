@@ -19,7 +19,7 @@ if printf '%s' "$TMP_CANDIDATE" | LC_ALL=C grep -q '[^ -~]'; then TMP_CANDIDATE=
 BASE_DIR="$(mktemp -d "$TMP_CANDIDATE/leadstack-ops.XXXXXX")"
 DATA_DIR="$BASE_DIR/data"
 UP_DIR="$BASE_DIR/upload"
-LEAD_PID=""; DEVSSH_PID=""; CRON_PID=""
+LEAD_PID=""; DEVSSH_PID=""; CRON_PID=""; AG_PID=""; PKG_PID=""
 PASS=0; FAIL=0
 
 pass() { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
@@ -27,7 +27,7 @@ fail() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
 step() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 cleanup() {
-  for p in "$CRON_PID" "$DEVSSH_PID" "$LEAD_PID"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
+  for p in "$AG_PID" "$PKG_PID" "$CRON_PID" "$DEVSSH_PID" "$LEAD_PID"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
   wait 2>/dev/null
   rm -rf "$BASE_DIR"
 }
@@ -536,6 +536,202 @@ dist_has "错误 toast 常驻/可关闭/可复制（A27）" \
   '!==`error`&&window.setTimeout' 'toast.close' 'toast.copy' 'navigator.clipboard'
 dist_has "错误 toast 无障碍播报与请求编号（A27）" \
   'role:`alert`' 'aria-live' 'assertive' 'errors.requestId' '请求编号 {id}'
+
+# ---------------------------------------------------------------- 17. agent 自升级（真实 tar.gz 包）
+# 覆盖：真实发布包（tar.gz 里是刚构建的 agent 二进制）走下载 → sha256 → 解包 → A/B 替换 → 重启；
+# 坏包（gzip 帧合法但内容不是 tar）必须被拒，且旧版本、运行中的进程与正式文件都不受影响。
+step "17. Agent 自升级：真实 tar.gz 发布包 + 坏包被拒"
+AG_WORK="$BASE_DIR/agent-upgrade"
+AG_NEW_DIR="$AG_WORK/new"
+AG_BIN_DIR="$AG_WORK/bin"
+AG_PKG_DIR="$AG_WORK/pkg"
+mkdir -p "$AG_NEW_DIR" "$AG_BIN_DIR" "$AG_PKG_DIR"
+UP_VER="v9.9.9-e2e"
+BAD_VER="${UP_VER}-bad"
+
+# 17.1 构建带独立版本号的新版 agent，并打成真实 tar.gz
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${UP_VER}" \
+  -o "$AG_NEW_DIR/leadstack-agent" ./cmd/leadstack-agent 2>&1 | head -5
+if [ -x "$AG_NEW_DIR/leadstack-agent" ] && [ "$("$AG_NEW_DIR/leadstack-agent" --version 2>/dev/null | grep -c "$UP_VER")" -ge 1 ]; then
+  pass "构建新版 agent 二进制（--version 回显 ${UP_VER}）"
+else
+  fail "构建新版 agent 失败（无法回显版本 ${UP_VER}）"
+fi
+UP_PKG="leadstack-agent_${UP_VER#v}_e2e.tar.gz"
+tar -czf "$AG_PKG_DIR/$UP_PKG" -C "$AG_NEW_DIR" leadstack-agent
+UP_SHA="$(shasum -a 256 "$AG_PKG_DIR/$UP_PKG" | awk '{print $1}')"
+UP_BIN_SHA="$(shasum -a 256 "$AG_NEW_DIR/leadstack-agent" | awk '{print $1}')"
+if [ -s "$AG_PKG_DIR/$UP_PKG" ] && [ "${#UP_SHA}" = "64" ]; then
+  pass "生成真实 tar.gz 包（$(wc -c < "$AG_PKG_DIR/$UP_PKG" | tr -d ' ') 字节，sha256 已计算）"
+else
+  fail "生成 tar.gz 包失败"
+fi
+
+# 17.2 坏包：gzip 帧合法但解压内容不是 tar → 解包阶段必须失败（不是 sha 失败）
+printf 'not-a-tar-archive: 用于验证坏包被拒\n' > "$AG_WORK/not-tar.bin"
+gzip -c "$AG_WORK/not-tar.bin" > "$AG_PKG_DIR/agent-bad.tar.gz"
+BAD_SHA="$(shasum -a 256 "$AG_PKG_DIR/agent-bad.tar.gz" | awk '{print $1}')"
+[ "${#BAD_SHA}" = "64" ] && pass "生成坏包（gzip 帧合法、内容非 tar，sha256 与文件一致）" || fail "生成坏包失败"
+
+# 17.3 本地发布包 HTTP 服务（真实下载链路，不走 mock 内存）
+PKG_PORT=$((PORT + 61))
+python3 - "$AG_PKG_DIR" "$PKG_PORT" > "$AG_WORK/http.log" 2>&1 <<'PYAGENTPKG' &
+import http.server, socketserver, sys
+root, port = sys.argv[1], int(sys.argv[2])
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=root, **kwargs)
+    def log_message(self, *args):
+        pass
+socketserver.TCPServer.allow_reuse_address = True
+http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+PYAGENTPKG
+PKG_PID=$!
+PKG_URL="http://127.0.0.1:${PKG_PORT}/${UP_PKG}"
+PKG_OK=0
+for _ in $(seq 1 40); do
+  if [ "$(status_of "$PKG_URL")" = "200" ]; then PKG_OK=1; break; fi
+  sleep 0.2
+done
+[ "$PKG_OK" = "1" ] && pass "发布包服务就绪（200，端口 ${PKG_PORT}）" || fail "发布包服务未就绪（端口 ${PKG_PORT}）"
+
+# 17.4 用当前源码构建「旧版本」基线 agent 并接入（不依赖 bin/ 产物：门禁不跑 make build，
+# 仓库里的 bin/leadstack-agent 可能落后于 upgrade.go 的改动，用它测的就不是当前代码）
+OLD_VER="${UP_VER}-old"
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${OLD_VER}" \
+  -o "$AG_BIN_DIR/leadstack-agent" ./cmd/leadstack-agent 2>&1 | head -5
+if [ -x "$AG_BIN_DIR/leadstack-agent" ] && "$AG_BIN_DIR/leadstack-agent" --version 2>/dev/null | grep -q "$OLD_VER"; then
+  pass "构建旧版本基线 agent（--version 回显 ${OLD_VER}）"
+else
+  fail "构建旧版本基线 agent 失败（无法回显版本 ${OLD_VER}）"
+fi
+AG_SRV_ID=""
+ETOKEN_AG="$(api POST /api/v1/enroll-tokens '{"note":"agent-upgrade-e2e","ttl_s":900}' "$TOKEN" | jq -r '.data.token // empty')"
+"$AG_BIN_DIR/leadstack-agent" --server "$BASE" --token "$ETOKEN_AG" > "$AG_WORK/agent.log" 2>&1 &
+AG_PID=$!
+for _ in $(seq 1 80); do
+  AG_SRV_ID="$(api GET /api/v1/servers "" "$TOKEN" \
+    | jq -r '[.data[]? | select((.agent_version // "") != "")][0].id // empty' 2>/dev/null)"
+  [ -n "$AG_SRV_ID" ] && break
+  sleep 0.25
+done
+AG_BEFORE_STATUS="$(api GET "/api/v1/servers/${AG_SRV_ID}" "" "$TOKEN" | jq -r '.data.status // empty' 2>/dev/null)"
+AG_BEFORE_VER="$(api GET "/api/v1/servers/${AG_SRV_ID}" "" "$TOKEN" | jq -r '.data.agent_version // empty' 2>/dev/null)"
+if [ -n "$AG_SRV_ID" ] && [ "$AG_BEFORE_STATUS" = "online" ] && [ "$AG_BEFORE_VER" = "$OLD_VER" ]; then
+  pass "旧版本 agent 已接入并 online（版本 ${AG_BEFORE_VER}）"
+else
+  fail "agent 未在 20s 内以 ${OLD_VER} 接入（server=${AG_SRV_ID:-空} status=${AG_BEFORE_STATUS:-空} version=${AG_BEFORE_VER:-空}）：$(tail -8 "$AG_WORK/agent.log" | tr '\n' ' ')"
+fi
+
+# 升级结果走 job.done 帧，落审计（actor=system，detail 里带 version/success/error）。
+ag_up_audit_has() { # <version> <true|false>
+  api GET '/api/v1/audit-logs?action=agent.upgrade&limit=50' "" "$TOKEN" 2>/dev/null \
+    | jq -e --arg v "$1" --argjson ok "$2" \
+      '[.data.logs[]? | select(.actor == "system") | (.detail // "{}") | fromjson? | select(.version == $v and .success == $ok)] | length > 0' \
+      >/dev/null 2>&1
+}
+ag_up_audit_detail() { # <version> <true|false> → 命中审计的 detail JSON（无匹配时为空）
+  api GET '/api/v1/audit-logs?action=agent.upgrade&limit=50' "" "$TOKEN" 2>/dev/null \
+    | jq -c --arg v "$1" --argjson ok "$2" \
+      '[.data.logs[]? | select(.actor == "system") | (.detail // "{}") | fromjson? | select(.version == $v and .success == $ok)][0] // empty' \
+      2>/dev/null
+}
+ag_up_audit_error() { # <version> → success=false 的 error 文本（无匹配时为空）
+  api GET '/api/v1/audit-logs?action=agent.upgrade&limit=50' "" "$TOKEN" 2>/dev/null \
+    | jq -r --arg v "$1" \
+      '[.data.logs[]? | select(.actor == "system") | (.detail // "{}") | fromjson? | select(.version == $v and .success == false) | (.error // "")][0] // empty' \
+      2>/dev/null
+}
+
+if [ -n "$AG_SRV_ID" ]; then
+  # 17.5 正常升级：真实 tar.gz → 新二进制落盘 → 重启 → 新版本重新握手
+  UP_CODE="$(status_of -X POST -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+    -d "$(jq -n --arg v "$UP_VER" --arg u "$PKG_URL" --arg s "$UP_SHA" \
+       '{version:$v,url:$u,sha256:$s,restart:true}')" \
+    "${BASE}/api/v1/servers/${AG_SRV_ID}/agent-upgrade")"
+  [ "$UP_CODE" = "202" ] && pass "正常升级指令已受理（HTTP 202，目标 ${UP_VER}）" \
+    || fail "正常升级指令被拒（HTTP ${UP_CODE}）"
+
+  AG_UP_OK=0
+  for _ in $(seq 1 80); do
+    if ag_up_audit_has "$UP_VER" true; then AG_UP_OK=1; break; fi
+    sleep 0.25
+  done
+  [ "$AG_UP_OK" = "1" ] && pass "agent 回报升级成功（审计 $(ag_up_audit_detail "$UP_VER" true)）" \
+    || fail "未在 20s 内看到升级成功回报（$(ag_up_audit_error "$UP_VER" | head -c 120)）"
+
+  # 重启后必须由新二进制重新 hello：agent_version 只从 hello 取，能区分「只改了库里的版本号」
+  AG_HELLO=0
+  for _ in $(seq 1 80); do
+    if grep -q "agent_version=${UP_VER}" "$BASE_DIR/lead.log" 2>/dev/null; then AG_HELLO=1; break; fi
+    sleep 0.25
+  done
+  [ "$AG_HELLO" = "1" ] && pass "重启后新进程以 ${UP_VER} 重新握手（证明执行的确实是新二进制）" \
+    || fail "未看到 ${UP_VER} 的 hello 握手（可能未真正重启）"
+
+  NEW_BIN_SHA="$(shasum -a 256 "$AG_BIN_DIR/leadstack-agent" 2>/dev/null | awk '{print $1}')"
+  [ "$NEW_BIN_SHA" = "$UP_BIN_SHA" ] && pass "正式文件已替换为包内新二进制（sha256 一致）" \
+    || fail "正式文件与包内二进制不一致（${NEW_BIN_SHA:-空} != ${UP_BIN_SHA}）"
+  # agent 启动时会清理上次升级遗留的 exe.old：这条日志能证明 A/B 备份确实先被创建过。
+  AG_CLEAN=0
+  for _ in $(seq 1 40); do
+    if grep -q '已清理上次升级遗留的旧版本文件' "$AG_WORK/agent.log" 2>/dev/null; then AG_CLEAN=1; break; fi
+    sleep 0.25
+  done
+  [ "$AG_CLEAN" = "1" ] && pass "重启后的进程确认执行过 A/B 备份清理（exe.old 已生成）" \
+    || fail "agent 日志缺少旧版本备份清理记录（bin=[$(ls -A "$AG_BIN_DIR" 2>/dev/null | tr '\n' ' ')] log=[$(tail -4 "$AG_WORK/agent.log" 2>/dev/null | tr '\n' '|')]）"
+
+  AG_VER_NOW=""
+  for _ in $(seq 1 40); do
+    AG_VER_NOW="$(api GET "/api/v1/servers/${AG_SRV_ID}" "" "$TOKEN" | jq -r '.data.agent_version // empty' 2>/dev/null)"
+    [ "$AG_VER_NOW" = "$UP_VER" ] && break
+    sleep 0.25
+  done
+  AG_ST_NOW="$(api GET "/api/v1/servers/${AG_SRV_ID}" "" "$TOKEN" | jq -r '.data.status // empty' 2>/dev/null)"
+  if [ "$AG_VER_NOW" = "$UP_VER" ] && [ "$AG_ST_NOW" = "online" ]; then
+    pass "升级后服务器记录为 ${UP_VER} 且状态 online"
+  else
+    fail "升级后版本/状态不符（version=${AG_VER_NOW:-空} status=${AG_ST_NOW:-空}）"
+  fi
+
+  # 17.6 坏包：sha256 与文件一致 → 必然卡在解包；旧版本与运行中进程都不能受影响
+  BAD_CODE="$(status_of -X POST -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+    -d "$(jq -n --arg v "$BAD_VER" --arg u "http://127.0.0.1:${PKG_PORT}/agent-bad.tar.gz" --arg s "$BAD_SHA" \
+       '{version:$v,url:$u,sha256:$s,restart:true}')" \
+    "${BASE}/api/v1/servers/${AG_SRV_ID}/agent-upgrade")"
+  [ "$BAD_CODE" = "202" ] && pass "坏包升级指令已受理（HTTP 202，异步由 agent 判定）" \
+    || fail "坏包升级指令分发失败（HTTP ${BAD_CODE}）"
+
+  BAD_ERR=""
+  for _ in $(seq 1 80); do
+    BAD_ERR="$(ag_up_audit_error "$BAD_VER")"
+    [ -n "$BAD_ERR" ] && break
+    sleep 0.25
+  done
+  [ -n "$BAD_ERR" ] && pass "坏包被拒：agent 回报 success=false（${BAD_ERR:0:90}）" \
+    || fail "坏包未被拒绝（20s 内无 success=false 回报）"
+  printf '%s' "$BAD_ERR" | grep -qE '升级包|解压|tar|gzip' \
+    && pass "拒绝原因指向归档解析失败（不是误判成裸二进制）" \
+    || fail "拒绝原因不可定位：${BAD_ERR:0:120}"
+
+  BAD_BIN_SHA="$(shasum -a 256 "$AG_BIN_DIR/leadstack-agent" 2>/dev/null | awk '{print $1}')"
+  if [ "$BAD_BIN_SHA" = "$UP_BIN_SHA" ]; then
+    pass "坏包未替换正式文件（sha256 仍为 ${UP_VER} 二进制）"
+  else
+    fail "坏包污染了正式文件（${BAD_BIN_SHA:-空} != ${UP_BIN_SHA}）"
+  fi
+  AG_LEFTOVER="$(ls -A "$AG_BIN_DIR" 2>/dev/null | grep '^\.leadstack-agent' | head -5 | tr '\n' ' ')"
+  [ -z "$AG_LEFTOVER" ] && pass "坏包被拒后未残留临时升级文件" || fail "残留临时文件：${AG_LEFTOVER}"
+  if grep -q "agent_version=${BAD_VER}" "$BASE_DIR/lead.log" 2>/dev/null; then
+    fail "坏包版本居然完成了握手（不应触发重启）"
+  else
+    pass "坏包未触发重启（日志无 ${BAD_VER} 握手）"
+  fi
+  kill -0 "$AG_PID" 2>/dev/null && pass "坏包被拒后 agent 进程仍存活" || fail "坏包被拒后 agent 进程已退出"
+  AG_FINAL="$(api GET "/api/v1/servers/${AG_SRV_ID}" "" "$TOKEN" | jq -r '(.data.status // "") + "|" + (.data.agent_version // "")' 2>/dev/null)"
+  [ "$AG_FINAL" = "online|${UP_VER}" ] && pass "坏包后服务器仍 online 且版本保持 ${UP_VER}" \
+    || fail "坏包后服务器状态异常（${AG_FINAL:-空}）"
+fi
 
 # ---------------------------------------------------------------- 汇总
 step "验收结果"

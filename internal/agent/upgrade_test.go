@@ -1,6 +1,10 @@
 package agent
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -417,5 +421,160 @@ func TestAgentUpgradeEndToEnd(t *testing.T) {
 	case <-runErr:
 	case <-time.After(10 * time.Second):
 		t.Fatal("context 取消后 agent.Run 未退出")
+	}
+}
+
+// buildTarGz 构造一个只含单个常规文件的 tar.gz 发布包。
+func buildTarGz(t *testing.T, name string, content []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     name,
+		Mode:     0o755,
+		Size:     int64(len(content)),
+		Typeflag: tar.TypeReg,
+	}); err != nil {
+		t.Fatalf("写 tar 头失败: %v", err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatalf("写 tar 内容失败: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("关闭 tar 失败: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("关闭 gzip 失败: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// buildZip 构造一个只含单个条目的 zip 发布包。
+func buildZip(t *testing.T, name string, content []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create(name)
+	if err != nil {
+		t.Fatalf("创建 zip 条目失败: %v", err)
+	}
+	if _, err := w.Write(content); err != nil {
+		t.Fatalf("写 zip 内容失败: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("关闭 zip 失败: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// serveAndUpgrade 启动一个返回 archive 的下载服务，并对 exePath 执行一次升级。
+func serveAndUpgrade(t *testing.T, exePath string, archive []byte) (*upgradeOutcome, error) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(srv.Close)
+	u := newUpgradeTestUpgrader(exePath, srv.Client())
+	return u.perform(context.Background(), "v1", protocol.AgentUpgrade{
+		Version: "v2",
+		URL:     srv.URL,
+		SHA256:  sha256Hex(archive),
+	})
+}
+
+// TestPerformUpgradeFromTarGz 验证 tar.gz 发布包：sha256 校验归档本体后解出 leadstack-agent 替换。
+func TestPerformUpgradeFromTarGz(t *testing.T) {
+	exePath := makeTestExe(t, "OLD-VERSION")
+	newContent := []byte("NEW-AGENT-FROM-TARGZ")
+	archive := buildTarGz(t, "leadstack-agent_v9_linux_amd64/leadstack-agent", newContent)
+
+	out, err := serveAndUpgrade(t, exePath, archive)
+	if err != nil {
+		t.Fatalf("tar.gz 升级失败: %v", err)
+	}
+	if out == nil || out.Skipped {
+		t.Fatalf("outcome 异常: %+v", out)
+	}
+	if got := readFileString(t, exePath); got != string(newContent) {
+		t.Errorf("正式文件内容 = %q，期望解包出的新版本", got)
+	}
+	if got := readFileString(t, exePath+".old"); got != "OLD-VERSION" {
+		t.Errorf("备份内容 = %q，期望旧版本", got)
+	}
+	if info, err := os.Stat(exePath); err != nil || info.Mode().Perm() != 0o755 {
+		t.Errorf("正式文件权限异常: info=%v err=%v", info, err)
+	}
+	if names := dirEntries(t, filepath.Dir(exePath)); len(names) != 2 {
+		t.Errorf("升级后目录应只剩正式文件与 .old，实际: %v", names)
+	}
+}
+
+// TestPerformUpgradeFromZip 验证 zip 发布包（Windows 产物，条目名带 .exe 也能识别）。
+func TestPerformUpgradeFromZip(t *testing.T) {
+	exePath := makeTestExe(t, "OLD-VERSION")
+	newContent := []byte("NEW-AGENT-FROM-ZIP")
+	archive := buildZip(t, "dist/leadstack-agent.exe", newContent)
+
+	if _, err := serveAndUpgrade(t, exePath, archive); err != nil {
+		t.Fatalf("zip 升级失败: %v", err)
+	}
+	if got := readFileString(t, exePath); got != string(newContent) {
+		t.Errorf("正式文件内容 = %q，期望解包出的新版本", got)
+	}
+	if got := readFileString(t, exePath+".old"); got != "OLD-VERSION" {
+		t.Errorf("备份内容 = %q，期望旧版本", got)
+	}
+}
+
+// TestPerformUpgradeBadArchiveKeepsOld 验证坏归档（gzip 头非法 / zip 结构非法 / gzip 流截断）
+// 必须报错、保留旧版本且不产生 .old 或临时文件。
+func TestPerformUpgradeBadArchiveKeepsOld(t *testing.T) {
+	validTarGz := buildTarGz(t, "leadstack-agent", []byte("PAYLOAD"))
+	cases := map[string][]byte{
+		"gzip 头非法":  {0x1f, 0x8b, 0x00, 0x01, 0x02, 0x03},
+		"zip 结构非法":  []byte("PK\x03\x04 not a real zip archive"),
+		"gzip 流被截断": validTarGz[:len(validTarGz)/2],
+	}
+	for name, archive := range cases {
+		t.Run(name, func(t *testing.T) {
+			exePath := makeTestExe(t, "OLD-VERSION")
+			if _, err := serveAndUpgrade(t, exePath, archive); err == nil {
+				t.Fatal("坏归档必须报错")
+			}
+			if got := readFileString(t, exePath); got != "OLD-VERSION" {
+				t.Errorf("坏归档后旧版本被破坏：%q", got)
+			}
+			if _, err := os.Stat(exePath + ".old"); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("坏归档不应产生 .old")
+			}
+			if names := dirEntries(t, filepath.Dir(exePath)); len(names) != 1 {
+				t.Errorf("坏归档后临时文件未清理，目录内容: %v", names)
+			}
+		})
+	}
+}
+
+// TestPerformUpgradeArchiveMissingAgent 验证归档合法但缺少 leadstack-agent 条目：
+// 报错可定位、不换文件，也不会把别的条目当二进制装上。
+func TestPerformUpgradeArchiveMissingAgent(t *testing.T) {
+	cases := map[string][]byte{
+		"tar.gz": buildTarGz(t, "leadstack_v9_linux_amd64/leadstack", []byte("WRONG-BINARY")),
+		"zip":    buildZip(t, "leadstack.exe", []byte("WRONG-BINARY")),
+	}
+	for name, archive := range cases {
+		t.Run(name, func(t *testing.T) {
+			exePath := makeTestExe(t, "OLD-VERSION")
+			_, err := serveAndUpgrade(t, exePath, archive)
+			if err == nil || !strings.Contains(err.Error(), "未找到 leadstack-agent") {
+				t.Fatalf("期望缺少条目的可定位错误，实际: %v", err)
+			}
+			if got := readFileString(t, exePath); got != "OLD-VERSION" {
+				t.Errorf("缺少条目时旧版本被破坏：%q", got)
+			}
+			if names := dirEntries(t, filepath.Dir(exePath)); len(names) != 1 {
+				t.Errorf("缺少条目时临时文件未清理，目录内容: %v", names)
+			}
+		})
 	}
 }

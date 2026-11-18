@@ -793,14 +793,21 @@ func scanScheduledTask(row interface{ Scan(...any) error }) (*ScheduledTask, err
 }
 
 // UpdateServerAgentVersion 更新服务器上记录的 agent 版本。
+//
+// servers 表没有 updated_at 列（时间字段只有 created_at / last_seen_at），
+// 此前顺带写 updated_at 会让整条 UPDATE 报 "no such column"，升级回报静默落库失败。
 func (s *Store) UpdateServerAgentVersion(ctx context.Context, serverID, version string) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE servers SET agent_version = ?, updated_at = ? WHERE id = ?`, version, NowMS(), serverID)
+		`UPDATE servers SET agent_version = ? WHERE id = ?`, version, serverID)
 	if err != nil {
 		return fmt.Errorf("更新服务器 %s 的 agent 版本: %w", serverID, err)
 	}
-	if _, err := res.RowsAffected(); err != nil {
+	affected, err := res.RowsAffected()
+	if err != nil {
 		return fmt.Errorf("更新 agent 版本后读取影响行数: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("更新服务器 %s 的 agent 版本: 服务器不存在", serverID)
 	}
 	return nil
 }

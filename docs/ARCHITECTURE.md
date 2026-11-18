@@ -1351,7 +1351,22 @@ GET /servers/{id}/ports                                            -> {ports:[{p
 ## 44. Agent 自升级
 
 - 协议新增（`pkg/protocol`）：`agent.upgrade` → `{version,url,sha256,restart}`。
-- agent 收到后：下载到临时文件 → 校验 sha256 → **A/B 双文件替换**（当前运行的可执行文件不能原地覆盖）→ 重启（systemd/launchd 负责重启，或自 exec）。
+- 升级包形态（按文件魔数识别，`internal/agent/upgrade.go`）：`tar.gz`（`1f 8b`）、`zip`（`PK`，Windows 发布包）、裸二进制。
+  `sha256` 始终校验**下载到的归档本体**；解包时取 basename 为 `leadstack-agent` / `leadstack-agent.exe` 的常规文件（允许目录前缀），
+  再走与裸二进制相同的替换流程（旧格式直传继续可用）。
+- 包坏就不换文件：gzip 头非法 / tar 损坏 / 缺可执行文件 / 条目大小非法 / 解出字节数不符，都在替换**之前**报错返回，
+  旧版本与在线连接不受影响。
+- agent 收到后：下载到临时文件 → 校验 sha256 → 解包（解出文件写在正式文件同目录的临时文件，保证 rename 原子）→ **A/B 双文件替换**（当前运行的可执行文件不能原地覆盖；旧版本落 `<exe>.old`，下次启动清理，Windows 上要等旧进程退出才能删）→ 重启（systemd/launchd 负责重启，或自 exec）。
+- `deploy/install.sh` 的发布路径（下载与 `--from-file` 共用）：写 `*.new` → 停服务（`systemctl stop` / `launchctl bootout`）→
+  等旧进程释放二进制（`pgrep` 轮询，通常 ≤5s；`sleep 0.2` 不可用的环境退化为每秒一次、最多 25s）→ `mv` 原子替换 → 起服务；
+  旧文件留 `*.bak` 作回滚点（**不能用 `*.old`**：agent 启动会顺手清理 `<exe>.old`，回滚点会被提前删掉），起服务失败自动换回且不擅自启动运维手动停掉的服务。
+  `--uninstall` 时清理残留的 `*.new` 与 `*.bak`。
+  **必须先停服务再换文件**（换完再起，实践结论）：ETXTBSY（`Text file busy`）并不是「覆盖就报」——
+  Linux 上只有**原地写运行中的可执行文件**会中招（`cp` 或任何 open-for-write），GNU `install`（`install -m 0755`）因为先 unlink 再写而成功；
+  macOS 上 `cp` 与 `install` 都成功（BSD `install` 同样是 unlink 后新建，路径 inode 会变）。
+  真正要防的是：**文件换掉了、进程还在跑旧映像**，不重启不生效——停服务换来的是「磁盘上的文件」和「进程里的版本」一致；`--dry-run` 打印这四步但不落盘。
+- 离线 / 镜像：`--base-url`（或 `LEADSTACK_INSTALL_BASE_URL`）改下载前缀；`--from-file`（或 `LEADSTACK_AGENT_BINARY`）用本地裸二进制；
+  控制端脚本装本机 agent 时用 `--agent-from-file`。
 - `POST /servers/{id}/agent-upgrade {version,url,sha256}`、`POST /agents/upgrade`（批量，按当前版本筛选）。
 - 审计 `agent.upgrade`；失败保留旧版本并回报原因。
 

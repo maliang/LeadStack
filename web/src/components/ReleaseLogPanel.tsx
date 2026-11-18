@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type ReleaseLogEntry, type ReleaseRun } from '../lib/api'
+import { writeClipboard } from '../lib/clipboard'
 import { cn } from '../lib/cn'
 import { errorMessage } from '../lib/errors'
 import { formatClockTime } from '../lib/format'
@@ -125,11 +126,7 @@ export function ReleaseLogPanel({
     const text = logs
       .map((entry) => `[${entry.seq}] ${entry.stream === 'stderr' ? '[stderr] ' : ''}${entry.chunk}`)
       .join('')
-    try {
-      await navigator.clipboard.writeText(text)
-    } catch {
-      /* 剪贴板不可用时忽略 */
-    }
+    await writeClipboard(text)
   }
 
   const handleScroll = () => {

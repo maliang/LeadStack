@@ -112,6 +112,53 @@ docker logs leadstack | grep 初始密码     # 首次启动打印，仅一次
 
 `/data` 是持久化卷（数据库、制品、备份、`master.key`），**务必保留**。只绑本机 8080；对外请改 ports 并自加 TLS 反代。
 
+### 方式 4：GitHub 无法访问时（镜像 / 离线安装升级）
+
+安装脚本默认从 `https://github.com/maliang/leadstack/releases/download` 下载，不写 `--version` 时还会请求
+`https://api.github.com/repos/maliang/leadstack/releases/latest` 解析最新版本——两步都依赖 GitHub。走不通时二选一：
+
+**A. 走镜像**：把下载前缀指到镜像的 release 目录，并**显式给版本号**（跳过 GitHub API 解析）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maliang/leadstack/master/deploy/install-control.sh \
+  | sudo sh -s -- --port 9000 --version 0.1.5 \
+      --base-url https://你的镜像站/maliang/leadstack/releases/download
+```
+
+镜像目录须与 GitHub Releases 同构：`v<版本>/leadstack_v<版本>_<os>_<arch>.tar.gz`（Windows 为 `.zip`）与 `v<版本>/checksums.txt`。
+`install-control.sh` 还可用 `LEADSTACK_RELEASE_API=https://你的镜像站/.../releases/latest` 覆盖 latest 解析地址。
+
+**B. 完全离线**：在能联网的机器 `make build` 出 `bin/leadstack`、`bin/leadstack-agent`，拷到目标机后跳过全部下载：
+
+```bash
+# 控制端 + 本机 agent 一起离线装（跳过下载与校验）
+sudo sh deploy/install-control.sh --port 9000 \
+  --from-file ./bin/leadstack --agent-from-file ./bin/leadstack-agent
+
+# 只给已装好的控制端补/换本机 agent（用 agent 安装脚本，参数取控制台「接入服务器」那行）
+sudo sh deploy/install.sh --server http://127.0.0.1:8080 --token <接入令牌> \
+  --from-file ./bin/leadstack-agent
+```
+
+`--from-file` 要的是**裸二进制**（`make build` 产物），不是 `.tar.gz`。更省事的一种：把 release 的
+`leadstack_v<版本>_<os>_<arch>.tar.gz`（或解压出的 `leadstack`）与安装脚本放在同一目录，脚本会自动识别并跳过下载
+（优先级：`--from-file` > 同目录二进制 > 同目录归档 > 下载；本机 agent 同理找同目录的 `leadstack-agent`）。
+环境变量等价写法：`LEADSTACK_INSTALL_BASE_URL`（= `--base-url`）、`LEADSTACK_CONTROL_BINARY`（= `--from-file`）、
+`LEADSTACK_AGENT_BINARY`（agent 脚本的 `--from-file`）、`LEADSTACK_AGENT_BASE_URL`（本机 agent 的镜像前缀）。
+
+**升级也走这两条路**：重复执行安装命令就是升级，但两者换文件的方式不同：
+
+- **agent（`deploy/install.sh`）**：写 `*.new` → 停服务 → `mv` 原子替换 → 起服务，旧文件留 `*.bak` 作回滚点，新版本起不来自动换回（详见[架构契约 §44](docs/ARCHITECTURE.md)）；
+- **控制端（`deploy/install-control.sh`）**：先停服务，再 `install -m 0755` 覆盖并重启；停服务失败会告警后继续。
+  注意 `Text file busy` 不是这里的判定依据：GNU `install` 先 unlink 能换成功（macOS 上 `cp`/`install` 也都成功），
+  但**换完没重启的话进程仍然跑旧映像**，所以「停服务失败还继续」要靠后面的重启兜住——重启也失败就必须手动 `systemctl restart`。
+
+GitHub 不通时用镜像或 `--from-file` 指向新版二进制即可。装完/升完核对：
+
+```bash
+leadstack --version && leadstack-agent --version
+```
+
 ### 装完怎么验证
 
 登录后「服务器 → 接入服务器」，二选一：
@@ -141,7 +188,8 @@ curl -fsSL http://<控制端>:8080/install.sh | sh -s -- \
 | `--trusted-proxies CIDR` | 可信反代列表；配了才采信 `X-Forwarded-For` |
 | `--no-local-agent` | 不自动接入本机 |
 | `--agent-from-file PATH` | 本机 agent 用本地二进制安装（离线） |
-| `--version V` | 安装指定版本（默认 `latest`） |
+| `--version V` | 安装指定版本（默认 `latest`，需联网解析 GitHub API；镜像/离线时显式给） |
+| `--base-url URL` | 发布包下载前缀（默认 `https://github.com/maliang/leadstack/releases/download`，镜像时改这里） |
 | `--from-file PATH` | 用本地二进制安装控制端（离线机器），跳过下载与校验 |
 | `--dry-run` | 只打印将要做什么，不动系统 |
 | `--data-dir DIR` | 数据目录（Linux 默认 `/var/lib/leadstack/data`） |
@@ -524,7 +572,7 @@ leadstack network --show
 
 ## 升级与回滚
 
-发布物在 GitHub Releases（每个 tag 产出 5 平台 × 2 二进制 + `checksums.txt`）。地址与各平台实测结论见
+发布物在 GitHub Releases（每个 tag 产出 5 平台 × 2 二进制 + `checksums.txt`；到不了 GitHub 见「快速开始 → 方式 4」）。地址与各平台实测结论见
 [升级链路验证报告](docs/UPGRADE-VERIFY.md)，完整 runbook 见 [UPGRADE.md](docs/UPGRADE.md)。
 
 **控制台一键升级（推荐）**：新版出现在用户菜单「版本与升级」与设置页，点一下完成
@@ -568,7 +616,12 @@ sudo systemctl start leadstack
 **Docker**：compose 里固定版本号（别用 `latest`），升级 = 改 tag → `docker compose pull && up -d`；
 `/data` 卷不受影响，但升级前把归档与 `backup.pass` 拷出来。
 
-**agent**：「服务器 → 批量操作 → Agent 升级」按版本批量升级；A/B 重命名替换，sha256 不匹配会保留旧版不断连。
+**agent**：「服务器 → 批量操作 → Agent 升级」按版本批量升级；升级包支持 `tar.gz`、`.zip`（Windows）与裸二进制，
+sha256 校验的是**下载到的包本体**，解包取 `leadstack-agent` 后再 A/B 重命名替换；包坏、缺可执行文件、校验不匹配都保留旧版不断连
+（契约见 [架构契约 §44](docs/ARCHITECTURE.md)）。
+
+**GitHub 不通时怎么升级**：控制台一键升级要访问 GitHub Releases。网络到不了 GitHub 时，按「快速开始 → 方式 4」
+用镜像前缀或离线二进制（`--from-file` / `--agent-from-file`）换，命令与装新机完全一致——重复执行安装命令就是升级。
 
 > **发版前必跑 `make verify-upgrade`**（29 项）：在本地 mock GitHub Releases 上真走
 > 「检查更新 → 备份失败中止 → 换二进制 → 新版本崩溃 → watchdog 回退」。它不在 `make test-e2e` 主干闸门里

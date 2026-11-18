@@ -119,6 +119,14 @@ func (a *API) dispatchJobFrame(serverID string, env protocol.Envelope) (jobFrame
 		return jobFrameResult{Handled: false}, errors.New("收到 job 帧但连接尚未绑定服务器")
 	}
 
+	// 升级回报复用 job.log / job.done，但 run_id 是 agent.upgrade:<version> 保留前缀而非真实作业；
+	// 必须先于作业分发截获，否则会被当成未知作业静默丢弃，审计与 servers.agent_version 永远不更新。
+	if env.Type == protocol.TypeJobLog || env.Type == protocol.TypeJobDone {
+		if a.handleUpgradeResultFrame(serverID, env) {
+			return jobFrameResult{Handled: true}, nil
+		}
+	}
+
 	switch env.Type {
 	case protocol.TypeJobAck:
 		var ack protocol.JobAck
