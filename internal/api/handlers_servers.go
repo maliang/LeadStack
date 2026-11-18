@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -34,6 +36,16 @@ const (
 	maxLoginOutputBytes = 64 << 10
 	// loginScriptTimeoutS 是登录脚本在目标机上的执行超时（秒）。
 	loginScriptTimeoutS = 60
+	// maxServerNotesRunes 限制服务器备注长度（迁移 0014）。
+	maxServerNotesRunes = 2000
+	// maxCustomFieldCount 限制自定义字段的键数量，避免把整张表塞进一个 JSON 列。
+	maxCustomFieldCount = 32
+	// maxCustomFieldKeyRunes 限制自定义字段的键长度。
+	maxCustomFieldKeyRunes = 40
+	// maxCustomFieldValueRunes 限制自定义字段的值长度。
+	maxCustomFieldValueRunes = 200
+	// maxCustomFieldsBytes 限制自定义字段序列化后的字节数。
+	maxCustomFieldsBytes = 8 << 10
 )
 
 // serverPayload 是服务器的对外表示，字段与契约第 3/10 节一致。
@@ -67,6 +79,16 @@ type serverPayload struct {
 	LoginScript string `json:"login_script"`
 }
 
+// serverDetailPayload 是 GET /api/v1/servers/{id} 的返回体：在列表字段之外追加服务器档案。
+//
+// notes / custom_fields 只出现在详情接口（列表不返回），避免列表响应被大字段拖慢；
+// 两个字段无 omitempty，详情里即使为空也稳定给出，调用方不必猜形状。
+type serverDetailPayload struct {
+	serverPayload
+	Notes        string          `json:"notes"`
+	CustomFields json.RawMessage `json:"custom_fields"`
+}
+
 // createServerRequest 是新增服务器请求体（纳管 扩展 credential_id/mode/group/tags/host_key_policy）。
 type createServerRequest struct {
 	Name              string    `json:"name"`
@@ -97,6 +119,10 @@ type patchServerRequest struct {
 	PanelCredentialID *string `json:"panel_credential_id"`
 	// LoginScript 设置服务器登录脚本（空串表示清除）。
 	LoginScript *string `json:"login_script"`
+	// Notes 设置运维备注（<=2000 个字符，允许换行；空串表示清除）。
+	Notes *string `json:"notes"`
+	// CustomFields 整包替换自定义字段（键值均为字符串；空对象表示清空）。
+	CustomFields *map[string]string `json:"custom_fields"`
 }
 
 // handleListServers 处理 GET /api/v1/servers，支持 ?group=&tag=&status=&mode= 过滤。
@@ -194,7 +220,12 @@ func (a *API) handleGetServer(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	writeData(w, http.StatusOK, payloads[0])
+	// 详情接口在列表字段之上追加服务器档案（notes / custom_fields）。
+	writeData(w, http.StatusOK, serverDetailPayload{
+		serverPayload: payloads[0],
+		Notes:         srv.Notes,
+		CustomFields:  customFieldsRaw(srv.CustomFieldsJSON),
+	})
 }
 
 // serverAccessPayload 是 GET /api/v1/servers/{id}/access 的返回体。
@@ -478,14 +509,17 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 
 	var req patchServerRequest
 	if err := decodeJSON(w, r, &req); err != nil {
+		// 请求体里可能有 notes 正文或 custom_fields 的值：审计只记「请求体非法」。
+		a.setAuditDetail(r, "server.update", `{"invalid_body":true}`)
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
 		return
 	}
 	if req.Name == nil && req.Tags == nil && req.Group == nil && req.GroupIDs == nil && req.PanelCredentialID == nil &&
 		req.HostKeyPolicy == nil && req.CredentialID == nil &&
-		req.Host == nil && req.Port == nil && req.LoginScript == nil {
+		req.Host == nil && req.Port == nil && req.LoginScript == nil &&
+		req.Notes == nil && req.CustomFields == nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument,
-			"至少需要提供 name/tags/group/host_key_policy/credential_id/host/port/login_script 之一")
+			"至少需要提供 name/tags/group/host_key_policy/credential_id/host/port/login_script/notes/custom_fields 之一")
 		return
 	}
 
@@ -543,6 +577,32 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		loginScript = &script
+	}
+
+	// notes / custom_fields：先校验后落盘，非法输入在写任何库之前拒绝。
+	var notes *string
+	if req.Notes != nil {
+		n := strings.TrimSpace(*req.Notes)
+		if err := validateServerNotes(n); err != nil {
+			// 非法备注不落库，也不把正文写进审计 detail。
+			a.setAuditDetail(r, "server.update", `{"invalid_fields":["notes"]}`)
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		notes = &n
+	}
+	var customFieldsJSON *string
+	var customFieldKeys []string
+	if req.CustomFields != nil {
+		encoded, keys, err := normalizeCustomFields(*req.CustomFields)
+		if err != nil {
+			// 非法自定义字段不落库，也不把值写进审计 detail。
+			a.setAuditDetail(r, "server.update", `{"invalid_fields":["custom_fields"]}`)
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		customFieldsJSON = &encoded
+		customFieldKeys = keys
 	}
 
 	ctx := r.Context()
@@ -610,6 +670,8 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 		Host:              hostPtr,
 		Port:              portPtr,
 		LoginScript:       loginScript,
+		Notes:             notes,
+		CustomFieldsJSON:  customFieldsJSON,
 	})
 	if err != nil {
 		a.writeStoreError(w, r, err)
@@ -625,13 +687,16 @@ func (a *API) handlePatchServer(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	if endpointChanged {
-		detail := fmt.Sprintf(`{"old":{"host":%q,"port":%d},"new":{"host":%q,"port":%d},"host_key_cleared":true}`,
-			oldHost, oldPort, newHost, newPort)
+	// 审计：继续用 server.update，但 detail 只记键名不记值（notes 正文与
+	// custom_fields 的值都不落审计，避免备注/自定义字段里的敏感信息外泄）。
+	if endpointChanged || notes != nil || customFieldsJSON != nil {
+		detail := serverUpdateAuditDetail(endpointChanged, oldHost, oldPort, newHost, newPort, notes != nil, customFieldKeys)
 		a.setAuditDetail(r, "server.update", detail)
-		a.logger.Info("服务器地址已变更，已清除旧主机密钥",
-			"server_id", id, "old", fmt.Sprintf("%s:%d", oldHost, oldPort),
-			"new", fmt.Sprintf("%s:%d", newHost, newPort))
+		if endpointChanged {
+			a.logger.Info("服务器地址已变更，已清除旧主机密钥",
+				"server_id", id, "old", fmt.Sprintf("%s:%d", oldHost, oldPort),
+				"new", fmt.Sprintf("%s:%d", newHost, newPort))
+		}
 	}
 	if !a.applyServerGroups(ctx, w, r, id, req.GroupIDs) {
 		return
@@ -918,6 +983,96 @@ func validateLoginScript(script string) error {
 		return fmt.Errorf("login_script 长度超过 %d 个字符", maxLoginScriptRunes)
 	}
 	return nil
+}
+
+// validateServerNotes 校验服务器备注：<=maxServerNotesRunes 个字符，允许换行/制表符，
+// 禁止其它控制字符（避免把终端控制序列写进库再回显）。
+func validateServerNotes(notes string) error {
+	if notes == "" {
+		return nil
+	}
+	if utf8.RuneCountInString(notes) > maxServerNotesRunes {
+		return fmt.Errorf("notes 长度超过 %d 个字符", maxServerNotesRunes)
+	}
+	for _, r := range notes {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+		case r < 0x20 || r == 0x7f:
+			return errors.New("notes 不能包含控制字符")
+		}
+	}
+	return nil
+}
+
+// normalizeCustomFields 校验并规范化自定义字段，返回落库用的 JSON 文本与排序后的键名。
+//
+// 约束（契约）：<=32 个键、键 1-40 个字符且不含控制字符、值 <=200 个字符、
+// 序列化后 <=8KB。键名排序只为让审计 detail 与落库文本稳定可比。
+func normalizeCustomFields(fields map[string]string) (string, []string, error) {
+	if len(fields) > maxCustomFieldCount {
+		return "", nil, fmt.Errorf("custom_fields 最多 %d 个键", maxCustomFieldCount)
+	}
+	keys := make([]string, 0, len(fields))
+	for k, v := range fields {
+		if strings.TrimSpace(k) == "" {
+			return "", nil, errors.New("custom_fields 的键不能为空")
+		}
+		if utf8.RuneCountInString(k) > maxCustomFieldKeyRunes {
+			return "", nil, fmt.Errorf("custom_fields 的键 %q 长度超过 %d 个字符", k, maxCustomFieldKeyRunes)
+		}
+		for _, r := range k {
+			if unicode.IsControl(r) {
+				return "", nil, fmt.Errorf("custom_fields 的键 %q 不能包含控制字符", k)
+			}
+		}
+		if utf8.RuneCountInString(v) > maxCustomFieldValueRunes {
+			return "", nil, fmt.Errorf("custom_fields 的键 %q 的值长度超过 %d 个字符", k, maxCustomFieldValueRunes)
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return "", nil, fmt.Errorf("序列化 custom_fields: %w", err)
+	}
+	if len(encoded) > maxCustomFieldsBytes {
+		return "", nil, fmt.Errorf("custom_fields 序列化后超过 %d 字节", maxCustomFieldsBytes)
+	}
+	return string(encoded), keys, nil
+}
+
+// customFieldsRaw 把库内的 custom_fields 文本转成响应里的 JSON 对象。
+//
+// 库内只写合法对象（写入路径已校验），这里对历史/手改数据做兜底：非法或为空时回 "{}"，
+// 保证详情接口的 custom_fields 永远是对象而非 null。
+func customFieldsRaw(raw string) json.RawMessage {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || !json.Valid([]byte(trimmed)) || trimmed[0] != '{' {
+		return json.RawMessage("{}")
+	}
+	return json.RawMessage(trimmed)
+}
+
+// serverUpdateAuditDetail 构造 PATCH /servers/{id} 的审计 detail。
+//
+// 只记「哪些字段变了」与自定义字段的键名：notes 正文与 custom_fields 的值一律不落审计。
+func serverUpdateAuditDetail(endpointChanged bool, oldHost string, oldPort int, newHost string, newPort int, notesChanged bool, customFieldKeys []string) string {
+	parts := make([]string, 0, 3)
+	if endpointChanged {
+		parts = append(parts, fmt.Sprintf(`"endpoint":{"old":{"host":%q,"port":%d},"new":{"host":%q,"port":%d},"host_key_cleared":true}`,
+			oldHost, oldPort, newHost, newPort))
+	}
+	if notesChanged {
+		parts = append(parts, `"notes_changed":true`)
+	}
+	if customFieldKeys != nil {
+		encoded, err := json.Marshal(customFieldKeys)
+		if err != nil {
+			encoded = []byte("[]")
+		}
+		parts = append(parts, `"custom_field_keys":`+string(encoded))
+	}
+	return "{" + strings.Join(parts, ",") + "}"
 }
 
 // clampLoginOutput 按字节上限截断输出，并回退到 rune 边界避免产生非法 UTF-8。

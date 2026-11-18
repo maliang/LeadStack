@@ -329,11 +329,12 @@ type HostInfo struct { // 字段与 hostinfo.Info 一一对应，json tag 相同
 | GET | `/servers/{id}/access` | 登录信息 `{server_id,name,host,port,username,password,auth_type}`；**唯一回显 SSH 密码明文的接口**，需 `server.read` + 服务器在范围内，每次读取写审计 `server.access`（见 §67） |
 | GET | `/servers/{id}/panel` | 绑定面板地址 `{server_id,panel_url,auth_type}`；**只回显面板入口 `panel_url`，绝不回显 `api_key`**，需 `server.read` + 服务器在范围内，写审计 `server.panel`（detail 只记 `credential_id`，见 §67.8） |
 | `POST` | `/servers/{id}/login` | 执行该机 `login_script` → `{server_id,url,terminal,output}`；需 `server.write` + 在范围内，写审计 `server.login`（见 §68） |
-| PATCH | `/servers/{id}` | 可带 `login_script`（≤8192 字符、禁 NUL、空串=清空） |
+| PATCH | `/servers/{id}` | 可带 `login_script`（≤8192 字符、禁 NUL、空串=清空）、`notes`（≤2000 字符、禁控制字符、空串=清空）、`custom_fields`（整包替换、`{}`=清空；≤32 键、键≤40 字符、值≤200 字符、序列化≤8KB；非法一律 400 且不写库，见 §69） |
 | GET | `/groups` | 由 servers 聚合出的分组名与数量（纳管 不建独立表） |
 
 **`POST /servers` 扩展字段**：`credential_id`、`mode`（`agent`/`ssh`）、`group`、`tags`、`host_key_policy`、`login_script`。
-**`GET /servers` 扩展**：支持 `?group=&tag=&status=&mode=` 过滤；每项新增 `mode`、`group`、`credential_id`、`last_error`、`host_info`（无则 `null`）。
+**`GET /servers` 扩展**：支持 `?group=&tag=&status=&mode=` 过滤；每项新增 `mode`、`group`、`credential_id`、`last_error`、`host_info`（无则 `null`）。列表**不返回** `notes` / `custom_fields`（理由见 §69.3）。
+**`GET /servers/{id}` 扩展**：在列表字段之上追加服务器档案 `notes`（字符串，默认 `""`）与 `custom_fields`（JSON 对象，默认 `{}`）（见 §69）。
 **agentless 行为**：`mode=ssh` 的服务器由控制端按 `LEADSTACK_SSH_INTERVAL`（默认 30s）采集，连续 3 次失败置 `offline` 并写 `last_error`；成功一次即恢复 `online`。
 
 ## 11. 数据库迁移
@@ -1400,6 +1401,18 @@ POST /servers/import
 4. 所有危险操作（删除/回滚/恢复/重启）使用**确认弹窗 + 影响面描述**。
 5. 空状态必须给出「下一步该做什么」的引导按钮。
 6. 表单错误就近展示，不用全局 toast 代替字段级错误。
+
+### 46.1 品牌绿与 Vean 主题：主色只能走 preset，按钮前景必须是深绿
+
+**结论**：品牌绿 #16a34a（green.600）不是通过 `theme.primary` 传进去的——`@vean/ui` 的 `ConfigProviderThemeOptions.primary` 只接受 26 个内置调色板名（slate / mist / gray / zinc / neutral / stone / taupe / olive / mauve / red / orange / amber / yellow / lime / green / emerald / teal / cyan / sky / blue / indigo / violet / purple / fuchsia / pink / rose），拿不到任意色值。品牌色的唯一入口是 `theme.preset`（`ThemePresetColors`：按 `SemanticToken` 给出 light/dark 两组 `TokenOverride`）。`SConfigProvider` 把 preset 物化成 `overrides` 再交给主题引擎（`presetToOverrides` / `resolveThemeOptions`），所以 preset 能盖住声明式规则，但**不改写调色板本身**；`primary` 仍要选一个内置名（用 `green`）来给 `--primary-50…950` 角色阶与 chart 派生兜底。两者一起用：`primary: 'green'` + `preset: BRAND_PRESET`（`web-next/src/App.vue`）。
+
+- **preset 的值不能写裸 hex**：`ColorValue = HSLColor | OKLCHColor | SimplePaletteKey | TailwindPaletteLevelColorKey`，合法写法是 `green.600` 这种「调色板.阶」、`white` / `black` / `transparent` 这类简单键，或完整的 `hsl(...)` / `oklch(...)`；`#16a34a` 不在类型里（运行时解析器更宽松，但类型层直接拒绝，别依赖）。
+- **`--ls-brand-*` 不是 Vean token**：`web-next/src/styles/main.css` 里的 `--ls-brand-*` 是旧版设计变量的遗留（旧 React 界面仍以 indigo 系类名为主），迁移期两套并存；Vean 侧的权威定义在 `web-next/src/theme/brand.ts`（`BRAND_SCALE` / `BRAND_PRESET`）。写文档只写「品牌绿 #16a34a」，别去 `main.css` 抄当下变量值——它正在被逐批替换。
+- **按钮前景刻意用深绿，不是白字**：浅色模式 `primary` = `green.600` #16a34a、`primary-foreground` = `green.950` #052e16。白字 `#ffffff` 压在 #16a34a 上只有 **3.30:1**，正文 AA 要 4.5:1，不过；深绿 #052e16 是 **4.52:1**，达标。深色模式填充降到 `green.700` #15803d、前景 `gray.50` #f8fafc，**4.87:1**。所以「主按钮改回白字」是回归，不是风格偏好。
+- **`sidebar-primary*` 必须在 preset 里再声明一次**：mirror 规则在 overrides 之前解析，只改 `primary` 的话侧栏品牌色会停在内置 `green.500` 上。
+- **没有 hover 语义 token**：solid 按钮的 hover 是 `bg-primary/80` 叠在页面底色上（600 叠白 ≈ #45b56e），仍在品牌绿阶内；「填充放 600、更亮的 500 留给 hover 与焦点环」就是这个决定，别给按钮单独加 hover 色。
+
+**怎么验**：`node web-next/scripts/palette-check.mjs`（先 `pnpm --dir web-next run build` 出 `dist`；Playwright 无头，退出码 0=全过 / 1=断言失败 / 2=环境缺失，如未装 playwright）。它取主按钮的 computed background 断言落在品牌绿阶（而不是内置 emerald 青绿 #10b981/#059669），并断言按钮文字对比度 ≥ 4.5:1；动主题必须让这条脚本绿。
 
 ## 47. 验收标准（新增 `scripts/verify_ops.sh`）
 
@@ -2866,3 +2879,143 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 curl -s -H "Authorization: Bearer $TOKEN" \
   'http://127.0.0.1:8080/api/v1/audit-logs?action=server.login&limit=5' | jq '.data[0] | {action,detail}'
 ```
+
+## 69. 服务器档案：`notes` 与 `custom_fields` 的契约、校验矩阵与审计
+
+> 目标：给每台机器留一本「人读的档案」——一段自由备注 + 若干结构化键值（用途、机架、负责人、变更单号）。
+> 关键取舍：这是**上下文，不是凭据、也不是可执行内容**，因此与「登录信息卡片」(`GET /servers/{id}/access`)、
+> 「一键登录脚本」(`POST /servers/{id}/login`) 是三条互不相干的通道（区别见 §69.6）。
+
+### 69.1 契约
+
+| 方法 | 路径 | 档案相关行为 |
+|---|---|---|
+| `GET` | `/servers/{id}` | 详情在列表字段之上追加 `notes`（字符串）与 `custom_fields`（JSON 对象）；未填过时为 `""` 与 `{}` |
+| `GET` | `/servers` | **不返回** `notes` / `custom_fields`（理由见 §69.3） |
+| `PATCH` | `/servers/{id}` | 可带 `notes`（只写；空串=清空）与 `custom_fields`（**整包替换**；`{}`=清空），两者互不影响，一次请求可同改 |
+
+行为细节：
+
+- `custom_fields` 是**整包替换**，不是逐键合并：想改一个键必须把其余键一起发回来，只发改动项会把没发的键删掉。
+  （前端一旦提供编辑入口，每次也要提交整张表；脚本调用请先 `GET` 详情再改。）
+- 键值必须都是字符串（Go 侧类型是 `map[string]string`）：值传数字/布尔/嵌套对象会在 JSON 解码阶段直接 400；
+  需要类型信息就写进值里（如 `"cpu": "8"`、`"public": "false"`）。
+- 落库文本按键名**字典序**输出（`encoding/json` 对 map 的默认行为），同内容两次写入的库内文本一致，便于备份 diff 与审计对账；
+  `normalizeCustomFields` 另外把键名排序后交给审计。
+- 读兜底：若库内该列被手工改成非法 JSON 或非对象，详情接口回 `{}` 而不是 500（`customFieldsRaw`），
+  保证响应里的 `custom_fields` 永远是对象、不是 `null`。
+- **PATCH 的成功响应是列表形状**的服务器对象（`serverPayload`），**不含** `notes` / `custom_fields`；
+  要回读档案必须再 `GET /servers/{id}`。写响应不回大字段，与 §69.3 同一取舍。
+- 权限：`GET` 需 `server.read`、`PATCH` 需 `server.write`，且服务器在当前角色的资源范围内（路由层 `inScope`）；
+  范围外一律 404，不泄露存在性（与 §67、§68 同一口径）。
+
+### 69.2 校验矩阵（非法即 400，且先校验后写库）
+
+| 字段 | 约束 | 超限/违规时的错误文案 |
+|---|---|---|
+| `notes` | ≤ 2000 个字符（`utf8.RuneCountInString`）；写入前先 `strings.TrimSpace`（首尾空白被去掉）；允许 `\n` `\r` `\t` | `notes 长度超过 2000 个字符` |
+| `notes` | 禁止其它控制字符（`< 0x20` 或 `0x7f`） | `notes 不能包含控制字符` |
+| `custom_fields` | 键数 ≤ 32 | `custom_fields 最多 32 个键` |
+| `custom_fields` | 键 TrimSpace 后不能为空 | `custom_fields 的键不能为空` |
+| `custom_fields` | 键 ≤ 40 个字符 | `custom_fields 的键 "…" 长度超过 40 个字符` |
+| `custom_fields` | 键禁止控制字符（`unicode.IsControl`） | `custom_fields 的键 "…" 不能包含控制字符` |
+| `custom_fields` | 值 ≤ 200 个字符（**不检查控制字符**，换行可以写进值） | `custom_fields 的键 "…" 的值长度超过 200 个字符` |
+| `custom_fields` | 序列化后 ≤ 8192 字节 | `custom_fields 序列化后超过 8192 字节` |
+
+补充：
+
+- **8KB 算的是落库文本，不是字符数**：`json.Marshal` 默认转义 HTML 字符，`<` `>` `&` 分别变成
+  `\u003c` `\u003e` `\u0026`（各 6 字节），引号与反斜杠也会膨胀。中文按 UTF-8 每字 3 字节。
+- 整个 PATCH **必须至少带一个可改字段**，全空直接 400：
+  `至少需要提供 name/tags/group/host_key_policy/credential_id/host/port/login_script/notes/custom_fields 之一`。
+- 校验失败的请求**不会写库**：`notes` / `custom_fields` 在任何 `UpdateServer` 调用之前返回 400；
+  且一次请求里两个字段分开校验，`custom_fields` 非法时 `notes` 也不会被悄悄写进去。
+
+### 69.3 为什么列表不返回 `notes` / `custom_fields`
+
+- **体积**：列表是「扫一眼状态」的接口，一页可能是上千台。每台最多 2000 字符备注 + 8KB 自定义字段，
+  全量塞进列表会让响应体按台数线性膨胀数十倍，而表格列根本用不到这些文本。
+- **敏感度**：备注里常写内网拓扑、临时处置说明之类的东西；列表响应更容易被截图、导出、进浏览器缓存或网关日志。
+  详情接口至少是「一次一台、有明确意图」的读取。
+- **契约稳定性**：列表字段一旦加上就会被前端/脚本依赖，之后想拿掉是破坏性变更；先只给详情，需要时再按 id 单独取。
+- 需要按档案筛选请**加结构化列/索引**，不要把自由文本当查询条件（§39 的分页约定同样适用于此）；
+  真要做「备注搜索」，应另立端点并明确只搜 `notes`。
+
+### 69.4 审计
+
+- 动作仍是 `server.update`，不新增 `server.meta.update`——避免按动作名过滤的告警规则与导出脚本漏掉档案修改。
+- `detail` **只记「变了什么」与自定义字段的键名，值一律不落库**：
+  `{"notes_changed":true,"custom_field_keys":["env","owner"]}`；同时改地址/端口时附带
+  `endpoint.old/new` 与 `host_key_cleared:true`（见 §49）。
+- 请求体非法：`{"invalid_body":true}`；字段校验失败：`{"invalid_fields":["notes"]}` 或
+  `{"invalid_fields":["custom_fields"]}`——两种情况都**不回显用户提交的内容**，因为备注正文本身可能带敏感信息。
+- 键名是排序后的（`sort.Strings`），所以同一次改动重放时审计 detail 文本稳定可比。
+
+### 69.5 迁移与版本
+
+- `internal/store/migrations/0014_server_meta.sql`：只加两列，老库升级后自动补默认值，**不需要回填脚本**：
+
+```sql
+ALTER TABLE servers ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+ALTER TABLE servers ADD COLUMN custom_fields TEXT NOT NULL DEFAULT '{}';
+```
+
+- schema 版本 13 → 14，两处常量同步（`internal/backup` 用它拒绝「来自更新版本」的备份）：
+  `cmd/leadstack/backup_cmd.go:23` 的 `currentSchemaVersion = 14`、
+  `internal/api/handlers_backup.go:41` 的 `defaultMaxSchemaVersion = 14`。
+  漏改的后果是 schema 14 的备份被自己的 CLI 当成「来自未来版本」而拒绝恢复。
+- 库内只保证「非空 + 列存在」，JSON 合法性由写入路径（PATCH）保证；手工改库写坏的详情回 `{}`（§69.1）。
+
+### 69.6 与「登录信息卡片」「一键登录」的关系
+
+| 能力 | 接口 | 内容性质 | 权限 | 审计 |
+|---|---|---|---|---|
+| 登录信息卡片 | `GET /servers/{id}/access` | **凭据**：SSH 密码明文（见 §67） | `server.read` + 范围内 | `server.access`，只记凭证 id 与认证类型 |
+| 一键登录 | `POST /servers/{id}/login` | **可执行**：目标机上跑脚本，产出 URL/终端命令（见 §68） | `server.write` + 范围内 | `server.login`，只记脚本长度与是否产出 URL |
+| 服务器档案 | `PATCH /servers/{id}` + `GET /servers/{id}` | **上下文**：给人读的备注与键值 | `server.write` / `server.read` + 范围内 | `server.update`，只记键名 |
+
+一句话区分：**档案是给人看的，登录信息是给客户端用的，脚本是给机器执行的。**
+因此：
+
+- **不要把密码、私钥、API Key、一次性口令写进 `notes` / `custom_fields`**：它们随详情回显给所有有
+  `server.read` 的人，且没有任何脱敏；凭据放「凭证」（AES-256-GCM 加密、界面不回显），临时口令走工单/公告。
+- 前端「登录信息」卡片只渲染 `access` 接口的内容，不会把 `notes` 当密码显示，反之亦然；
+  档案存 `servers.notes` / `servers.custom_fields`，不参与「一键登录」的脚本解析（脚本只读 `servers.login_script`）。
+
+### 69.7 复现与验收
+
+```bash
+cd /Users/maliang/Documents/develop/maliang/LeadStack-领栈
+go test -count=1 -run TestServerMeta ./internal/api/     # 读写边界 + 非法输入 + 列表不返回 + 审计 detail
+go build ./... && ls internal/store/migrations/0014_server_meta.sql
+```
+
+手工验证（`<server-id>` 换成一台真实服务器）：
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' -d '{"username":"admin","password":"<password>"}' | jq -r .data.token)
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"notes":"机架 A-03\n负责人：ops-team","custom_fields":{"env":"prod","owner":"ops-team"}}' \
+  http://127.0.0.1:8080/api/v1/servers/<server-id> >/dev/null   # 返回体不含档案，回读走下一步
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8080/api/v1/servers/<server-id> | jq '.data | {notes,custom_fields}'
+# 列表里没有这两项（应为 null）：
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://127.0.0.1:8080/api/v1/servers?limit=1' | jq '.data[0] | {notes,custom_fields}'
+# 审计：server.update，detail 只有键名与 notes_changed
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://127.0.0.1:8080/api/v1/audit-logs?action=server.update&limit=1' | jq '.data[0] | {action,detail}'
+```
+
+### 69.8 前端实现注记（`web/src/pages/ServerDetailPage.tsx`）
+
+档案卡片是 `ServerMetaCard`（`web/src/pages/ServerDetailPage.tsx:974`），渲染在「登录信息」卡（`ServerAccessCard`）之后（同文件 `:1640`）。以下四个易错点已被实现固化，改这块代码时别打破：
+
+1. **保存后必须重读详情**：`PATCH` 的响应是列表形状的服务器对象、不含 `notes` / `custom_fields`，所以 `save()` 在 `updateServer` 成功后紧接着 `await api.server(server.id)`，用详情返回值重置本地 `notes` / `rows`（`web/src/pages/ServerDetailPage.tsx:1046-1051`）。同时把「已提交但重读失败」与「保存失败」分成两条提示（`server.meta.reloadFailed` / `server.meta.saveFailed`），前者不能报成保存失败、诱导用户重复提交。
+2. **轮询/同名对象不重置草稿**：详情页会轮询刷新，`server` 对象引用变化不等于档案内容变化。用 `${server.notes}\u0002${metaFieldsKey(server.custom_fields)}` 拼内容签名 `incomingSignature`：签名未变直接返回；只有签名变化且本地不脏（`dirtyRef.current === false`）时才覆盖 `notes` / `rows`（`web/src/pages/ServerDetailPage.tsx:995-1004`）。否则每次轮询都会把正在编辑的草稿打回旧值。
+3. **外人改动时本地有未保存修改先不覆盖**：同上判断，`dirty` 为真时保留草稿不动（宁可看起来「没更新」，也不吞掉输入）。当前**不弹冲突提示**——W2 随 Vean 重画档案卡时再补「有他人改动，是否放弃本地修改」；现阶段取舍是靠「放弃修改」按钮手动重置。
+4. **无 `server.write` 时只读**：`canWrite` 来自 `can('server.write')`，只读时备注/字段输入框、添加/删除、预设模板全部禁用，保存按钮不可点，卡片底部显示 `server.meta.readOnly`（「只能查看」）。接口侧仍有 `server.write` 校验兜底（§69.1），前端禁用只是体验优化、不是权限边界。
+
+文案键集中在 `web/src/i18n/zh-CN.ts` 与 `web/src/i18n/en-US.ts` 的 `server.meta.*`（标题、备注计数、六个预设名、四类校验错误、保存/重读失败、只读提示）；新增文案两边都要加，缺键会把 key 直接显示在界面上。
+

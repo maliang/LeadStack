@@ -333,6 +333,29 @@ fi
 
 在目标机上可先手工验一步，确认 `grep` 只吐一行地址：`bt 14 | tr -d '\r' | sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g' | grep -oE 'https?://[^ ]+' | head -n 1`。面板版本低于 14 时该子命令不存在，脚本会落到「没有找到面板地址」的提示，而不是静默输出空地址。
 
+**F. 服务器档案（备注与自定义字段）**
+
+服务器档案用来记**这台机器是干什么的**：一段自由备注（`notes`，比如机架位置、负责人、变更单号）+ 若干键值（`custom_fields`，比如 `env=prod`、`owner=ops-team`）。
+
+- **在哪记**：**服务器** 列表 → 点服务器名称进详情页 → 「登录信息」卡片下方的**「服务器档案」**卡片。备注输入框下方实时显示 `当前字数 / 2000` 计数；自定义字段按「字段名 / 字段值」成对编辑，「添加字段」加一行、「删除该字段」删一行；空表下方有六个预设模板（机房、供应商、责任人、到期日、带宽、线路），点一下补一个空值字段，键名随界面语言走，已存在的键不会重复加。没有 `server.write` 权限时整张卡只读（底部提示「只能查看」，保存按钮不可点）。接口等价物：写 `PATCH /api/v1/servers/{id}`（需要 `server.write` 权限且机器在角色范围内）；读 `GET /api/v1/servers/{id}`。**列表接口不返回这两项**——列表是扫状态的，档案只在详情里看。
+- **能记什么**：备注最多 2000 个字符（可换行）；自定义字段最多 32 个键，键 ≤40 个字符（不能有控制字符），值 ≤200 个字符，整包序列化后 ≤8KB。超了接口直接 400 并指出是哪条超了，**不会写进库**。字段是**整包替换**：只提交改动的键会把其它键删掉，改之前先 `GET` 一份。
+- **保存后重新读取**：`PATCH /servers/{id}` 的成功响应是列表形状的服务器对象，**不含** `notes` / `custom_fields`；「保存档案」成功后前端会再 `GET /api/v1/servers/{id}`，以详情返回值回显，绝不拿 PATCH 响应当新值。所以脚本里改完档案也要自己再 `GET` 一次才看得到结果。保存过程中若详情重读失败，提示是「已提交但重新读取失败」而不是「保存失败」——先刷新确认，别重复提交。
+- **和「复制密码」「一键登录」的区别**：档案是**给人看的上下文**，不是凭据也不是脚本。登录信息卡片（`GET /servers/{id}/access`）才是唯一能看密码的地方，每次展开都写审计 `server.access`；一键登录脚本在目标机上执行、产出 URL 或终端命令，写审计 `server.login`；档案修改写审计 `server.update`，明细只记「哪些字段变了 + 自定义字段的键名」，**备注正文和字段值都不进审计**。
+- **别往档案里写密码、私钥、API Key 或一次性口令**：档案随详情回显给所有有 `server.read` 的人，没有任何脱敏。凭据请放「凭证」（AES-256-GCM 加密、界面不回显）。
+- 升级注意：这是迁移 `0014_server_meta.sql`（schema 13 → 14），老库自动补默认值（空串 / `{}`），不需要手工回填；控制端的备份版本常量也同步到 14。详见 [架构契约 §69](docs/ARCHITECTURE.md)。
+
+命令行等价物（`<server-id>` 换成真实 id）：
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' -d '{"username":"admin","password":"<password>"}' | jq -r .data.token)
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"notes":"机架 A-03\n负责人：ops-team","custom_fields":{"env":"prod","owner":"ops-team"}}' \
+  http://127.0.0.1:8080/api/v1/servers/<server-id> >/dev/null   # 返回体不含档案，回读走下一步
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8080/api/v1/servers/<server-id> | jq '.data | {notes,custom_fields}'
+```
+
 ### 4. 建立检测
 
 「检测 → 新建检测项」，五类：

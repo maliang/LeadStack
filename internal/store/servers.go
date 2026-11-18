@@ -12,7 +12,7 @@ import (
 // "group" 是 SQLite 关键字，必须加双引号。
 const serverColumns = `id, name, host, port, mode, tags, status, last_seen_at,
 	agent_version, os, arch, kernel, created_at, credential_id, "group", host_key_policy, last_error,
-	panel_credential_id, login_script`
+	panel_credential_id, login_script, notes, custom_fields`
 
 // CreateServer 插入一台服务器。调用方负责填好 ID/CreatedAt。
 func (s *Store) CreateServer(ctx context.Context, srv *Server) error {
@@ -31,14 +31,18 @@ func (s *Store) CreateServer(ctx context.Context, srv *Server) error {
 	if srv.HostKeyPolicy == "" {
 		srv.HostKeyPolicy = HostKeyPolicyAcceptNew
 	}
+	if srv.CustomFieldsJSON == "" {
+		srv.CustomFieldsJSON = "{}"
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO servers (`+serverColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		srv.ID, srv.Name, srv.Host, srv.Port, srv.Mode, srv.TagsJSON, srv.Status,
 		nullableInt(srv.LastSeenAt), nullableStr(srv.AgentVersion), nullableStr(srv.OS),
 		nullableStr(srv.Arch), nullableStr(srv.Kernel), srv.CreatedAt,
 		nullableStr(srv.CredentialID), nullableStr(srv.Group), srv.HostKeyPolicy,
 		nullableStr(srv.LastError), nullableStr(srv.PanelCredentialID), srv.LoginScript,
+		srv.Notes, srv.CustomFieldsJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("创建服务器 %s: %w", srv.Name, err)
@@ -95,6 +99,10 @@ type ServerUpdate struct {
 	Port *int
 	// LoginScript 是服务器登录脚本；空串表示清除。
 	LoginScript *string
+	// Notes 是运维备注（空串表示清空）。
+	Notes *string
+	// CustomFieldsJSON 是自定义字段的 JSON 对象文本（"{}" 表示清空）。
+	CustomFieldsJSON *string
 }
 
 // UpdateServerFields 按 PATCH 语义更新服务器字段，返回更新后的记录。
@@ -131,6 +139,12 @@ func (s *Store) UpdateServerFields(ctx context.Context, id string, upd ServerUpd
 		}
 		if upd.LoginScript != nil {
 			sets = append(sets, setClause{`login_script = ?`, *upd.LoginScript})
+		}
+		if upd.Notes != nil {
+			sets = append(sets, setClause{`notes = ?`, *upd.Notes})
+		}
+		if upd.CustomFieldsJSON != nil {
+			sets = append(sets, setClause{`custom_fields = ?`, *upd.CustomFieldsJSON})
 		}
 		if len(sets) == 0 {
 			return nil
@@ -387,7 +401,7 @@ func scanServer(row interface{ Scan(...any) error }) (*Server, error) {
 	)
 	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.Mode, &srv.TagsJSON,
 		&srv.Status, &lastSeen, &ver, &osName, &arch, &kernel, &srv.CreatedAt,
-		&credID, &group, &policy, &lastErr, &panelID, &srv.LoginScript)
+		&credID, &group, &policy, &lastErr, &panelID, &srv.LoginScript, &srv.Notes, &srv.CustomFieldsJSON)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询服务器: %w", ErrNotFound)

@@ -37,6 +37,11 @@ type Server struct {
 	// LoginScript 是服务器登录脚本（迁移 0013）；空串表示未配置。
 	// 脚本在目标机上执行，由 POST /servers/{id}/login 触发。
 	LoginScript string `json:"login_script"`
+	// Notes 是运维备注（迁移 0014），空串表示未填写；仅详情接口返回。
+	Notes string `json:"-"`
+	// CustomFieldsJSON 是自定义字段的 JSON 对象文本（迁移 0014），默认 "{}"；
+	// 列表接口不返回，详情报文由 api 层解析成对象后输出。
+	CustomFieldsJSON string `json:"-"`
 }
 
 // 服务器接入模式。

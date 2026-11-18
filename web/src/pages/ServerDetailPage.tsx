@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   METRIC_KEYS,
@@ -12,7 +12,7 @@ import {
   type UpdateAsset,
 } from '../lib/api'
 import { useNow, usePolling } from '../lib/hooks'
-import { errorMessage } from '../lib/errors'
+import { errorInfo, errorMessage } from '../lib/errors'
 import {
   formatBytes,
   formatDateTime,
@@ -37,10 +37,13 @@ import {
   PackageIcon,
   CheckIcon,
   ClockIcon,
+  FileTextIcon,
   InfoIcon,
   LayoutDashboardIcon,
+  PlusIcon,
   RefreshIcon,
   TerminalIcon,
+  TrashIcon,
   WifiIcon,
 } from '../components/Icons'
 import { InlineLoading } from '../components/Loading'
@@ -866,6 +869,362 @@ function ServerAccessCard({ server, onRefreshServer }: ServerAccessCardProps) {
   )
 }
 
+/* ─── 服务器档案：备注 + 自定义字段 KV（W2 才用 Vean 重画，这里先给可用旧界面） ─── */
+
+const META_NOTES_MAX = 2000
+const META_KEY_MAX = 40
+const META_VALUE_MAX = 200
+const META_FIELD_MAX = 32
+
+interface MetaRow {
+  id: number
+  key: string
+  value: string
+}
+
+let nextMetaRowId = 1
+
+function newMetaRow(key: string = '', value: string = ''): MetaRow {
+  nextMetaRowId += 1
+  return { id: nextMetaRowId, key, value }
+}
+
+/** 接口的 custom_fields（对象）→ 可编辑行；键去首尾空白，空表给一行空行，省一次「添加字段」点击。 */
+function metaRowsFromFields(fields: Record<string, string>): MetaRow[] {
+  const rows = Object.entries(fields).map(([key, value]) => newMetaRow(key.trim(), value))
+  return rows.length > 0 ? rows : [newMetaRow()]
+}
+
+/** 可编辑行 → 提交对象：空行丢弃、键去首尾空白，同键后者覆盖前者。 */
+function metaFieldsFromRows(rows: MetaRow[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const row of rows) {
+    const key = row.key.trim()
+    if (key === '') continue
+    out[key] = row.value
+  }
+  return out
+}
+
+/** 与键顺序/首尾空白无关的指纹：轮询带回同内容（新对象）时不重置草稿。 */
+function metaFieldsKey(fields: Record<string, string>): string {
+  return Object.keys(fields)
+    .map((key) => `${key.trim()}\u0000${fields[key]}`)
+    .sort()
+    .join('\u0001')
+}
+
+type MetaIssueCode =
+  | 'notesTooLong'
+  | 'keyTooLong'
+  | 'valueTooLong'
+  | 'duplicateKey'
+  | 'tooManyFields'
+
+interface MetaIssue {
+  code: MetaIssueCode
+  /** 出问题的行下标（非行级问题为 -1）。 */
+  index: number
+}
+
+/** 保存前校验（纯函数，便于单测）：返回第一处问题，null 表示可提交。 */
+function metaValidate(notes: string, rows: MetaRow[]): MetaIssue | null {
+  if ([...notes].length > META_NOTES_MAX) return { code: 'notesTooLong', index: -1 }
+  const filled = rows.filter((row) => row.key.trim() !== '')
+  if (filled.length > META_FIELD_MAX) return { code: 'tooManyFields', index: -1 }
+  const seen = new Set<string>()
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index]
+    const key = row.key.trim()
+    if (key === '') continue
+    if ([...key].length > META_KEY_MAX) return { code: 'keyTooLong', index }
+    if ([...row.value].length > META_VALUE_MAX) return { code: 'valueTooLong', index }
+    if (seen.has(key)) return { code: 'duplicateKey', index }
+    seen.add(key)
+  }
+  return null
+}
+
+/** 预设模板：点一下补一个空值字段，键名随界面语言走。 */
+const META_PRESETS = [
+  'server.meta.preset.datacenter',
+  'server.meta.preset.vendor',
+  'server.meta.preset.owner',
+  'server.meta.preset.expires',
+  'server.meta.preset.bandwidth',
+  'server.meta.preset.line',
+] as const
+
+const META_INPUT_CLASS =
+  'w-full min-w-0 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100'
+
+interface ServerMetaCardProps {
+  server: Server
+  canWrite: boolean
+  onRefreshServer: () => void
+}
+
+/**
+ * 服务器档案卡片（详情页「登录信息」下方）：备注 + 自定义字段 KV。
+ *
+ * 数据源只有 GET /servers/{id}：PATCH 的响应体是列表形状的单体且不含
+ * notes/custom_fields，所以保存成功后必须重新 GET 详情（这里自己拉一次，
+ * 同时让上层 query.refresh() 同步页面其他区块），绝不拿 PATCH 响应当新值。
+ */
+function ServerMetaCard({ server, canWrite, onRefreshServer }: ServerMetaCardProps) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [notes, setNotes] = useState(server.notes)
+  const [rows, setRows] = useState<MetaRow[]>(() => metaRowsFromFields(server.custom_fields))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const serverFieldsKey = metaFieldsKey(server.custom_fields)
+  const incomingSignature = `${server.notes}\u0002${serverFieldsKey}`
+  const draftFields = useMemo(() => metaFieldsFromRows(rows), [rows])
+  const dirty = notes !== server.notes || metaFieldsKey(draftFields) !== serverFieldsKey
+  const issue = metaValidate(notes, rows)
+  const notesCount = [...notes].length
+  const filledCount = Object.keys(draftFields).length
+  const usedKeys = new Set(Object.keys(draftFields))
+
+  const dirtyRef = useRef(dirty)
+  useEffect(() => {
+    dirtyRef.current = dirty
+  }, [dirty])
+  const incomingRef = useRef(incomingSignature)
+
+  // 轮询/他人修改带回新值时才覆盖本地草稿；本地有未保存改动时先不动，避免吞掉正在输入的内容。
+  useEffect(() => {
+    if (incomingRef.current === incomingSignature) return
+    incomingRef.current = incomingSignature
+    if (dirtyRef.current) return
+    setNotes(server.notes)
+    setRows(metaRowsFromFields(server.custom_fields))
+  }, [incomingSignature, server.notes, server.custom_fields])
+
+  const setRow = (id: number, patch: Partial<Pick<MetaRow, 'key' | 'value'>>) => {
+    setRows((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
+  }
+
+  const addRow = () => {
+    setRows((current) => [...current, newMetaRow()])
+  }
+
+  const removeRow = (id: number) => {
+    setRows((current) => current.filter((row) => row.id !== id))
+  }
+
+  const applyPreset = (presetKey: string) => {
+    setRows((current) => {
+      if (current.some((row) => row.key.trim() === presetKey)) return current
+      const blank = current.findIndex((row) => row.key.trim() === '' && row.value.trim() === '')
+      if (blank >= 0) {
+        return current.map((row, index) => (index === blank ? { ...row, key: presetKey } : row))
+      }
+      return [...current, newMetaRow(presetKey)]
+    })
+  }
+
+  const reset = () => {
+    setNotes(server.notes)
+    setRows(metaRowsFromFields(server.custom_fields))
+    setError(null)
+  }
+
+  const save = async () => {
+    if (!canWrite || saving) return
+    if (issue) {
+      setError(t(`server.meta.error.${issue.code}`))
+      return
+    }
+    setSaving(true)
+    setError(null)
+    // PATCH 成功但随后的详情重读失败时，不能报「保存失败」——分开计数。
+    let patched = false
+    try {
+      await api.updateServer(server.id, { notes, custom_fields: metaFieldsFromRows(rows) })
+      patched = true
+      // PATCH 响应不含 notes/custom_fields：必须重新读详情，落库结果以详情接口为准。
+      const fresh = await api.server(server.id)
+      setNotes(fresh.notes)
+      setRows(metaRowsFromFields(fresh.custom_fields))
+      setError(null)
+      toast(t('server.meta.saved'), 'success')
+      onRefreshServer()
+    } catch (caught) {
+      const fallback = patched ? t('server.meta.reloadFailed') : t('server.meta.saveFailed')
+      const info = errorInfo(caught, fallback)
+      setError(info.message)
+      toast(errorMessage(caught, fallback), 'error', { requestId: info.requestId })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const presets = META_PRESETS.map((key) => ({ key, label: t(key) }))
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-slate-100">
+          <FileTextIcon className="h-4 w-4 text-slate-400 dark:text-slate-500" />
+          {t('server.meta.title')}
+        </h2>
+        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+          {t('server.meta.hint')}
+        </span>
+      </div>
+
+      <div className="mt-3">
+        <label
+          htmlFor="server-meta-notes"
+          className="text-xs font-medium text-slate-600 dark:text-slate-300"
+        >
+          {t('server.meta.notesLabel')}
+        </label>
+        <textarea
+          id="server-meta-notes"
+          value={notes}
+          rows={5}
+          disabled={!canWrite || saving}
+          placeholder={t('server.meta.notesPlaceholder')}
+          onChange={(event) => setNotes(event.target.value)}
+          aria-describedby="server-meta-notes-count"
+          className={cn(
+            META_INPUT_CLASS,
+            'mt-1 resize-y leading-relaxed disabled:cursor-not-allowed disabled:opacity-60',
+            notesCount > META_NOTES_MAX && 'border-rose-400 focus:border-rose-500 focus:ring-rose-500/20',
+          )}
+        />
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+          <span
+            id="server-meta-notes-count"
+            className={cn(
+              'tabular-nums',
+              notesCount > META_NOTES_MAX
+                ? 'font-medium text-rose-600 dark:text-rose-400'
+                : 'text-slate-500 dark:text-slate-400',
+            )}
+          >
+            {notesCount} / {META_NOTES_MAX}
+          </span>
+          <span className="text-slate-500 dark:text-slate-400">{t('server.meta.notesHint')}</span>
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+          {t('server.meta.fieldsLabel')}
+        </span>
+        <span className="tabular-nums text-[11px] text-slate-500 dark:text-slate-400">
+          {filledCount} / {META_FIELD_MAX}
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+          {t('server.meta.fieldsEmpty')}
+        </p>
+      ) : (
+        <ul className="mt-2 space-y-2">
+          {rows.map((row, index) => (
+            <li key={row.id} className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
+              <input
+                value={row.key}
+                maxLength={META_KEY_MAX}
+                disabled={!canWrite || saving}
+                placeholder={t('server.meta.keyPlaceholder')}
+                aria-label={`${t('server.meta.fieldKey')} ${index + 1}`}
+                onChange={(event) => setRow(row.id, { key: event.target.value })}
+                className={cn(META_INPUT_CLASS, 'sm:w-44 sm:shrink-0')}
+              />
+              <input
+                value={row.value}
+                maxLength={META_VALUE_MAX}
+                disabled={!canWrite || saving}
+                placeholder={t('server.meta.valuePlaceholder')}
+                aria-label={`${t('server.meta.fieldValue')} ${index + 1}`}
+                onChange={(event) => setRow(row.id, { value: event.target.value })}
+                className={cn(META_INPUT_CLASS, 'sm:flex-1')}
+              />
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 w-8 shrink-0 p-0"
+                disabled={!canWrite || saving}
+                aria-label={t('server.meta.removeField')}
+                title={t('server.meta.removeField')}
+                icon={<TrashIcon className="h-4 w-4" />}
+                onClick={() => removeRow(row.id)}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={!canWrite || saving || filledCount >= META_FIELD_MAX}
+          icon={<PlusIcon className="h-4 w-4" />}
+          onClick={addRow}
+        >
+          {t('server.meta.addField')}
+        </Button>
+        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+          {t('server.meta.presetsLabel')}
+        </span>
+        {presets.map(({ key, label }) => (
+          <Button
+            key={key}
+            size="sm"
+            variant="ghost"
+            disabled={!canWrite || saving || usedKeys.has(label)}
+            onClick={() => applyPreset(label)}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+
+      {issue ? (
+        <p className="mt-2 text-[11px] text-rose-600 dark:text-rose-400">
+          {t(`server.meta.error.${issue.code}`)}
+        </p>
+      ) : null}
+
+      {error ? (
+        <p className="mt-3 break-all rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
+          {error}
+        </p>
+      ) : null}
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+          {canWrite ? t('server.meta.saveHint') : t('server.meta.readOnly')}
+        </p>
+        <div className="flex items-center gap-2">
+          {dirty ? (
+            <Button size="sm" variant="ghost" disabled={saving} onClick={reset}>
+              {t('server.meta.reset')}
+            </Button>
+          ) : null}
+          <Button
+            size="sm"
+            disabled={!canWrite || !dirty || issue !== null}
+            loading={saving}
+            onClick={() => void save()}
+          >
+            {saving ? t('server.meta.saving') : t('server.meta.save')}
+          </Button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 export default function ServerDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { toast } = useToast()
@@ -1277,6 +1636,12 @@ export default function ServerDetailPage() {
       </div>
 
       <ServerAccessCard server={server} onRefreshServer={() => void query.refresh()} />
+
+      <ServerMetaCard
+        server={server}
+        canWrite={can('server.write')}
+        onRefreshServer={() => void query.refresh()}
+      />
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-2">

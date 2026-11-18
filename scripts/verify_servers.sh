@@ -723,6 +723,119 @@ else
   fail "负向对照失效：只删 tr 片段后 URL 控制字节=${MUT_CTRL:-无}（期望 0d），无法证明 tr 的必要性"
 fi
 
+# ---------------------------------------------------------------- 18. 服务器档案
+step "18. 服务器档案（notes / custom_fields）"
+# 档案只出现在详情接口：PATCH 保存后详情逐字回读、列表不得出现这两个字段；
+# 备注/自定义字段的边界一律 400 且不落库；组范围角色改组外服务器 404（同 token 组内 200 对照）；
+# 审计继续记 server.update，但 detail 只记键名，不把备注正文与字段值写进去。
+META_SRV="$(api POST /api/v1/servers "$(jq -n --arg host "127.0.0.1" --argjson port "$SSH_PORT" \
+  '{name:"verify-meta-srv",host:$host,port:$port,mode:"ssh"}')" "$TOKEN")"
+META_SRV_ID="$(jget "$META_SRV" '.data.id')"
+[ -n "$META_SRV_ID" ] && pass "创建档案验收用服务器" || fail "创建档案验收服务器失败：$META_SRV"
+
+META_NOTES="$(printf '机架 A-03\n管理员：root\nU 位：12-14')"
+META_FIELDS='{"env":"prod","owner":"ops-team","rack":"A-03"}'
+META_BODY="$(jq -n --arg n "$META_NOTES" --argjson f "$META_FIELDS" '{notes:$n,custom_fields:$f}')"
+META_PATCH="$(api PATCH "/api/v1/servers/${META_SRV_ID}" "$META_BODY" "$TOKEN")"
+META_PATCH_CODE="$(status_of -X PATCH -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+  --data-binary "$META_BODY" "${BASE}/api/v1/servers/${META_SRV_ID}")"
+[ "$META_PATCH_CODE" = "200" ] && pass "PATCH 保存 notes/custom_fields 返回 200" \
+  || fail "PATCH 服务器档案返回 ${META_PATCH_CODE}：$META_PATCH"
+
+META_DETAIL="$(api GET "/api/v1/servers/${META_SRV_ID}" "" "$TOKEN")"
+META_GOT_NOTES="$(printf '%s' "$META_DETAIL" | jq -r '.data.notes // empty' 2>/dev/null)"
+[ "$META_GOT_NOTES" = "$META_NOTES" ] && pass "详情 notes 与写入逐字一致（多行 ${#META_NOTES} 字节）" \
+  || fail "详情 notes 不一致：期望 '${META_NOTES}'，实际 '${META_GOT_NOTES}'"
+META_GOT_FIELDS="$(printf '%s' "$META_DETAIL" | jq -Sc '.data.custom_fields' 2>/dev/null)"
+META_WANT_FIELDS="$(printf '%s' "$META_FIELDS" | jq -Sc '.')"
+[ -n "$META_GOT_FIELDS" ] && [ "$META_GOT_FIELDS" = "$META_WANT_FIELDS" ] \
+  && pass "详情 custom_fields 与写入一致（键排序后逐字相等）" \
+  || fail "详情 custom_fields 不一致：期望 ${META_WANT_FIELDS}，实际 ${META_GOT_FIELDS}"
+
+META_LIST="$(api GET /api/v1/servers "" "$TOKEN")"
+META_LIST_HAS="$(printf '%s' "$META_LIST" | jq -r '[.data[] | (has("notes") or has("custom_fields"))] | any' 2>/dev/null)"
+[ "$META_LIST_HAS" = "false" ] && pass "GET /servers 列表不含 notes/custom_fields 字段" \
+  || fail "GET /servers 列表出现了档案字段（jq=${META_LIST_HAS:-解析失败}）"
+
+# 逐条负向：每条都必须是 400（不是 500/422），否则说明校验在写库路径里才失败。
+meta_bad() { # <label> <json-body>
+  local label="$1" body="$2" code
+  code="$(status_of -X PATCH -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+    --data-binary "$body" "${BASE}/api/v1/servers/${META_SRV_ID}")"
+  [ "$code" = "400" ] && pass "${label} → 400" || fail "${label} 返回 ${code}，期望 400"
+}
+meta_bad "notes 2001 rune（上限 2000）" \
+  "$(jq -n --arg n "$(printf 'x%.0s' {1..2001})" '{notes:$n}')"
+meta_bad "custom_fields 传数组（类型错误）" '{"custom_fields":["a","b"]}'
+meta_bad "custom_fields 33 个键（上限 32）" \
+  "$(jq -n 'reduce range(33) as $i ({}; .["k\($i)"]="v") | {custom_fields: .}')"
+meta_bad "custom_fields 键含控制字符" \
+  "$(jq -n '{custom_fields:{"bad\u0001key":"v"}}')"
+meta_bad "custom_fields 值 201 rune（上限 200）" \
+  "$(jq -n --arg v "$(printf 'v%.0s' {1..201})" '{custom_fields:{k:$v}}')"
+
+META_STILL="$(api GET "/api/v1/servers/${META_SRV_ID}" "" "$TOKEN")"
+META_STILL_NOTES="$(printf '%s' "$META_STILL" | jq -r '.data.notes // empty' 2>/dev/null)"
+META_STILL_FIELDS="$(printf '%s' "$META_STILL" | jq -Sc '.data.custom_fields' 2>/dev/null)"
+if [ "$META_STILL_NOTES" = "$META_NOTES" ] && [ "$META_STILL_FIELDS" = "$META_WANT_FIELDS" ]; then
+  pass "非法 PATCH 未落库（notes/custom_fields 仍是上一次合法值）"
+else
+  fail "非法 PATCH 改写了库内档案：notes='${META_STILL_NOTES}' custom_fields=${META_STILL_FIELDS}"
+fi
+
+META_GRP="$(api POST /api/v1/server-groups '{"name":"verify-meta-scope"}' "$TOKEN")"
+META_GRP_ID="$(jget "$META_GRP" '.data.id')"
+META_OUT="$(api POST /api/v1/servers "$(jq -n --arg host "127.0.0.1" --argjson port "$SSH_PORT" \
+  '{name:"verify-meta-out",host:$host,port:$port,mode:"ssh"}')" "$TOKEN")"
+META_OUT_ID="$(jget "$META_OUT" '.data.id')"
+META_ROLE_KEY=""; META_VIEW_TOKEN=""; META_ROLE=""; META_LOGIN=""
+if [ -n "$META_GRP_ID" ] && [ -n "$META_OUT_ID" ]; then
+  api PUT "/api/v1/server-groups/${META_GRP_ID}/servers" \
+    "$(jq -n --arg s "$META_SRV_ID" '{server_ids:[$s]}')" "$TOKEN" >/dev/null
+  META_ROLE="$(api POST /api/v1/roles "$(jq -n --arg g "$META_GRP_ID" \
+    '{name:"verify-meta-writer",permissions:["server.write"],scope:{mode:"groups",group_ids:[$g],server_ids:[]}}')" "$TOKEN")"
+  META_ROLE_KEY="$(jget "$META_ROLE" '.data.key')"
+fi
+META_VIEW_PW="QaMeta-Pw-2026"
+if [ -n "$META_ROLE_KEY" ]; then
+  api POST /api/v1/users "$(jq -n --arg r "$META_ROLE_KEY" --arg pw "$META_VIEW_PW" \
+    '{username:"verify-meta-writer",role:$r,password:$pw}')" "$TOKEN" >/dev/null
+  META_LOGIN="$(api POST /api/v1/auth/login "$(jq -n --arg pw "$META_VIEW_PW" \
+    '{username:"verify-meta-writer",password:$pw}')")"
+  META_VIEW_TOKEN="$(jget "$META_LOGIN" '.data.token')"
+fi
+if [ -n "$META_VIEW_TOKEN" ]; then
+  META_IN_CODE="$(status_of -X PATCH -H "Authorization: Bearer ${META_VIEW_TOKEN}" -H 'Content-Type: application/json' \
+    --data-binary "$(jq -n '{notes:"组内写入"}')" "${BASE}/api/v1/servers/${META_SRV_ID}")"
+  META_OUT_CODE="$(status_of -X PATCH -H "Authorization: Bearer ${META_VIEW_TOKEN}" -H 'Content-Type: application/json' \
+    --data-binary "$(jq -n '{notes:"组外写入"}')" "${BASE}/api/v1/servers/${META_OUT_ID}")"
+  [ "$META_IN_CODE" = "200" ] && pass "组范围角色 PATCH 组内服务器 200（正向对照）" \
+    || fail "组内服务器 PATCH 返回 ${META_IN_CODE}，期望 200（否则 404 断言失去意义）"
+  [ "$META_OUT_CODE" = "404" ] && pass "组范围角色 PATCH 组外服务器 404（不泄露存在性）" \
+    || fail "组外服务器 PATCH 返回 ${META_OUT_CODE}，期望 404"
+else
+  fail "创建组范围角色/用户并登录失败：group=${META_GRP} role=${META_ROLE_KEY:-空} login=${META_LOGIN:-空}"
+fi
+
+META_AUDIT="$(api GET "/api/v1/audit-logs?action=server.update" "" "$TOKEN")"
+META_AUDIT_N="$(printf '%s' "$META_AUDIT" | jq -r --arg id "$META_SRV_ID" \
+  '[.data[] | select(.action=="server.update" and .resource_id==$id)] | length' 2>/dev/null)"
+[ "${META_AUDIT_N:-0}" -ge 1 ] 2>/dev/null \
+  && pass "GET /audit-logs 含有 server.update 记录（${META_AUDIT_N} 条）" \
+  || fail "审计缺少 server.update：$META_AUDIT"
+META_AUDIT_LEAK="$(printf '%s' "$META_AUDIT" | jq -r --arg id "$META_SRV_ID" --arg n "$META_NOTES" \
+  '[.data[] | select(.action=="server.update" and .resource_id==$id) | ((.detail // "") | contains($n))] | any' 2>/dev/null)"
+[ "$META_AUDIT_LEAK" = "false" ] && pass "server.update 审计 detail 不含备注正文" \
+  || fail "server.update 审计 detail 泄露了备注正文（jq=${META_AUDIT_LEAK:-解析失败}）"
+META_AUDIT_VALUE="$(printf '%s' "$META_AUDIT" | jq -r --arg id "$META_SRV_ID" \
+  '[.data[] | select(.action=="server.update" and .resource_id==$id) | ((.detail // "") | contains("ops-team"))] | any' 2>/dev/null)"
+[ "$META_AUDIT_VALUE" = "false" ] && pass "server.update 审计 detail 不含 custom_fields 的值" \
+  || fail "server.update 审计 detail 泄露了 custom_fields 的值（jq=${META_AUDIT_VALUE:-解析失败}）"
+META_AUDIT_KEYS="$(printf '%s' "$META_AUDIT" | jq -r --arg id "$META_SRV_ID" \
+  '[.data[] | select(.action=="server.update" and .resource_id==$id) | ((.detail // "") | (contains("notes_changed") and contains("custom_field_keys")))] | any' 2>/dev/null)"
+[ "$META_AUDIT_KEYS" = "true" ] && pass "server.update 审计 detail 记录 notes_changed/custom_field_keys（键名）" \
+  || fail "server.update 审计 detail 缺少变更标记或键名（jq=${META_AUDIT_KEYS:-解析失败}）"
+
 # ---------------------------------------------------------------- 汇总
 step "验收结果"
 printf '  通过 %d 项，失败 %d 项\n\n' "$PASS" "$FAIL"
