@@ -1,0 +1,242 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import AppIcon from '@/components/AppIcon.vue'
+import { useI18n } from '@/i18n'
+import { api, type CheckItem, type CheckResult } from '@/lib/api'
+import {
+  availabilityText,
+  availabilityTone,
+  checkKindLabel,
+  checkStateLabelKey,
+  checkStateTone,
+  checkTargetRows,
+  isProbeAgent,
+  type CheckTargetRow,
+} from '@/lib/checks'
+import { errorMessage } from '@/lib/errors'
+import { formatDateTime, formatLatency } from '@/lib/format'
+
+/**
+ * 检测项详情抽屉：目标服务器（名称）＋ 该服务器最近一次结果。
+ *
+ * 异步读取的 owner 就是这个组件（一开一关即一次读取，不跟列表轮询耦合）：
+ * 加载 / 失败可重试 / 空目标 / 有数据四态齐全，失败文案走 errorMessage()（带 requestId）。
+ *
+ * 挂在 document.body 上的模态：Esc 关闭、打开时焦点进入面板、
+ * 关闭后由页面把焦点还给触发按钮（页面持有 trigger，见 ChecksPage.closeDrawer）。
+ */
+const props = defineProps<{
+  check: CheckItem
+  canWrite: boolean
+  running: boolean
+}>()
+
+const emit = defineEmits<{
+  (event: 'close'): void
+  (event: 'run'): void
+}>()
+
+const { t } = useI18n()
+
+const RESULTS_LIMIT = 50
+
+const results = ref<CheckResult[] | null>(null)
+const loading = ref(false)
+const loadError = ref('')
+const panel = ref<HTMLElement | null>(null)
+const closeButton = ref<HTMLButtonElement | null>(null)
+
+const titleId = computed(() => `check-drawer-title-${props.check.id}`)
+const rows = computed<CheckTargetRow[]>(() =>
+  checkTargetRows(props.check, results.value ?? [], (serverId) => serverId),
+)
+const stateLabel = computed(() => t(checkStateLabelKey(props.check.state)))
+const stateToneClass = computed(() => `ls-tone--${checkStateTone(props.check.state)}`)
+const availabilityValue = computed(() => availabilityText(props.check.availability_24h))
+const availabilityClass = computed(() => `ls-tone--${availabilityTone(props.check.availability_24h)}`)
+
+async function load(): Promise<void> {
+  loading.value = true
+  loadError.value = ''
+  try {
+    results.value = await api.checkResults(props.check.id, { limit: RESULTS_LIMIT })
+  } catch (caught) {
+    loadError.value = errorMessage(caught, t('checks.resultsFailed'))
+  } finally {
+    loading.value = false
+  }
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.stopPropagation()
+    emit('close')
+    return
+  }
+  // 轻量焦点陷阱：Tab 在面板内循环，避免焦点跑到背后的页面上
+  if (event.key !== 'Tab' || !panel.value) return
+  const focusable = panel.value.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )
+  if (focusable.length === 0) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  } else if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  }
+}
+
+onMounted(() => {
+  void load()
+  closeButton.value?.focus()
+  document.addEventListener('keydown', onKeydown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKeydown)
+})
+
+watch(
+  () => props.check.id,
+  () => {
+    results.value = null
+    void load()
+  },
+)
+</script>
+
+<template>
+  <Teleport to="body">
+    <div class="ls-checkspage-drawer">
+      <div class="ls-checkspage-drawer__backdrop" @click="emit('close')" />
+      <div
+        ref="panel"
+        class="ls-checkspage-drawer__panel"
+        role="dialog"
+        aria-modal="true"
+        :aria-labelledby="titleId"
+      >
+        <header class="ls-checkspage-drawer__head">
+          <div class="ls-checkspage-drawer__heading">
+            <h2 :id="titleId" class="ls-checkspage-drawer__title">{{ check.name }}</h2>
+            <p class="ls-checkspage-drawer__subtitle">
+              {{ t('checks.detailSubtitle') }}
+            </p>
+          </div>
+          <button
+            id="checks-drawer-close"
+            ref="closeButton"
+            class="ls-icon-btn"
+            type="button"
+            :aria-label="t('common.close')"
+            @click="emit('close')"
+          >
+            <AppIcon name="close" size="1rem" />
+          </button>
+        </header>
+
+        <dl class="ls-checkspage-drawer__meta">
+          <div class="ls-checkspage-drawer__meta-item">
+            <dt>{{ t('checks.colKind') }}</dt>
+            <dd>{{ checkKindLabel(check.kind) }}</dd>
+          </div>
+          <div class="ls-checkspage-drawer__meta-item">
+            <dt>{{ t('checks.colTarget') }}</dt>
+            <dd><code class="ls-code">{{ check.target }}</code></dd>
+          </div>
+          <div class="ls-checkspage-drawer__meta-item">
+            <dt>{{ t('checks.colInterval') }}</dt>
+            <dd>{{ check.interval_s }}s</dd>
+          </div>
+          <div class="ls-checkspage-drawer__meta-item">
+            <dt>{{ t('checks.colState') }}</dt>
+            <dd>
+              <span :class="stateToneClass">{{ stateLabel }}</span>
+            </dd>
+          </div>
+          <div class="ls-checkspage-drawer__meta-item">
+            <dt>{{ t('checks.probeChannel') }}</dt>
+            <dd>{{ isProbeAgent(check) ? t('checks.probeAgent') : t('checks.probeControl') }}</dd>
+          </div>
+          <div class="ls-checkspage-drawer__meta-item">
+            <dt>{{ t('checks.availability24h') }}</dt>
+            <dd :class="availabilityClass">{{ availabilityValue }}</dd>
+          </div>
+        </dl>
+
+        <section class="ls-checkspage-drawer__section" :aria-busy="loading ? 'true' : 'false'">
+          <h3 class="ls-checkspage-drawer__section-title">
+            {{ t('checks.targetsTitle', { count: rows.length }) }}
+          </h3>
+
+          <div v-if="loading" class="ls-checkspage-drawer__skeleton" aria-hidden="true">
+            <span v-for="index in 3" :key="index" class="ls-skeleton ls-checkspage-drawer__skeleton-item" />
+          </div>
+
+          <div v-else-if="loadError" class="ls-notice ls-notice--error" role="alert">
+            <p class="ls-notice__title">{{ t('common.error') }}</p>
+            <p class="ls-notice__text">{{ loadError }}</p>
+            <button id="checks-drawer-retry" class="ls-notice__action" type="button" @click="load">
+              {{ t('common.retry') }}
+            </button>
+          </div>
+
+          <div v-else-if="rows.length === 0" class="ls-notice">
+            <p class="ls-notice__title">{{ t('checks.targetsEmptyTitle') }}</p>
+            <p class="ls-notice__text">{{ t('checks.targetsEmptyHint') }}</p>
+          </div>
+
+          <ul v-else class="ls-checkspage-drawer__targets">
+            <li v-for="row in rows" :key="row.serverId" class="ls-checkspage-drawer__target">
+              <div class="ls-checkspage-drawer__target-head">
+                <span class="ls-checkspage-drawer__target-name">{{ row.serverName }}</span>
+                <span
+                  v-if="row.result"
+                  class="ls-checkspage-drawer__target-state"
+                  :class="row.result.ok ? 'ls-tone--success' : 'ls-tone--danger'"
+                >
+                  {{ row.result.ok ? t('s.0300') : t('s.0301') }}
+                </span>
+                <span v-else class="ls-checkspage-drawer__target-state ls-tone--muted">
+                  {{ t('s.0965') }}
+                </span>
+              </div>
+              <p v-if="row.result" class="ls-checkspage-drawer__target-meta">
+                <span>{{ formatLatency(row.result.latency_ms) }}</span>
+                <span>{{ formatDateTime(row.result.ts) }}</span>
+                <span v-if="row.result.status_code !== null">
+                  {{ t('checks.statusCode', { code: row.result.status_code }) }}
+                </span>
+              </p>
+              <p v-if="row.result?.message" class="ls-checkspage-drawer__target-message">
+                {{ row.result.message }}
+              </p>
+            </li>
+          </ul>
+        </section>
+
+        <footer class="ls-checkspage-drawer__foot">
+          <button
+            id="checks-drawer-run"
+            class="ls-btn ls-btn--primary"
+            type="button"
+            :disabled="!canWrite || running"
+            :aria-busy="running ? 'true' : 'false'"
+            @click="emit('run')"
+          >
+            <span v-if="running" class="ls-spinner" aria-hidden="true" />
+            <AppIcon v-else name="play" size="0.875rem" />
+            {{ t('checks.run') }}
+          </button>
+          <button class="ls-btn" type="button" @click="emit('close')">
+            {{ t('common.close') }}
+          </button>
+        </footer>
+      </div>
+    </div>
+  </Teleport>
+</template>

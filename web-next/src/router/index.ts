@@ -41,13 +41,13 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/checks',
     name: 'checks',
-    component: () => import('@/views/NotYetView.vue'),
+    component: () => import('@/pages/ChecksPage.vue'),
     meta: { title: '检测', permission: 'check.read' },
   },
   {
     path: '/alerts',
     name: 'alerts',
-    component: () => import('@/views/NotYetView.vue'),
+    component: () => import('@/pages/AlertsPage.vue'),
     meta: { title: '告警', permission: 'alert.read' },
   },
 
