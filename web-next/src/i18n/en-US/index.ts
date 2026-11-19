@@ -6,6 +6,7 @@ import tools from './tools'
 import alerts from './alerts'
 import checks from './checks'
 import legacy from './legacy'
+import ops from './ops'
 
 /**
  * en-US 词典入口：领域文件展开合并为与改造前完全一致的扁平键表，
@@ -20,6 +21,7 @@ const enUS: Record<string, string> = {
   ...alerts,
   ...checks,
   ...legacy,
+  ...ops,
 }
 
 export default enUS

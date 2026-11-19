@@ -1,0 +1,135 @@
+<script setup lang="ts">
+import { reactive, ref, watch } from 'vue'
+import type { AppItem, CreateAppPayload } from '@/lib/api'
+import {
+  appFormFromItem,
+  appPayloadFromForm,
+  emptyAppForm,
+  validateAppForm,
+  type AppFormErrors,
+  type AppFormValues,
+} from '@/lib/deploy-domain'
+import { useI18n } from '@/i18n'
+import ModalDialog from './ModalDialog.vue'
+
+/**
+ * 新建 / 编辑应用。校验规则来自 lib/deploy-domain 的纯函数，错误文案走 i18n 键，
+ * 提交前必过校验——「名称/标识为空」不发请求。
+ */
+const props = withDefaults(
+  defineProps<{
+    open: boolean
+    app?: AppItem | null
+    busy?: boolean
+    error?: string | null
+  }>(),
+  { app: null, busy: false, error: null },
+)
+
+const emit = defineEmits<{
+  (event: 'submit', payload: CreateAppPayload): void
+  (event: 'close'): void
+}>()
+
+const { t } = useI18n()
+const form = reactive<AppFormValues>(emptyAppForm())
+const errors = ref<AppFormErrors>({})
+const attempted = ref(false)
+
+watch(
+  () => props.open,
+  (open) => {
+    if (!open) return
+    Object.assign(form, props.app ? appFormFromItem(props.app) : emptyAppForm())
+    errors.value = {}
+    attempted.value = false
+  },
+  { immediate: true },
+)
+
+function submit(): void {
+  attempted.value = true
+  const found = validateAppForm(form)
+  errors.value = found
+  if (Object.keys(found).length > 0) return
+  emit('submit', appPayloadFromForm(form))
+}
+
+const modeOptions = [
+  { value: 'release', key: 'apps.mode.release' },
+  { value: 'inplace', key: 'apps.mode.inplace' },
+  { value: 'script', key: 'apps.mode.script' },
+]
+</script>
+
+<template>
+  <ModalDialog
+    :open="open"
+    :title="app ? t('apps.form.editTitle') : t('apps.form.createTitle')"
+    :description="t('apps.form.description')"
+    test-id="app-form-dialog"
+    @close="emit('close')"
+  >
+    <form class="ls-form" novalidate @submit.prevent="submit">
+      <label class="ls-field" for="app-form-name">
+        <span class="ls-field__label">{{ t('apps.form.name') }}</span>
+        <input
+          id="app-form-name"
+          v-model="form.name"
+          class="ls-input"
+          type="text"
+          autocomplete="off"
+          :aria-invalid="Boolean(errors.name)"
+        />
+        <span v-if="errors.name" class="ls-field__error" role="alert">{{ t(errors.name) }}</span>
+      </label>
+      <label class="ls-field" for="app-form-slug">
+        <span class="ls-field__label">{{ t('apps.form.slug') }}</span>
+        <input
+          id="app-form-slug"
+          v-model="form.slug"
+          class="ls-input"
+          type="text"
+          autocomplete="off"
+          :aria-invalid="Boolean(errors.slug)"
+        />
+        <span v-if="errors.slug" class="ls-field__error" role="alert">{{ t(errors.slug) }}</span>
+        <span v-else class="ls-field__hint">{{ t('apps.form.slugHint') }}</span>
+      </label>
+      <label class="ls-field" for="app-form-root">
+        <span class="ls-field__label">{{ t('apps.form.root') }}</span>
+        <input id="app-form-root" v-model="form.root" class="ls-input" type="text" autocomplete="off" />
+        <span class="ls-field__hint">{{ t('apps.form.rootHint') }}</span>
+      </label>
+      <label class="ls-field" for="app-form-mode">
+        <span class="ls-field__label">{{ t('apps.form.deployMode') }}</span>
+        <select id="app-form-mode" v-model="form.deployMode" class="ls-input">
+          <option v-for="option in modeOptions" :key="option.value" :value="option.value">
+            {{ t(option.key) }}
+          </option>
+        </select>
+      </label>
+      <label class="ls-field" for="app-form-description">
+        <span class="ls-field__label">{{ t('apps.form.note') }}</span>
+        <textarea id="app-form-description" v-model="form.description" class="ls-textarea" rows="2" />
+      </label>
+      <p v-if="error" class="ls-inline-error" role="alert">{{ error }}</p>
+      <p v-if="attempted && Object.keys(errors).length > 0" class="ls-inline-error" role="alert">
+        {{ t('apps.form.invalid') }}
+      </p>
+    </form>
+    <template #footer>
+      <button type="button" class="ls-btn" :disabled="busy" @click="emit('close')">{{ t('common.cancel') }}</button>
+      <button
+        id="app-form-submit"
+        type="button"
+        class="ls-btn ls-btn--primary"
+        :disabled="busy"
+        :aria-busy="busy"
+        @click="submit"
+      >
+        {{ busy ? t('common.loading') : app ? t('common.save') : t('common.create') }}
+      </button>
+    </template>
+  </ModalDialog>
+</template>

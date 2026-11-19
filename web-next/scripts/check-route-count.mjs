@@ -36,18 +36,6 @@ const MISC_PATHS = new Set(['/login', '/forbidden', '/about', '/:pathMatch(.*)*'
 const NOT_YET_PATHS = new Set([
   '/scheduled-tasks',
   '/import',
-  '/apps',
-  '/apps/:id',
-  '/releases',
-  '/releases/:id',
-  '/credentials',
-  '/users',
-  '/roles',
-  '/groups',
-  '/tokens',
-  '/audit',
-  '/backups',
-  '/settings',
 ])
 
 /** 逐条基线：[path, name, meta.title, meta.permission, meta.toolKind]。 */
@@ -63,9 +51,9 @@ const BASELINE = [
   ['/scheduled-tasks', 'scheduled-tasks', '定时任务', 'task.read', null],
   ['/import', 'import', '导入主机', 'server.write', null],
   ['/apps', 'apps', '应用', 'deploy.read', null],
-  ['/apps/:id', 'app-detail', '应用详情', 'server.read', null],
+  ['/apps/:id', 'app-detail', '应用详情', 'deploy.read', null],
   ['/releases', 'releases', '发布', 'deploy.read', null],
-  ['/releases/:id', 'release-detail', '发布详情', 'server.read', null],
+  ['/releases/:id', 'release-detail', '发布详情', 'deploy.read', null],
   ['/credentials', 'credentials', '凭证', 'server.write', null],
   ['/users', 'users', '用户', 'user.manage', null],
   ['/roles', 'roles', '角色与权限', 'role.manage', null],
