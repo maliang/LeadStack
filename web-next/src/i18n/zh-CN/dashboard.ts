@@ -56,7 +56,6 @@ const dashboard: Record<string, string> = {
   'dashboard.releases.title': '最近发布',
   'dashboard.releases.subtitle': '最近 5 次发布及其执行结果',
   'dashboard.releases.viewAll': '查看发布',
-  'dashboard.releases.unnamed': '未命名应用',
   'dashboard.releases.runs': '成功 {success} · 失败 {failed} · 进行中 {active}',
   'dashboard.releases.empty': '还没有发布记录。',
   'dashboard.releases.scopedEmpty': '你当前可见的范围内还没有发布记录。',

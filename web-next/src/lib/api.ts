@@ -865,8 +865,9 @@ export interface ReleaseRun {
 export interface Release {
   id: string
   app_id: string
-  app_name: string | null
-  app_slug: string | null
+  /** 列表/详情自带的应用名（旧后端可能不返回） */
+  app_name?: string | null
+  app_slug?: string | null
   template_id: string
   template_name: string | null
   version: string

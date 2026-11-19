@@ -56,7 +56,6 @@ const dashboard: Record<string, string> = {
   'dashboard.releases.title': 'Recent releases',
   'dashboard.releases.subtitle': 'The last 5 releases and their run results',
   'dashboard.releases.viewAll': 'View releases',
-  'dashboard.releases.unnamed': 'Unnamed app',
   'dashboard.releases.runs': 'Succeeded {success} · Failed {failed} · Running {active}',
   'dashboard.releases.empty': 'No releases yet.',
   'dashboard.releases.scopedEmpty': 'No releases in the scope you can see yet.',

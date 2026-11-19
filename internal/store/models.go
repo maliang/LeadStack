@@ -334,8 +334,13 @@ type Artifact struct {
 
 // Release 是一次发布的记录。
 type Release struct {
-	ID               string  `json:"id"`
-	AppID            string  `json:"app_id"`
+	ID    string `json:"id"`
+	AppID string `json:"app_id"`
+	// AppName/AppSlug 由查询时 LEFT JOIN apps 带出，避免前端为每条发布再查一次应用。
+	// 不加 omitempty：应用被删（或历史孤儿发布）时返回空串，前端据此区分「没有名字」
+	// 与「字段缺失」；空串也保证 JSON 形状稳定。
+	AppName          string  `json:"app_name"`
+	AppSlug          string  `json:"app_slug"`
 	TemplateID       string  `json:"template_id"`
 	Version          string  `json:"version"`
 	ArtifactID       *string `json:"artifact_id"`

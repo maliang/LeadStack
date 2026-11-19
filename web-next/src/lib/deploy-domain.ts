@@ -139,12 +139,12 @@ export function buildAppNameMap(apps: readonly AppItem[]): Map<string, string> {
 }
 
 /**
- * 发布单的应用名：优先 release 自带的 app_name/app_slug；
- * 后端列表 / 详情只返回 app_id，此时用应用列表映射出的名字兜底；
- * 映射不到（应用列表不可读或应用已删）才回退 app_id。
+ * 发布单的应用名：优先 release 自带的 app_name；
+ * 后端只返回 app_id（旧后端）时用应用列表映射出的名字兜底；
+ * 映射不到（应用列表不可读或应用已删）再用 app_slug，最后回退 app_id。
  */
 export function releaseAppLabel(release: Release, appNames?: ReadonlyMap<string, string> | null): string {
-  return release.app_name || release.app_slug || appNames?.get(release.app_id) || release.app_id
+  return release.app_name || appNames?.get(release.app_id) || release.app_slug || release.app_id
 }
 
 /** 发布时长（秒）；未开始 / 未结束返回 null，由调用方显示占位符。 */

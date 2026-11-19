@@ -1045,8 +1045,12 @@ func (a *API) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	releaseID := uuid.NewString()
 	release := &store.Release{
-		ID:               releaseID,
-		AppID:            app.ID,
+		ID:    releaseID,
+		AppID: app.ID,
+		// 创建响应也带 app_name/app_slug，与 GET /releases 的列一致：前端拿到 201 后
+		// 直接渲染标题，不必再为这一条去查 /apps。
+		AppName:          app.Name,
+		AppSlug:          app.Slug,
 		TemplateID:       tmpl.ID,
 		Version:          version,
 		TemplateSnapshot: tmpl.Content, // 冻结快照：模板后续修改不影响本次发布

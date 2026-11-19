@@ -1015,6 +1015,27 @@ type RunOutcome struct {
 **创建发布 body**：`{app_id,template_id,version,artifact_id,server_ids,concurrency?}`。
 **创建响应**：`{release:{...}, runs:[{server_id,status}]}` —— 立即返回，执行在后台异步进行（前端轮询进度）。
 
+**发布对象字段**（`GET /releases`、`GET /releases/{id}`、创建响应里的 `release` 同一形状）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 发布 ID |
+| `app_id` | string | 应用 ID |
+| `app_name` | string | 应用名，查询时 `LEFT JOIN apps` 带出；**无 `omitempty`**，应用被删/孤儿发布时是空串而不是缺字段 |
+| `app_slug` | string | 应用 slug，同上（空串语义与 `app_name` 一致） |
+| `template_id` | string | 模板 ID |
+| `version` | string | 版本号 |
+| `artifact_id` | string \| null | 制品 ID |
+| `template_snapshot` | string | 创建时冻结的模板内容 |
+| `status` | string | `pending` / `running` / `success` / `failed` / `canceled` |
+| `created_by` | string \| null | 创建人 |
+| `created_at` | int64 | 创建时间（毫秒时间戳） |
+| `started_at` / `finished_at` | int64 \| null | 起止时间 |
+| `concurrency` | int | 并发度 |
+| `strategy` | string | `all`（默认）/ `canary` |
+| `canary_count` | int | 灰度首批台数（`strategy=canary` 时有效） |
+| `hold_seconds` | int | 灰度观察秒数 |
+
 **补充约定（部署 实现后冻结）**
 - **上传型制品需要目标机能访问控制端**：`upload` 制品发布时，控制端把 `<LEADSTACK_PUBLIC_URL>/api/v1/artifacts/{id}/download` 作为下载地址交给目标机。生产部署必须配置 `LEADSTACK_PUBLIC_URL`（如 `http://10.0.0.5:8080`）；不配时创建发布直接 400 并说明原因，而不是让目标机静默失败。
 - `GET /releases`（列表）**不返回 runs**，只返回 release 主体；需要进度时用 `GET /releases/{id}` 或 `/releases/{id}/runs`。

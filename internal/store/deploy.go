@@ -524,12 +524,21 @@ func (s *Store) CreateRelease(ctx context.Context, rel *Release, runs []ReleaseR
 
 // GetRelease 按 ID 查询发布。
 func (s *Store) GetRelease(ctx context.Context, id string) (*Release, error) {
-	return scanRelease(s.db.QueryRowContext(ctx, `SELECT `+releaseColumns+` FROM releases WHERE id = ?`, id))
+	return scanRelease(s.db.QueryRowContext(ctx,
+		`SELECT `+releaseColumns+releaseFrom+` WHERE releases.id = ?`, id))
 }
 
-// releaseColumns 是 releases 表的固定列顺序。
-const releaseColumns = `id, app_id, template_id, version, artifact_id, template_snapshot,
-	status, created_by, created_at, started_at, finished_at, concurrency, strategy, canary_count, hold_seconds`
+// releaseColumns 是 releases 表的固定列顺序（含 join 出来的应用名/slug）。
+// 列全部带表前缀：join apps 后裸 `id` 会有歧义（两个表都有 id）。
+const releaseColumns = `releases.id, releases.app_id, releases.template_id, releases.version, releases.artifact_id,
+	releases.template_snapshot, releases.status, releases.created_by, releases.created_at, releases.started_at,
+	releases.finished_at, releases.concurrency, releases.strategy, releases.canary_count, releases.hold_seconds,
+	apps.name AS app_name, apps.slug AS app_slug`
+
+// releaseFrom 是发布查询的 FROM 子句。LEFT JOIN 是刻意的：应用被删后历史发布仍要能
+// 查出来（DELETE /apps 在有发布时返回 409，但库层/运维直删仍可能留下孤儿行），
+// 此时 app_name/app_slug 为 NULL，scanRelease 归一为空串而不是让整页 500。
+const releaseFrom = ` FROM releases LEFT JOIN apps ON apps.id = releases.app_id`
 
 // 发布策略常量。
 const (
@@ -570,14 +579,14 @@ func (s *Store) ListReleases(ctx context.Context, f ReleaseFilter) ([]Release, e
 		// 注释一致；历史上「len>0 才拼条件」让空切片变成不限，属于潜伏越权）。
 		return []Release{}, nil
 	}
-	query := `SELECT ` + releaseColumns + ` FROM releases WHERE 1 = 1`
+	query := `SELECT ` + releaseColumns + releaseFrom + ` WHERE 1 = 1`
 	args := make([]any, 0, 3+len(f.ServerIDs))
 	if f.AppID != "" {
-		query += ` AND app_id = ?`
+		query += ` AND releases.app_id = ?`
 		args = append(args, f.AppID)
 	}
 	if f.Status != "" {
-		query += ` AND status = ?`
+		query += ` AND releases.status = ?`
 		args = append(args, f.Status)
 	}
 	if len(f.ServerIDs) > 0 {
@@ -589,7 +598,7 @@ func (s *Store) ListReleases(ctx context.Context, f ReleaseFilter) ([]Release, e
 			args = append(args, id)
 		}
 	}
-	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	query += ` ORDER BY releases.created_at DESC, releases.id DESC LIMIT ?`
 	args = append(args, f.Limit)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -680,10 +689,11 @@ func scanRelease(row interface{ Scan(...any) error }) (*Release, error) {
 		strategy              sql.NullString
 		canaryCount           sql.NullInt64
 		holdSeconds           sql.NullInt64
+		appName, appSlug      sql.NullString
 	)
 	err := row.Scan(&rel.ID, &rel.AppID, &rel.TemplateID, &rel.Version, &artifactID,
 		&rel.TemplateSnapshot, &rel.Status, &createdBy, &rel.CreatedAt, &startedAt, &finishedAt, &concurrency,
-		&strategy, &canaryCount, &holdSeconds)
+		&strategy, &canaryCount, &holdSeconds, &appName, &appSlug)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询发布: %w", ErrNotFound)
@@ -695,6 +705,9 @@ func scanRelease(row interface{ Scan(...any) error }) (*Release, error) {
 	rel.StartedAt = intPtr(startedAt)
 	rel.FinishedAt = intPtr(finishedAt)
 	rel.Concurrency = concurrency
+	// LEFT JOIN 未命中（应用已删）时为 NULL，归一为空串而不是报错。
+	rel.AppName = appName.String
+	rel.AppSlug = appSlug.String
 	rel.Strategy = strings.TrimSpace(strategy.String)
 	if rel.Strategy == "" {
 		rel.Strategy = ReleaseStrategyAll
