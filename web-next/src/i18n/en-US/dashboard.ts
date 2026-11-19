@@ -22,6 +22,7 @@ const dashboard: Record<string, string> = {
   'dashboard.kpi.loading': 'Loading server overview…',
   'dashboard.kpi.loadFailed': 'Could not load the server overview',
   'dashboard.kpi.noServers': 'No servers yet — add a target host to populate the overview.',
+  'dashboard.kpi.noPermission': 'This account lacks the server.read permission, so the server overview is hidden.',
 
   'dashboard.attention.title': 'Needs attention',
   'dashboard.attention.subtitle': 'Servers not in the online state, most recently updated first',
@@ -30,6 +31,7 @@ const dashboard: Record<string, string> = {
   'dashboard.attention.noServers': 'No servers yet.',
   'dashboard.attention.allOnline': 'All servers are online — nothing needs attention.',
   'dashboard.attention.more': '{count} more not shown',
+  'dashboard.attention.noPermission': 'This account lacks the server.read permission, so servers needing attention are hidden.',
 
   'dashboard.checks.title': 'Checks summary',
   'dashboard.checks.subtitle': 'Latest result for every check',
@@ -41,6 +43,7 @@ const dashboard: Record<string, string> = {
   'dashboard.checks.empty': 'No checks yet — add your first check on the Checks page.',
   'dashboard.checks.staleTitle': 'Checks summary could not be refreshed; showing the last result',
   'dashboard.checks.loadFailed': 'Could not load the checks summary',
+  'dashboard.checks.noPermission': 'This account lacks the check.read permission, so the checks summary is hidden.',
 
   'dashboard.alerts.title': 'Alerts summary',
   'dashboard.alerts.subtitle': 'Active alerts and recoveries in the last 24 hours',
@@ -52,6 +55,7 @@ const dashboard: Record<string, string> = {
   'dashboard.alerts.empty': 'No alerts recorded.',
   'dashboard.alerts.staleTitle': 'Alerts summary could not be refreshed; showing the last result',
   'dashboard.alerts.loadFailed': 'Could not load the alerts summary',
+  'dashboard.alerts.noPermission': 'This account lacks the alert.read permission, so the alerts summary is hidden.',
 
   'dashboard.releases.title': 'Recent releases',
   'dashboard.releases.subtitle': 'The last 5 releases and their run results',

@@ -33,6 +33,10 @@ import { formatRelativeTime, formatUptime } from '@/lib/format'
  *
  * 数据接口全部沿用旧版 web/src/pages/DashboardPage.tsx：GET /system/info、/servers、
  * /checks/summary、/alerts/summary、/releases?limit=5；这里不新增端点。
+ *
+ * 权限：服务器相关（/system/info + /servers）需 server.read、检测概览需 check.read、
+ * 告警概览需 alert.read、最近发布需 deploy.read（/apps 与 /releases 同门控）。
+ * 缺权限的块只渲染「无权查看」空态，不发请求也不起轮询定时器。
  */
 
 /** 「需要关注」最多列出多少台机器（与旧版一致）。 */
@@ -140,18 +144,26 @@ const { t } = useI18n()
 const { can } = useCan()
 const { scope } = useAuth()
 
+/** 四个区块各按自己的权限点短路：无权限 → 该块只渲染「无权查看」空态，零请求、零轮询。 */
+const canViewServers = computed(() => can('server.read'))
+const canViewChecks = computed(() => can('check.read'))
+const canViewAlerts = computed(() => can('alert.read'))
 const canViewReleases = computed(() => can('deploy.read'))
 
 const infoRes = useResource<SystemInfo>(() => api.systemInfo(), {
+  enabled: () => canViewServers.value,
   fallback: t('dashboard.kpi.loadFailed'),
 })
 const serversRes = useResource<Server[]>(() => api.servers({}), {
+  enabled: () => canViewServers.value,
   fallback: t('dashboard.attention.loadFailed'),
 })
 const checksRes = useResource<CheckSummary>(() => api.checksSummary(), {
+  enabled: () => canViewChecks.value,
   fallback: t('dashboard.checks.loadFailed'),
 })
 const alertsRes = useResource<AlertSummary>(() => api.alertsSummary(), {
+  enabled: () => canViewAlerts.value,
   fallback: t('dashboard.alerts.loadFailed'),
 })
 const releasesRes = useResource<Release[]>(() => api.releases({ limit: 5 }), {
@@ -176,7 +188,8 @@ const onlineRate = computed(() =>
 )
 
 /** KPI 区块：任一接口成功即可出数，两个都失败才算错误态。 */
-const kpiView = computed<'loading' | 'ready' | 'error' | 'empty'>(() => {
+const kpiView = computed<'denied' | 'loading' | 'ready' | 'error' | 'empty'>(() => {
+  if (!canViewServers.value) return 'denied'
   if (infoRes.loaded.value || serversRes.loaded.value) {
     return totalCount.value === 0 ? 'empty' : 'ready'
   }
@@ -195,7 +208,8 @@ const attention = computed(() => servers.value.filter((server) => server.status 
 const attentionRows = computed(() => attention.value.slice(0, ATTENTION_LIMIT))
 const attentionMore = computed(() => Math.max(attention.value.length - ATTENTION_LIMIT, 0))
 
-const attentionView = computed<'loading' | 'error' | 'empty' | 'all-online' | 'ready'>(() => {
+const attentionView = computed<'denied' | 'loading' | 'error' | 'empty' | 'all-online' | 'ready'>(() => {
+  if (!canViewServers.value) return 'denied'
   if (serversRes.state.value === 'error' && !serversRes.loaded.value) return 'error'
   if (!serversRes.loaded.value) return 'loading'
   if (servers.value.length === 0) return 'empty'
@@ -210,7 +224,8 @@ const checkCounts = computed(() => ({
   unknown: checksRes.data.value?.unknown ?? 0,
 }))
 
-const checksView = computed<'loading' | 'error' | 'empty' | 'ready'>(() => {
+const checksView = computed<'denied' | 'loading' | 'error' | 'empty' | 'ready'>(() => {
+  if (!canViewChecks.value) return 'denied'
   if (checksRes.state.value === 'error' && !checksRes.loaded.value) return 'error'
   if (!checksRes.loaded.value) return 'loading'
   return checkCounts.value.total === 0 ? 'empty' : 'ready'
@@ -225,7 +240,8 @@ const alertCounts = computed(() => ({
   info: alertsRes.data.value?.by_severity?.info ?? 0,
 }))
 
-const alertsView = computed<'loading' | 'error' | 'empty' | 'ready'>(() => {
+const alertsView = computed<'denied' | 'loading' | 'error' | 'empty' | 'ready'>(() => {
+  if (!canViewAlerts.value) return 'denied'
   if (alertsRes.state.value === 'error' && !alertsRes.loaded.value) return 'error'
   if (!alertsRes.loaded.value) return 'loading'
   const counts = alertCounts.value
@@ -326,6 +342,10 @@ function releaseSummary(release: Release): string {
         </button>
       </div>
 
+      <p v-else-if="kpiView === 'denied'" id="dash-kpi-denied" class="ls-dashboard__empty">
+        {{ t('dashboard.kpi.noPermission') }}
+      </p>
+
       <template v-else>
         <article id="dash-kpi-total" class="ls-dashboard__kpi" data-kpi="total">
           <span class="ls-dashboard__kpi-label">{{ t('dashboard.kpi.total') }}</span>
@@ -390,8 +410,12 @@ function releaseSummary(release: Release): string {
         </button>
       </div>
 
+      <p v-if="attentionView === 'denied'" id="dash-attention-denied" class="ls-dashboard__empty">
+        {{ t('dashboard.attention.noPermission') }}
+      </p>
+
       <div
-        v-if="attentionView === 'loading'"
+        v-else-if="attentionView === 'loading'"
         id="dash-attention-loading"
         class="ls-dashboard__skeletons"
         aria-busy="true"
@@ -470,8 +494,12 @@ function releaseSummary(release: Release): string {
         </button>
       </div>
 
+      <p v-if="checksView === 'denied'" id="dash-checks-denied" class="ls-dashboard__empty">
+        {{ t('dashboard.checks.noPermission') }}
+      </p>
+
       <div
-        v-if="checksView === 'loading'"
+        v-else-if="checksView === 'loading'"
         id="dash-checks-loading"
         class="ls-dashboard__skeletons ls-dashboard__skeletons--inline"
         aria-busy="true"
@@ -542,8 +570,12 @@ function releaseSummary(release: Release): string {
         </button>
       </div>
 
+      <p v-if="alertsView === 'denied'" id="dash-alerts-denied" class="ls-dashboard__empty">
+        {{ t('dashboard.alerts.noPermission') }}
+      </p>
+
       <div
-        v-if="alertsView === 'loading'"
+        v-else-if="alertsView === 'loading'"
         id="dash-alerts-loading"
         class="ls-dashboard__skeletons ls-dashboard__skeletons--inline"
         aria-busy="true"

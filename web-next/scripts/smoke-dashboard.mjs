@@ -4,7 +4,7 @@
  *
  * 覆盖：KPI 数字与 online 率 / 「需要关注」只列非 online 且最多 6 条 + 溢出提示 / 全在线提示 /
  * 检测与告警概览数值 / 最近发布行与 runs 统计（应用名走 GET /apps 映射、403 回退 app_id、与 /releases 一致）/
- * 空态 / 无 deploy.read 时只显示无权限且不发 releases、apps 请求 /
+ * 空态 / 无 deploy.read 时只显示无权限且不发 releases、apps 请求 / 无 check.read、alert.read 时零请求且只显示无权限 /
  * 单接口 500 只让该块报错、其它块照常 ready / 错误块重试可恢复 / 慢接口的加载骨架 / 320px 无横向滚动。
  * 用法：node scripts/smoke-dashboard.mjs [--headed] [--dist dist] [--port 0] [--shot out.png]
  */
@@ -332,7 +332,11 @@ async function run() {
     return
   }
 
-  const state = { active: 'happy', permissions: ['server.read', 'deploy.read'], appsFail: false }
+  const state = {
+    active: 'happy',
+    permissions: ['server.read', 'check.read', 'alert.read', 'deploy.read'],
+    appsFail: false,
+  }
   const pageErrors = []
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
   await installMockApi(context, state)
@@ -486,9 +490,13 @@ async function run() {
     state.active = 'happy'
     const releasesBefore = apiCalls.filter((call) => call.path === '/api/v1/releases').length
     const appsBeforeDenied = apiCalls.filter((call) => call.method === 'GET' && call.path === '/api/v1/apps').length
+    const checksBeforeDenied = apiCalls.filter((call) => call.method === 'GET' && call.path === '/api/v1/checks/summary').length
+    const alertsBeforeDenied = apiCalls.filter((call) => call.method === 'GET' && call.path === '/api/v1/alerts/summary').length
     await relogin(page, base, state, ['server.read'])
     await gotoDashboard(page, base, state, 'happy')
     await waitFor(page, '#dash-releases-denied')
+    await waitFor(page, '#dash-checks-denied')
+    await waitFor(page, '#dash-alerts-denied')
     check('无 deploy.read 时最近发布只显示无权限文案', (await text(page, '#dash-releases-denied')).includes('没有发布的查看权限'))
     check(
       '无 deploy.read 时不请求 /releases',
@@ -500,7 +508,39 @@ async function run() {
       apiCalls.filter((call) => call.method === 'GET' && call.path === '/api/v1/apps').length === appsBeforeDenied,
       `${appsBeforeDenied} → ${apiCalls.filter((call) => call.method === 'GET' && call.path === '/api/v1/apps').length}`,
     )
-    await relogin(page, base, state, ['server.read', 'deploy.read'])
+    check(
+      '无 check.read 时检测概览只显示无权文案（不是加载骨架）',
+      (await count(page, '#dash-checks-denied')) === 1 &&
+        (await count(page, '#dash-checks-loading')) === 0 &&
+        (await text(page, '#dash-checks-denied')).includes('check.read'),
+      await text(page, '#dash-checks-denied'),
+    )
+    check(
+      '无 alert.read 时告警概览只显示无权文案（不是加载骨架）',
+      (await count(page, '#dash-alerts-denied')) === 1 &&
+        (await count(page, '#dash-alerts-loading')) === 0 &&
+        (await text(page, '#dash-alerts-denied')).includes('alert.read'),
+      await text(page, '#dash-alerts-denied'),
+    )
+    check(
+      '仅 server.read 时不请求 /checks/summary',
+      apiCalls.filter((call) => call.method === 'GET' && call.path === '/api/v1/checks/summary').length ===
+        checksBeforeDenied,
+      `${checksBeforeDenied} → ${apiCalls.filter((call) => call.method === 'GET' && call.path === '/api/v1/checks/summary').length}`,
+    )
+    check(
+      '仅 server.read 时不请求 /alerts/summary',
+      apiCalls.filter((call) => call.method === 'GET' && call.path === '/api/v1/alerts/summary').length ===
+        alertsBeforeDenied,
+      `${alertsBeforeDenied} → ${apiCalls.filter((call) => call.method === 'GET' && call.path === '/api/v1/alerts/summary').length}`,
+    )
+    check(
+      '仅 server.read 时服务器相关区块照常出数（server.read 未被误门控）',
+      (await count(page, '#dash-kpi-total')) === 1 &&
+        (await count(page, '#dash-attention-count')) === 1 &&
+        (await count(page, '#dash-kpi-denied, #dash-attention-denied')) === 0,
+    )
+    await relogin(page, base, state, ['server.read', 'check.read', 'alert.read', 'deploy.read'])
 
     /* ---------------- 单块 500：只有该块报错 ---------------- */
     await gotoDashboard(page, base, state, 'checksError')

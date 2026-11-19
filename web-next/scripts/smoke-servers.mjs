@@ -362,10 +362,23 @@ async function run() {
     await page.fill('#login-password', PASSWORD)
     await page.click('#login-submit')
     await page.waitForSelector('.ls-shell', { timeout: 15000 })
+    // 登录后默认落在 #/：首页总览会自行预取 /servers、/checks/summary、/apps。
+    // 这些预取必须留在原始计数里（不靠过滤抹掉），但「服务器页自己只拉一次」要单独看：
+    // 等首页首屏（总览标题）渲染完记基线，之后只数目标页产生的增量。
+    await page.waitForSelector('.ls-adminpage__title', { timeout: 15000 })
+    const serverCallsSince = state.serverCalls
     await page.goto(`${base}/#/servers`, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('.ls-servers__title', { timeout: 15000 })
+    await page.waitForSelector('.ls-srv-row', { timeout: 15000 })
+    // 抖动窗口：轮询一旦发生，增量会从 1 变成 >1。
+    await page.waitForTimeout(800)
     check('登录后进入服务器页', new URL(page.url()).hash === '#/servers', new URL(page.url()).hash)
-    check('列表接口只拉一次（无轮询抖动）', state.serverCalls === 1, `${state.serverCalls} 次`)
+    const serverPageCalls = state.serverCalls - serverCallsSince
+    check(
+      '列表接口只拉一次（无轮询抖动）',
+      serverPageCalls === 1,
+      `目标页 ${serverPageCalls} 次（首页预取 ${serverCallsSince} 次，总计 ${state.serverCalls} 次）`,
+    )
 
     // 2) 默认列表视图
     check(

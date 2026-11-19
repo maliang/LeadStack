@@ -392,6 +392,18 @@ function newState(userRecord) {
   }
 }
 
+/** 登录并停在首页（#/），等首页首屏渲染完：首页自己的预取到此结束。 */
+async function loginToHome(page, base) {
+  await page.goto(`${base}/#/login`, { waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('#login-username', { timeout: 15000 })
+  await page.fill('#login-username', 'admin')
+  await page.fill('#login-password', PASSWORD)
+  await page.click('#login-submit')
+  await page.waitForSelector('.ls-shell', { timeout: 15000 })
+  await page.waitForSelector('.ls-adminpage__title', { timeout: 15000 })
+  await page.waitForTimeout(300)
+}
+
 /** 登录并按 hash 进检测页。 */
 async function signIn(page, base, hash = '#/checks') {
   await page.goto(`${base}/#/login`, { waitUntil: 'domcontentloaded' })
@@ -640,12 +652,24 @@ async function run() {
       deniedPage.on('request', (request) => {
         if (request.url().includes('/api/v1/')) deniedCalls.push(`${request.method()} ${new URL(request.url()).pathname}`)
       })
-      await signIn(deniedPage, base)
+      // 登录后默认落在 #/（总览要求 server.read，本用例的 denied 用户有）：首页会预取自己的接口。
+      // 先等首页首屏渲染完、记基线，再进被守卫拦截的目标页；首页预取照样留在 deniedCalls 里，
+      // 不靠过滤抹掉，之后只数「目标页自己」有没有再发 /checks 请求。
+      await loginToHome(deniedPage, base)
+      const deniedSince = deniedCalls.length
+      await deniedPage.goto(`${base}/#/checks`, { waitUntil: 'domcontentloaded' })
+      await deniedPage.waitForSelector('.ls-forbidden__title', { timeout: 15000 })
+      // 抖动窗口：守卫放行或页面自行轮询都会在基线之后冒出请求。
       await deniedPage.waitForTimeout(800)
       const deniedHash = new URL(deniedPage.url()).hash
-      const checkCalls = deniedCalls.filter((line) => line.includes('/api/v1/checks'))
+      const prefetchCheckCalls = deniedCalls.slice(0, deniedSince).filter((line) => line.includes('/api/v1/checks'))
+      const checkCalls = deniedCalls.slice(deniedSince).filter((line) => line.includes('/api/v1/checks'))
       check('无 check.read 时被挡到 /forbidden', deniedHash.startsWith('#/forbidden'), deniedHash)
-      check('无 check.read 时一次 /checks 请求都不发', checkCalls.length === 0, checkCalls.join(', ') || '0 次')
+      check(
+        '无 check.read 时一次 /checks 请求都不发',
+        checkCalls.length === 0,
+        `目标页 ${checkCalls.length} 次；首页预取 ${deniedSince} 条请求已计入原始记录（其中 /checks ${prefetchCheckCalls.length} 条：${prefetchCheckCalls.join(', ') || '无'}）`,
+      )
       check('无 check.read 时列表接口未被调用', denied.listCalls === 0, `${denied.listCalls} 次`)
       await legacyContext.close().catch(() => {})
       legacyContext = null

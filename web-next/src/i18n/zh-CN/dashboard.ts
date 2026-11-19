@@ -22,6 +22,7 @@ const dashboard: Record<string, string> = {
   'dashboard.kpi.loading': '正在加载服务器概况…',
   'dashboard.kpi.loadFailed': '服务器概况加载失败',
   'dashboard.kpi.noServers': '还没有接入服务器：先添加一台目标机，总览才有数据可看。',
+  'dashboard.kpi.noPermission': '当前账号缺少 server.read 权限，看不到服务器概况。',
 
   'dashboard.attention.title': '需要关注',
   'dashboard.attention.subtitle': '状态不是「在线」的服务器，按最近更新时间排列',
@@ -30,6 +31,7 @@ const dashboard: Record<string, string> = {
   'dashboard.attention.noServers': '还没有接入服务器。',
   'dashboard.attention.allOnline': '全部服务器都在线，暂无需要关注的机器。',
   'dashboard.attention.more': '还有 {count} 台未显示',
+  'dashboard.attention.noPermission': '当前账号缺少 server.read 权限，看不到需要关注的服务器。',
 
   'dashboard.checks.title': '检测概览',
   'dashboard.checks.subtitle': '全部检测项的最近一次结果',
@@ -41,6 +43,7 @@ const dashboard: Record<string, string> = {
   'dashboard.checks.empty': '还没有检测项，去「检测」页添加第一个检测。',
   'dashboard.checks.staleTitle': '检测概览刷新失败，显示的是上次结果',
   'dashboard.checks.loadFailed': '检测概览加载失败',
+  'dashboard.checks.noPermission': '当前账号缺少 check.read 权限，看不到检测概览。',
 
   'dashboard.alerts.title': '告警概览',
   'dashboard.alerts.subtitle': '当前告警与最近 24 小时的恢复情况',
@@ -52,6 +55,7 @@ const dashboard: Record<string, string> = {
   'dashboard.alerts.empty': '当前没有告警记录。',
   'dashboard.alerts.staleTitle': '告警概览刷新失败，显示的是上次结果',
   'dashboard.alerts.loadFailed': '告警概览加载失败',
+  'dashboard.alerts.noPermission': '当前账号缺少 alert.read 权限，看不到告警概览。',
 
   'dashboard.releases.title': '最近发布',
   'dashboard.releases.subtitle': '最近 5 次发布及其执行结果',

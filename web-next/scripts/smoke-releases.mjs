@@ -333,6 +333,10 @@ async function run() {
     const posts = () => writes(calls).filter((call) => call.method === 'POST')
 
     await login(page, base, { password: PASSWORD })
+    // 登录后默认落在 #/：首页总览会预取 /apps 等列表（照样留在 calls 里，不靠过滤抹掉）。
+    // 等首页首屏（总览标题）渲染完记基线，之后只数发布列表页自己发的 /apps。
+    await page.waitForSelector('.ls-adminpage__title', { timeout: 15000 })
+    const callsSince = calls.length
     await page.goto(`${base}/#/releases`, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('#releases-title', { timeout: 15000 })
 
@@ -363,8 +367,15 @@ async function run() {
     )
     const listText = await page.locator('body').innerText()
     check('列表页不出现 app_id 形态文本', !/app-shop|app-api/.test(listText))
-    const appListGets = calls.filter((call) => call.method === 'GET' && call.path === '/api/v1/apps')
-    check('列表只拉一次应用列表（不按行请求）', appListGets.length === 1, `${appListGets.length} 次`)
+    const appsGets = (list) => list.filter((call) => call.method === 'GET' && call.path === '/api/v1/apps')
+    // 抖动窗口：行渲染完再等一拍，任何轮询/按行补请求都会把增量推成 >1。
+    await page.waitForTimeout(800)
+    const appListGetsSettled = appsGets(calls.slice(callsSince))
+    check(
+      '列表只拉一次应用列表（不按行请求）',
+      appListGetsSettled.length === 1,
+      `目标页 ${appListGetsSettled.length} 次（首页预取 ${appsGets(calls.slice(0, callsSince)).length} 次，总计 ${calls.length} 条）`,
+    )
 
     // 2) 搜索与状态筛选
     await page.fill('#releases-search', '2.1.0')
