@@ -221,7 +221,7 @@ async function installMockApi(context) {
 
     if (path === '/api/v1/auth/me' && method === 'GET') {
       const header = request.headers().authorization || ''
-      if (header === `Bearer ${SMOKE_TOKEN}`) return json(200, { user: SMOKE_USER })
+      if (header === `Bearer ${SMOKE_TOKEN}`) return json(200, SMOKE_USER)
       return json(401, { error: { code: 'unauthorized', message: 'missing or invalid token' } })
     }
 
@@ -337,11 +337,15 @@ async function run() {
     check('刷新后会话仍在（守卫用 /auth/me 复验）', !page.url().includes('#/login'))
     check('刷新后确实复验了会话', apiCalls.includes('GET /api/v1/auth/me'))
 
-    // 5) 登出 → 清 token 并回到登录页
+    // 5) 登出 → 清 token 并回到登录页；刷新后仍停在登录页（不靠内存态兜底）
     await page.click('.ls-topbar__end .ls-icon-btn:last-of-type')
     await page.waitForSelector('#login-username', { timeout: 15000 })
     check('登出后回到登录页', page.url().includes('#/login'))
     check('登出后 token 已清除', (await tokenKeys(page)).length === 0)
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('#login-username', { timeout: 15000 })
+    check('登出后刷新仍停在登录页', page.url().includes('#/login'), page.url().split('#')[1] || '')
+    check('登出后刷新 token 仍为空', (await tokenKeys(page)).length === 0)
 
     // 6) 窄宽 320px：登录卡片不产生横向滚动，提交按钮仍在视口内
     await page.setViewportSize({ width: 320, height: 800 })

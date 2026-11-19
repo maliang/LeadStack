@@ -10,6 +10,7 @@
     "typecheck": "vue-tsc -b",
     "preview": "vite preview",
     "smoke:login": "node scripts/smoke-login.mjs",
+    "smoke:logout": "node scripts/smoke-logout.mjs",
     "check:nav": "node scripts/check-nav-route-permissions.mjs"
   },
   "dependencies": {

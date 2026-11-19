@@ -91,13 +91,18 @@ onMounted(() => {
 })
 
 /**
- * 会话失效（主动登出 / 401 被 onUnauthorized 清态）后立刻回登录页。
- * 只靠守卫不够：登出发生时没有导航，页面会停在一个空壳上。
+ * 会话失效（401 被 onUnauthorized 清态）后立刻回登录页。
+ * 只靠守卫不够：清态发生时没有导航，页面会停在一个空壳上。
+ *
+ * 不能按「当前路由是否 public」早退：/forbidden 是 public 且挂外壳的页面，
+ * 在这里早退会让 401 / 登出后的用户永远停在无权限页（登出按钮已随匿名态消失）。
+ * 唯一的例外是已经在登录页本身，否则会产生一次自我跳转。
+ * 主动登出另有 handleLogout 里的显式导航，不依赖本 watcher。
  */
 watch(status, (value) => {
   if (value !== 'anonymous') return
-  if (route.meta.public === true) return
-  const redirect = route.fullPath === '/' ? {} : { redirect: route.fullPath }
+  if (route.name === 'login') return
+  const redirect = route.meta.public === true || route.fullPath === '/' ? {} : { redirect: route.fullPath }
   void router.replace({ name: 'login', query: redirect })
 })
 
@@ -111,9 +116,18 @@ function handleRetry(): void {
   void refreshSession()
 }
 
-function handleLogout(): void {
+/**
+ * 主动登出：logout() 保证「请求失败也清本地态」，这里无条件回登录页。
+ * 不能只靠 status watcher —— 用户可能停在 public 路由（如 /forbidden），
+ * 那一路 watcher 的语义是「会话失效兜底」，不该成为登出的唯一出口。
+ */
+async function handleLogout(): Promise<void> {
   closeDrawer(false)
-  void logout()
+  try {
+    await logout()
+  } finally {
+    await router.replace({ name: 'login' })
+  }
 }
 </script>
 
