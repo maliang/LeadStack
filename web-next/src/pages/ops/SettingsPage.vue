@@ -9,6 +9,7 @@ import { useI18n } from '@/i18n'
 import { api, type NetworkConfig, type NetworkUpdatePayload, type SystemInfo } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import { parsePort, validateListenAddress, validatePublicUrl } from '@/lib/network'
+import UpgradeCard from '@/components/system/UpgradeCard.vue'
 
 const { t } = useI18n()
 const { can } = useCan()
@@ -391,6 +392,8 @@ onMounted(() => {
       <div v-else id="settings-network-no-permission" class="ls-notice ls-settingspage__wide">
         <p class="ls-notice__title">{{ t('ops.settings.networkNeedsPermission') }}</p>
       </div>
+
+      <UpgradeCard v-if="canManage" />
 
       <section class="ls-card ls-settingspage__wide">
         <header class="ls-card__head">

@@ -422,6 +422,24 @@ export type UpdatePhase =
   | 'stalled'
   | string
 
+/**
+ * 一条升级历史（internal/api/update_types.go: UpgradeHistoryEntry）。
+ * history[0] 是最新一条；自升级重启后内存 job 丢失时，它是判定终态的唯一持久化证据。
+ */
+export interface UpdateHistoryEntry {
+  ts: number
+  outcome: string
+  from_version: string
+  target_version: string
+  reason?: string
+}
+
+/** 落盘的在途升级状态；成功路径上 state.json 会被清掉，所以经常缺省。 */
+export interface UpdatePendingState {
+  target_version: string
+  from_version: string
+}
+
 export interface UpdateStatus {
   job_id: string | null
   phase: UpdatePhase
@@ -440,6 +458,10 @@ export interface UpdateStatus {
   phase_started_at: number | null
   /** 当前阶段已耗时（秒），由服务端在 state 锁内算好，前端不自己拿时间戳猜。 */
   phase_elapsed_s: number | null
+  /** 升级历史（最新在前）。重启后无 job 时靠它判定 success/rollback。 */
+  history?: UpdateHistoryEntry[]
+  /** 在途升级状态；成功路径上通常已被清掉（后端只在该文件存在时返回）。 */
+  pending_state?: UpdatePendingState | null
 }
 
 export interface HealthInfo {
@@ -2376,6 +2398,23 @@ function normalizeUpdatePhase(value: unknown): UpdatePhase {
   return map[phase] ?? (phase === '' ? 'idle' : phase)
 }
 
+function normalizeUpdateHistory(input: unknown): UpdateHistoryEntry | null {
+  const raw = toRecord(input)
+  if (!raw) return null
+  const outcome = toText(raw.outcome)
+  const target = toText(raw.target_version)
+  // outcome/target 缺一就失去判定价值；丢掉比留一条半残记录更安全。
+  if (!outcome || !target) return null
+  const reason = toText(raw.reason)
+  return {
+    ts: toNumber(raw.ts) ?? 0,
+    outcome,
+    from_version: toText(raw.from_version) ?? '',
+    target_version: target,
+    ...(reason ? { reason } : {}),
+  }
+}
+
 export function normalizeUpdateStatus(input: unknown): UpdateStatus {
   const payload = toRecord(input) ?? {}
   // 后端有两种形状，job 快照的字段不一定在顶层：
@@ -2385,6 +2424,12 @@ export function normalizeUpdateStatus(input: unknown): UpdateStatus {
   // 不先拆这一层时 phase 恒为空 → 归一成 idle，进度面板永远停在第一步（真实缺陷，非理论问题）。
   const raw = toRecord(payload.job) ?? toRecord(payload.status) ?? payload
   const phase = normalizeUpdatePhase(raw.phase ?? raw.stage ?? raw.state)
+  // history / pending_state 只存在于 GET /status 的顶层；202 响应（{job_id,status:{…}}）里没有。
+  const history = extractList(payload.history ?? raw.history, ['history'])
+    .map(normalizeUpdateHistory)
+    .filter((entry): entry is UpdateHistoryEntry => entry !== null)
+  const pendingRaw = toRecord(payload.pending_state ?? raw.pending_state)
+  const pendingTarget = toText(pendingRaw?.target_version)
   return {
     job_id: toText(raw.job_id ?? raw.jobId),
     phase,
@@ -2401,6 +2446,10 @@ export function normalizeUpdateStatus(input: unknown): UpdateStatus {
     stalled: toBool(raw.stalled) || phase === 'stalled',
     phase_started_at: toNumber(raw.phase_started_at),
     phase_elapsed_s: toNumber(raw.phase_elapsed_s),
+    history,
+    pending_state: pendingTarget
+      ? { target_version: pendingTarget, from_version: toText(pendingRaw?.from_version) ?? '' }
+      : null,
   }
 }
 

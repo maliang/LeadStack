@@ -602,14 +602,15 @@ leadstack network --show
 发布物在 GitHub Releases（每个 tag 产出 5 平台 × 2 二进制 + `checksums.txt`；到不了 GitHub 见「快速开始 → 方式 4」）。地址与各平台实测结论见
 [升级链路验证报告](docs/UPGRADE-VERIFY.md)，完整 runbook 见 [UPGRADE.md](docs/UPGRADE.md)。
 
-**控制端自升级（控制台界面待接入）**：后端已实现
+**控制端自升级（控制台已接入）**：后端实现
 **检查 → 自动备份 → 下载校验 → A/B 替换 → 重启**，入口为 `/api/v1/system/update/check`、`/apply`、`/status`；
-新版本起不来时**独立 watchdog 自动回退**（含数据恢复到升级前）。`web-next` 控制台**尚未提供「版本与升级」入口**，
-界面补齐前请走下方「手动三步」或直接调接口。
+新版本起不来时**独立 watchdog 自动回退**（含数据恢复到升级前）。`web-next` 控制台已在**设置页**提供「版本与升级」面板：
+可在面板里检查更新、一键升级，或在离网环境上传本地升级包（上传入口只收解压后的裸二进制）；需要排查时也可直接调接口。
+自升级重启后页面会依据状态接口里持久化的 `history` 收口：当前版本刷新、阶段落到终态并停止轮询。
 可关掉：`LEADSTACK_UPGRADE_ENABLED=false`。自动升级只在触发后发生，不会后台偷跑；Windows 不支持进程内自升级。
 
 **卡住不动**：每个阶段超过 `LEADSTACK_UPGRADE_STALL_TIMEOUT`（默认 `10m`）没有推进，控制端会自己判失败并释放升级锁（不会一直 409）。
-取证与自救见 [架构契约 §51.4](docs/ARCHITECTURE.md) 与下方常见问题；`stalled` 的展示面板尚未接入控制台，判定仍以接口为准。
+取证与自救见 [架构契约 §51.4](docs/ARCHITECTURE.md) 与下方常见问题；设置页的升级面板会把 `stalled` 标为「升级可能已中断」并停止轮询，最终判定仍以接口与日志为准。
 
 **手动三步**：
 
@@ -771,7 +772,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/system/up
 - 卡在 `exec` 之前（备份/下载/校验/解压/换文件）：二进制没动过，修好网络或磁盘后**重新触发升级**，不用恢复备份、也不用重启进程。
 - 卡在 `exec` 之后（新版本已就位却没起来）：独立 watchdog 会在 `LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT`（默认 `120s`）内自动回退，先别手工搬文件，等一个周期看 `/healthz` 版本与状态接口里的 `history`（`outcome` 为 `rollback`，带 `reason`）。
 - `running=true` 且 `phase_elapsed_s` 远超 `stall_timeout_s` 仍不转 `stalled`：说明看门狗没在跑（进程卡死），重启控制端再判断；手工回滚见[版本升级与回滚 §7](docs/UPGRADE.md)。
-- `stalled` 只是接口状态，控制台的升级面板尚未接入；排障以接口的 `done`/`error` 为准。
+- `stalled` 只是接口状态，设置页的升级面板会把它显示为「升级可能已中断」并停止轮询；排障仍以接口的 `done`/`error` 为准。
 
 字段语义、看门狗周期与 `state.json` 判据见 [架构契约 §51.4](docs/ARCHITECTURE.md)。
 
