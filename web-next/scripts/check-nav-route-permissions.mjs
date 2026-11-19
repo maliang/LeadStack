@@ -3,7 +3,8 @@
  * 菜单权限 × 路由权限一致性校验（静态解析，无依赖，不需要构建）。
  *
  * 背景：左侧菜单权限点写在 src/lib/nav.ts 的 NAV_GROUPS[].permission，
- * 路由权限门写在 src/router/index.ts 的 route.meta.permission，两份定义各自维护、
+ * 路由权限门写在 src/router/routes/*.ts 的 route.meta.permission（汇总见 routes/index.ts，
+ * 实例与守卫在 src/router/index.ts），两份定义各自维护、
  * 没有任何一致性断言。漂移会变成两种线上故障：
  *   ① 菜单有 permission、路由没门  → 菜单看不到，但直接输地址 / 分享链接就能进；
  *   ② 路由有 permission、菜单没有  → 菜单看得见，点进去被踢到 /forbidden。
@@ -31,6 +32,8 @@ const root = argRoot !== -1 && process.argv[argRoot + 1]
 
 const NAV_FILE = resolve(root, 'src/lib/nav.ts')
 const ROUTER_FILE = resolve(root, 'src/router/index.ts')
+const ROUTES_INDEX_FILE = resolve(root, 'src/router/routes/index.ts')
+const ROUTES_DIR = resolve(root, 'src/router/routes')
 
 /** 只有这一条允许「菜单与路由都不设权限门」，且必须两侧一致。 */
 const KNOWN_UNGUARDED = new Map([
@@ -76,8 +79,10 @@ function parseNav(source) {
   return items
 }
 
-function parseRoutes(source) {
-  const block = sliceBlock(source, 'const routes: RouteRecordRaw[] = [', '\n]\n', 'src/router/index.ts')
+/** 从一个领域模块里解析 `export const xRoutes: RouteRecordRaw[] = [...]` 的路由记录。 */
+function parseRouteModule(file, exportName) {
+  const source = readSource(file, `路由模块 ${exportName}`)
+  const block = sliceBlock(source, `export const ${exportName}: RouteRecordRaw[] = [`, '\n]\n', file)
   const routes = []
   const pathMatches = [...block.matchAll(/path:\s*'([^']+)'/g)]
   pathMatches.forEach((match, index) => {
@@ -88,12 +93,45 @@ function parseRoutes(source) {
     const isPublic = /public:\s*true/.test(body)
     routes.push({ path: match[1], permission: permission ? permission[1] : null, isPublic })
   })
-  if (routes.length === 0) fail('src/router/index.ts 没有解析出任何路由')
+  return routes
+}
+
+/**
+ * 路由记录已按领域拆分：index.ts 只 import 汇总模块，routes/index.ts 再 import 各领域模块并展开。
+ * 这里沿 import 链取真实拼装顺序，并双向断言「导入了的必须拼进 routes、拼进去的必须已导入」，
+ * 避免某个模块写了但没被汇总（路由存在却没人校验）或汇总引用了不存在的模块。
+ */
+function parseRoutes() {
+  const routerSource = readSource(ROUTER_FILE, '路由定义')
+  if (!/from\s+'\.\/routes'/.test(routerSource)) {
+    fail("src/router/index.ts 没有从 './routes' 引入路由表（拆分后必须走汇总模块）")
+  }
+
+  const aggregate = readSource(ROUTES_INDEX_FILE, '路由汇总模块')
+  const imports = [...aggregate.matchAll(/import\s*\{\s*(\w+)\s*\}\s*from\s*'\.\/([\w-]+)(?:\.ts)?'/g)].map(
+    (match) => ({ exportName: match[1], file: match[2] }),
+  )
+  if (imports.length === 0) fail('src/router/routes/index.ts 没有解析出任何领域模块 import')
+
+  const spreadOrder = [...aggregate.matchAll(/\.\.\.(\w+)/g)].map((match) => match[1])
+  for (const { exportName } of imports) {
+    if (!spreadOrder.includes(exportName)) fail(`模块 ${exportName} 已 import 但没有拼进 routes（会被静默丢弃）`)
+  }
+  for (const name of spreadOrder) {
+    if (!imports.some((item) => item.exportName === name)) fail(`routes 里拼装了未 import 的 ${name}`)
+  }
+
+  const routes = []
+  for (const exportName of spreadOrder) {
+    const imported = imports.find((item) => item.exportName === exportName)
+    routes.push(...parseRouteModule(resolve(ROUTES_DIR, `${imported.file}.ts`), exportName))
+  }
+  if (routes.length === 0) fail('src/router/routes 没有解析出任何路由')
   return routes
 }
 
 const navItems = parseNav(readSource(NAV_FILE, '菜单定义'))
-const routes = parseRoutes(readSource(ROUTER_FILE, '路由定义'))
+const routes = parseRoutes()
 
 const navByPath = new Map()
 for (const item of navItems) {

@@ -11,7 +11,9 @@
     "preview": "vite preview",
     "smoke:login": "node scripts/smoke-login.mjs",
     "smoke:logout": "node scripts/smoke-logout.mjs",
-    "check:nav": "node scripts/check-nav-route-permissions.mjs"
+    "check:nav": "node scripts/check-nav-route-permissions.mjs",
+    "check:i18n": "node scripts/check-i18n-keys.mjs",
+    "check:routes": "node scripts/check-route-count.mjs 22"
   },
   "dependencies": {
     "@vean/ui": "^0.51.5",

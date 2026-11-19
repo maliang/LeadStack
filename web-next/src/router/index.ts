@@ -1,10 +1,16 @@
-import { createRouter, createWebHashHistory, type RouteLocationNormalized, type RouteRecordRaw } from 'vue-router'
+import { createRouter, createWebHashHistory, type RouteLocationNormalized } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
+import { routes } from './routes'
 
 /**
- * 路由表 + 会话/权限守卫。
+ * 路由实例 + 会话/权限守卫。
  *
- * 约定（与旧版 web/src/App.tsx 的 PrivateRoute + PermissionGate 对齐）：
+ * 拆分约定（为并行开发解锁）：路由记录按领域放在 src/router/routes/*.ts
+ * （servers / tools / deploy / system / misc），本文件只负责：
+ * RouteMeta 契约、路由实例、登录与权限守卫、文档标题。
+ * 新增页面只改对应领域文件，不要在这里再堆 route 记录。
+ *
+ * 守卫约定（与旧版 web/src/App.tsx 的 PrivateRoute + PermissionGate 对齐）：
  * - 默认所有页面都需要登录；公开页显式写 meta.public。
  * - 页面级权限点写 meta.permission，缺权限时进入 /forbidden（不白屏、不静默跳首页）。
  * - 守卫在导航前 await ensureSession()，保证刷新后带 token 也能直接落到目标页。
@@ -29,225 +35,11 @@ declare module 'vue-router' {
 /** 终端 / 文件 / 日志三个入口页共用的工具类型（页面从 meta.toolKind 读取，不写三份页）。 */
 export type ServerToolKind = 'terminal' | 'files' | 'logs'
 
-const routes: RouteRecordRaw[] = [
-  // ── 监控 ────────────────────────────────────────────────────────────────
-  {
-    path: '/',
-    name: 'home',
-    component: () => import('@/views/HomeView.vue'),
-    meta: { title: '总览', permission: 'server.read' },
-  },
-  {
-    path: '/servers/:id',
-    name: 'server-detail',
-    component: () => import('@/pages/ServerDetailPage.vue'),
-    meta: { title: '服务器详情', permission: 'server.read' },
-  },
-  {
-    path: '/checks',
-    name: 'checks',
-    component: () => import('@/pages/ChecksPage.vue'),
-    meta: { title: '检测', permission: 'check.read' },
-  },
-  {
-    path: '/alerts',
-    name: 'alerts',
-    component: () => import('@/pages/AlertsPage.vue'),
-    meta: { title: '告警', permission: 'alert.read' },
-  },
+/** 汇总后的路由表：领域模块拼装结果，供测试/校验脚本与外部消费。 */
+export { routes }
 
-  // ── 运维 ────────────────────────────────────────────────────────────────
-  {
-    path: '/terminal',
-    name: 'terminal',
-    component: () => import('@/pages/ToolsEntryPage.vue'),
-    meta: { title: '终端', permission: 'terminal.use', toolKind: 'terminal' },
-  },
-  {
-    path: '/files',
-    name: 'files',
-    component: () => import('@/pages/ToolsEntryPage.vue'),
-    meta: { title: '文件', permission: 'terminal.use', toolKind: 'files' },
-  },
-  {
-    path: '/logs',
-    name: 'logs',
-    component: () => import('@/pages/ToolsEntryPage.vue'),
-    meta: { title: '日志', permission: 'terminal.use', toolKind: 'logs' },
-  },
-  {
-    path: '/scheduled-tasks',
-    name: 'scheduled-tasks',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '定时任务', permission: 'task.read' },
-  },
-  {
-    path: '/import',
-    name: 'import',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '导入主机', permission: 'server.write' },
-  },
-
-  // ── 发布 ────────────────────────────────────────────────────────────────
-  {
-    path: '/apps',
-    name: 'apps',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '应用', permission: 'deploy.read' },
-  },
-  {
-    path: '/apps/:id',
-    name: 'app-detail',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '应用详情', permission: 'server.read' },
-  },
-  {
-    path: '/releases',
-    name: 'releases',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '发布', permission: 'deploy.read' },
-  },
-  {
-    path: '/releases/:id',
-    name: 'release-detail',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '发布详情', permission: 'server.read' },
-  },
-
-  // ── 系统 ────────────────────────────────────────────────────────────────
-  {
-    path: '/credentials',
-    name: 'credentials',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '凭证', permission: 'server.write' },
-  },
-  {
-    path: '/users',
-    name: 'users',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '用户', permission: 'user.manage' },
-  },
-  {
-    path: '/roles',
-    name: 'roles',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '角色与权限', permission: 'role.manage' },
-  },
-  {
-    path: '/groups',
-    name: 'groups',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '服务器分组', permission: 'server.read' },
-  },
-  {
-    path: '/tokens',
-    name: 'tokens',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: 'API 令牌', permission: 'token.manage' },
-  },
-  {
-    path: '/audit',
-    name: 'audit',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '审计', permission: 'audit.read' },
-  },
-  {
-    path: '/backups',
-    name: 'backups',
-    component: () => import('@/views/NotYetView.vue'),
-    meta: { title: '备份', permission: 'backup.read' },
-  },
-  {
-    path: '/settings',
-    name: 'settings',
-    component: () => import('@/views/NotYetView.vue'),
-    // 这里刻意不加路由级权限门：设置页对所有人可见（nav.ts 的设置项也没带 permission），
-    // 页内自己判 can('system.manage') 并给「需要系统管理权限」提示，与旧 React 界面一致。
-    // 不要在这里加 permission，否则无系统管理权限的角色会被直接踢到 /forbidden。
-    meta: { title: '设置' },
-  },
-
-  // ── 独立页（meta 保持不变）─────────────────────────────────────────────
-  {
-    path: '/servers',
-    name: 'servers',
-    component: () => import('@/pages/ServersPage.vue'),
-    meta: { title: '服务器', permission: 'server.read' },
-  },
-  {
-    path: '/login',
-    name: 'login',
-    component: () => import('@/pages/LoginPage.vue'),
-    meta: { title: '登录', public: true, layout: 'blank' },
-  },
-  {
-    path: '/forbidden',
-    name: 'forbidden',
-    component: () => import('@/pages/ForbiddenPage.vue'),
-    meta: { title: '无权限', public: true },
-  },
-  {
-    path: '/about',
-    name: 'about',
-    component: () => import('@/views/AboutView.vue'),
-    meta: { title: '关于' },
-  },
-
-  // ── 兜底：显式 404，不再静默 redirect 到 / ─────────────────────────────
-  {
-    path: '/:pathMatch(.*)*',
-    name: 'not-found',
-    component: () => import('@/views/NotFoundView.vue'),
-    meta: { title: '页面不存在' },
-  },
-]
-
-/**
- * 服务器详情页的面板契约（深链 `?tab=` 与页内切换共用一份）。
- *
- * 页面只拿这里的结果读写 URL，避免「URL 里能写、页面不认」：
- * - 读：normalizeServerDetailTab(route.query.tab)，未知值一律回 overview；
- * - 写：SERVER_DETAIL_TAB_QUERY[tab]；overview 是默认值，写回时省略参数让地址干净。
- */
-export type ServerDetailTab =
-  | 'overview'
-  | 'access'
-  | 'login'
-  | 'meta'
-  | 'checks'
-  | 'terminal'
-  | 'files'
-  | 'logs'
-
-export const SERVER_DETAIL_TABS: readonly ServerDetailTab[] = [
-  'overview',
-  'access',
-  'login',
-  'meta',
-  'checks',
-  'terminal',
-  'files',
-  'logs',
-]
-
-export const SERVER_DETAIL_TAB_QUERY: Record<ServerDetailTab, { tab: ServerDetailTab } | null> = {
-  overview: null,
-  access: { tab: 'access' },
-  login: { tab: 'login' },
-  meta: { tab: 'meta' },
-  checks: { tab: 'checks' },
-  terminal: { tab: 'terminal' },
-  files: { tab: 'files' },
-  logs: { tab: 'logs' },
-}
-
-/** 深链值归一化：`?tab=logs` / `?tab=files` 等原样认，其他（含数组首值）回 overview。 */
-export function normalizeServerDetailTab(raw: unknown): ServerDetailTab {
-  const value = Array.isArray(raw) ? raw[0] : raw
-  return typeof value === 'string' && (SERVER_DETAIL_TABS as readonly string[]).includes(value)
-    ? (value as ServerDetailTab)
-    : 'overview'
-}
+/** 服务器详情页面板契约：页面仍从 '@/router' 引入，实现移到独立模块。 */
+export * from './serverDetailTab'
 
 const router = createRouter({
   // 构建产物由 Go 二进制在子路径下托管，hash 路由不依赖服务端 rewrite。

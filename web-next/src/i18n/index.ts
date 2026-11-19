@@ -1,6 +1,6 @@
 import { onScopeDispose, ref, type Ref } from 'vue'
-import zhCN from './zh-CN'
-import enUS from './en-US'
+import zhCN from './zh-CN/index'
+import enUS from './en-US/index'
 
 /**
  * Vue 版 i18n 入口（对应 web/src/i18n/index.ts 的非 React 部分）。

@@ -841,7 +841,12 @@ make dev               # 开发模式（另开 make web-dev 走前端热更新�
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check      # Docker 构建 + 容器内健康检查 + 备份校验
 node scripts/capture-screenshots.mjs   # 重采 README 截图（需带演示数据的控制端）
+node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 2202 校验总数）
 ```
+
+前端文案按领域拆在 `web-next/src/i18n/<locale>/{common,servers,deploy,system,tools,alerts,checks,legacy}.ts`，
+两份语言的领域文件同名同结构、键集合必须逐字相等；改文案只动对应领域文件，不要塞回合并入口。
+新增键后先跑 `node web-next/scripts/check-i18n-keys.mjs`（等价于 `pnpm --dir web-next run check:i18n`）。
 
 单独跑某一套（需先 `make build && make devssh`）：
 
