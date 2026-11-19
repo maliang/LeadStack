@@ -13,7 +13,17 @@ import ServerTerminalPanel from '@/components/server-tools/ServerTerminalPanel.v
 import { useCan } from '@/composables/useCan'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 import { useI18n } from '@/i18n'
-import { api, type CheckItem, type Server, type ServerAccess, type ServerLoginResult } from '@/lib/api'
+import {
+  api,
+  type AgentUpgradeResult,
+  type CheckItem,
+  type MetricsResponse,
+  type MetricsStep,
+  type Server,
+  type ServerAccess,
+  type ServerLoginResult,
+  type TestConnectionResult,
+} from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import { serverAddress } from '@/lib/format'
 import {
@@ -27,6 +37,12 @@ import {
   metaFieldsFromRows,
   type MetaRow,
 } from '@/lib/server-detail'
+import {
+  isSha256Hex,
+  metricsRange,
+  type AgentUpgradeDraft,
+  type MetricsWindow,
+} from '@/lib/server-metrics'
 
 /**
  * 服务器详情页：八个 tab（概览 / 登录信息 / 一键登录 / 服务器档案 / 检测 / 终端 / 文件 / 日志）。
@@ -100,6 +116,27 @@ const loginNotice = ref<string | null>(null)
 const panelBusy = ref(false)
 const panelError = ref<string | null>(null)
 
+/* 指标曲线（只读，server.read） ------------------------------------ */
+const metricsWindow = ref<MetricsWindow>('1h')
+const metricsStep = ref<MetricsStep>('raw')
+const metrics = ref<MetricsResponse | null>(null)
+const metricsLoading = ref(false)
+const metricsError = ref<string | null>(null)
+const metricsFrom = ref(0)
+const metricsTo = ref(0)
+let metricsRequest = 0
+
+/* 主机信息刷新 / 测试连接 / Agent 升级（server.write） ------------- */
+const hostBusy = ref(false)
+const hostError = ref<string | null>(null)
+const hostNotice = ref<string | null>(null)
+const connection = ref<TestConnectionResult | null>(null)
+const connectionBusy = ref(false)
+const connectionError = ref<string | null>(null)
+const upgradeBusy = ref(false)
+const upgradeResult = ref<AgentUpgradeResult | null>(null)
+const upgradeError = ref<string | null>(null)
+
 /* 服务器档案 ------------------------------------------------------- */
 const metaSaving = ref(false)
 const metaError = ref<string | null>(null)
@@ -114,6 +151,7 @@ const checksError = ref<string | null>(null)
 const checksLoaded = ref(false)
 
 const canWrite = computed(() => can('server.write'))
+const canRead = computed(() => can('server.read'))
 const canTerminal = computed(() => can('terminal.use'))
 const serverChecks = computed(() => checksForServer(checks.value, serverId.value))
 const title = computed(() => server.value?.name || serverId.value)
@@ -133,6 +171,8 @@ async function loadServer(initial = false): Promise<void> {
     const fresh = await api.server(serverId.value)
     server.value = fresh
     status.value = 'ready'
+    // 指标只在首次进入（或切换服务器后）自动拉一次；刷新按钮不重复打指标接口。
+    if (canRead.value && metrics.value === null && !metricsLoading.value) void loadMetrics()
   } catch (error) {
     const message = errorMessage(error, t('server.detail.loadFailed'))
     if (/404|not found|不存在/i.test(message)) {
@@ -233,6 +273,100 @@ async function openPanel(): Promise<void> {
   }
 }
 
+/* 指标曲线 --------------------------------------------------------- */
+
+/**
+ * 拉一次指标：时间窗 → from/to 毫秒，step 由用户选择。
+ * 后端在 step=raw 且跨度 > 6h 时会自动降级并回传实际 step，这里不覆盖用户选择。
+ */
+async function loadMetrics(): Promise<void> {
+  if (!canRead.value) return
+  metricsRequest += 1
+  const token = metricsRequest
+  metricsLoading.value = true
+  metricsError.value = null
+  const range = metricsRange(metricsWindow.value)
+  metricsFrom.value = range.from
+  metricsTo.value = range.to
+  try {
+    const data = await api.metrics(serverId.value, {
+      from: range.from,
+      to: range.to,
+      step: metricsStep.value,
+    })
+    if (token !== metricsRequest) return
+    metrics.value = data
+  } catch (error) {
+    if (token !== metricsRequest) return
+    metrics.value = null
+    metricsError.value = errorMessage(error, t('servers.detail.metrics.loadFailed'))
+  } finally {
+    if (token === metricsRequest) metricsLoading.value = false
+  }
+}
+
+/* 主机信息刷新：成功后用返回的 HostInfo 覆盖展示 -------------------- */
+
+async function refreshHost(): Promise<void> {
+  if (hostBusy.value || !canWrite.value) return
+  hostBusy.value = true
+  hostError.value = null
+  hostNotice.value = null
+  try {
+    const info = await api.refreshHostInfo(serverId.value)
+    if (!info) {
+      hostError.value = t('server.overview.hostEmpty')
+      return
+    }
+    if (server.value) server.value = { ...server.value, host_info: info }
+    hostNotice.value = t('servers.detail.host.refreshed')
+  } catch (error) {
+    hostError.value = errorMessage(error, t('servers.detail.host.refreshFailed'))
+  } finally {
+    hostBusy.value = false
+  }
+}
+
+/* 测试连接：ok=false 时把后端 error 原样交给界面，不再包装一层 --------- */
+
+async function testConnection(): Promise<void> {
+  if (connectionBusy.value || !canWrite.value) return
+  connectionBusy.value = true
+  connectionError.value = null
+  connection.value = null
+  try {
+    connection.value = await api.testConnection(serverId.value)
+  } catch (error) {
+    connectionError.value = errorMessage(error, t('servers.detail.testConnection.requestFailed'))
+  } finally {
+    connectionBusy.value = false
+  }
+}
+
+/* Agent 升级：sha256 前端先校验，不合规不发请求 ---------------------- */
+
+async function submitAgentUpgrade(payload: AgentUpgradeDraft): Promise<void> {
+  if (upgradeBusy.value || !canWrite.value) return
+  if (!isSha256Hex(payload.sha256)) {
+    upgradeError.value = t('servers.detail.agentUpgrade.error.invalidSha256')
+    return
+  }
+  upgradeBusy.value = true
+  upgradeError.value = null
+  upgradeResult.value = null
+  try {
+    upgradeResult.value = await api.agentUpgrade(serverId.value, {
+      version: payload.version,
+      url: payload.url,
+      sha256: payload.sha256,
+    })
+  } catch (error) {
+    upgradeError.value = errorMessage(error, t('servers.detail.agentUpgrade.failed'))
+  } finally {
+    upgradeBusy.value = false
+  }
+}
+
 /* 服务器档案：PATCH 后必须重新 GET 详情（PATCH 响应不含档案） --------- */
 
 async function saveMeta(payload: { notes: string; rows: MetaRow[] }): Promise<void> {
@@ -304,6 +438,12 @@ watch(tab, (next) => {
 // 详情读回来之后 tab 栏才挂载，深链要在这时再滚一次。
 watch(server, () => void revealActiveTab())
 
+watch([metricsWindow, metricsStep], () => void loadMetrics())
+
+watch(canRead, (allowed) => {
+  if (allowed && server.value && metrics.value === null && !metricsLoading.value) void loadMetrics()
+})
+
 watch(serverId, () => {
   server.value = null
   status.value = 'loading'
@@ -316,6 +456,21 @@ watch(serverId, () => {
   loginError.value = null
   loginNotice.value = null
   panelError.value = null
+  metricsRequest += 1
+  metrics.value = null
+  metricsError.value = null
+  metricsLoading.value = false
+  metricsFrom.value = 0
+  metricsTo.value = 0
+  hostBusy.value = false
+  hostError.value = null
+  hostNotice.value = null
+  connection.value = null
+  connectionBusy.value = false
+  connectionError.value = null
+  upgradeBusy.value = false
+  upgradeResult.value = null
+  upgradeError.value = null
   metaError.value = null
   metaNotice.value = null
   metaReloadError.value = null
@@ -440,7 +595,31 @@ onMounted(() => {
           :server="server"
           :panel-busy="panelBusy"
           :panel-error="panelError"
+          :can-read="canRead"
+          :can-write="canWrite"
+          :metrics="metrics"
+          :metrics-loading="metricsLoading"
+          :metrics-error="metricsError"
+          :metrics-window="metricsWindow"
+          :metrics-step="metricsStep"
+          :metrics-from="metricsFrom"
+          :metrics-to="metricsTo"
+          :host-busy="hostBusy"
+          :host-error="hostError"
+          :host-notice="hostNotice"
+          :connection="connection"
+          :connection-busy="connectionBusy"
+          :connection-error="connectionError"
+          :upgrade-busy="upgradeBusy"
+          :upgrade-result="upgradeResult"
+          :upgrade-error="upgradeError"
           @open-panel="openPanel"
+          @metrics-window="metricsWindow = $event"
+          @metrics-step="metricsStep = $event"
+          @metrics-retry="loadMetrics"
+          @refresh-host="refreshHost"
+          @test-connection="testConnection"
+          @agent-upgrade="submitAgentUpgrade"
         />
         <ServerAccessTab
           v-else-if="tab === 'access'"

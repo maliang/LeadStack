@@ -8,9 +8,23 @@ import { formatOs, formatRelativeTime, serverAddress } from '@/lib/format'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 
 /** 卡片视图：一眼回答「这台机器是谁、通不通、在哪」。展开终端/文件只在列表视图提供。 */
-const props = defineProps<{ server: Server }>()
+const props = withDefaults(
+  defineProps<{
+    server: Server
+    /** 无 server.write 时页面传 false：多选框不渲染 */
+    selectable?: boolean
+    selected?: boolean
+  }>(),
+  { selectable: false, selected: false },
+)
+
+const emit = defineEmits<{ (event: 'select', id: string, selected: boolean): void }>()
 
 const { t } = useI18n()
+
+function onSelect(event: Event): void {
+  emit('select', props.server.id, (event.target as HTMLInputElement).checked)
+}
 
 const titleId = computed(() => `server-card-${props.server.id}-title`)
 const detailTarget = computed(() => ({ name: 'server-detail', params: { id: props.server.id } }))
@@ -27,6 +41,14 @@ const mode = computed(() => props.server.mode.trim())
 <template>
   <article class="ls-srv-card" :aria-labelledby="titleId">
     <header class="ls-srv-card__head">
+      <label v-if="props.selectable" class="ls-srv-card__select">
+        <input
+          type="checkbox"
+          :checked="props.selected"
+          :aria-label="t('serversBatch.selectOne', { name: server.name })"
+          @change="onSelect"
+        />
+      </label>
       <h2 :id="titleId" class="ls-srv-card__title" :title="server.name">
         <RouterLink class="ls-srv-card__title-link" :to="detailTarget">{{ server.name }}</RouterLink>
       </h2>
@@ -82,5 +104,29 @@ const mode = computed(() => props.server.mode.trim())
   display: flex;
   justify-content: flex-end;
   margin-top: var(--ls-space-2);
+}
+
+/* 多选框：命中区 24px，视觉尺寸不撑大标题行 */
+.ls-srv-card__select {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  cursor: pointer;
+}
+
+.ls-srv-card__select input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--ls-primary-fill);
+  cursor: pointer;
+}
+
+/* 有第三列（多选框）时标题吃掉中间剩余宽度，状态仍贴右 */
+.ls-srv-card__head .ls-srv-card__title {
+  flex: 1 1 auto;
 }
 </style>

@@ -50,6 +50,7 @@ const PASSWORD = 'smoke-servers-password'
 
 const ALL_PERMISSIONS = ['server.read', 'server.write', 'server.update', 'server.edit', 'terminal.use']
 
+
 function user(permissions = ALL_PERMISSIONS) {
   return {
     id: 'smoke-servers-user',
@@ -87,6 +88,30 @@ function serverFixture(overrides) {
 
 const PANEL_URL = 'https://panel.example.com:8888/alpha'
 const LOGIN_TERMINAL = 'cd /www/wwwroot/alpha && bt 14 && echo ok'
+
+/* n3 新界面：指标 / 测试连接 / 刷新主机信息 / agent 升级 */
+const METRIC_POINTS = 6
+const METRICS_ERROR = 'metrics backend exploded while loading series'
+const CONN_ERROR = 'ssh: handshake failed: no matching host key type'
+const UPGRADE_ERROR = 'agent archive checksum mismatch: expected a valid sha256'
+const NEW_HOSTNAME = 'alpha-node-reborn'
+
+const CONN_OK = {
+  ok: true,
+  latency_ms: 12,
+  ssh_banner: 'SSH-2.0-OpenSSH_9.6p1',
+  host_key_fingerprint: 'SHA256:alphaHostKeyFingerprint0123456789',
+  error: null,
+}
+
+/** mock 指标点：均匀落在 [from, to] 内，点数固定，便于断言 polyline 点数。 */
+function metricPoints(from, to, base, count = METRIC_POINTS) {
+  return Array.from({ length: count }, (_, index) => ({
+    ts: from + Math.round(((to - from) * (index + 1)) / (count + 1)),
+    value: base + index * 1024 * 1024,
+  }))
+}
+
 
 const SERVER = serverFixture({
   id: 'srv-alpha',
@@ -375,6 +400,72 @@ async function installMockApi(context, state) {
       })
     }
 
+    // n3：指标曲线（GET /metrics?from&to&step）
+    const metrics = /^\/api\/v1\/servers\/([^/]+)\/metrics$/.exec(path)
+    if (metrics && method === 'GET') {
+      const from = Number(url.searchParams.get('from'))
+      const to = Number(url.searchParams.get('to'))
+      const step = url.searchParams.get('step') || ''
+      state.metricsCalls.push({ from, to, step })
+      if (state.metricsMode === 'error') {
+        return json(500, { error: { code: 'internal', message: METRICS_ERROR } })
+      }
+      if (state.metricsMode === 'empty') {
+        return json(200, { series: [], step })
+      }
+      return json(200, {
+        // 后端契约的字段名是 metric（不是 name）；两条曲线：内存与磁盘
+        series: [
+          { metric: 'mem.used_bytes', points: metricPoints(from, to, 2 * 1024 ** 3) },
+          { metric: 'disk.used_bytes', points: metricPoints(from, to, 40 * 1024 ** 3) },
+        ],
+        step,
+      })
+    }
+
+    // n3：测试连接（ok=false 时 error 原样展示）
+    const testConnection = /^\/api\/v1\/servers\/([^/]+)\/test-connection$/.exec(path)
+    if (testConnection && method === 'POST') {
+      state.connectionCalls += 1
+      if (state.connectionMode === 'fail') {
+        return json(200, {
+          ok: false,
+          latency_ms: null,
+          ssh_banner: null,
+          host_key_fingerprint: null,
+          error: CONN_ERROR,
+        })
+      }
+      return json(200, CONN_OK)
+    }
+
+    // n3：刷新主机信息 → 与后端 handlers_ssh.go:44 一致的真实形状 {data:{host_info:{...}}}
+    // 注意不能平铺成 host_info 本身，否则前端漏解包时回归仍会假绿。
+    const refreshHost = /^\/api\/v1\/servers\/([^/]+)\/refresh-host-info$/.exec(path)
+    if (refreshHost && method === 'POST') {
+      state.hostCalls += 1
+      return json(200, {
+        data: {
+          host_info: {
+            ...SERVER.host_info,
+            hostname: NEW_HOSTNAME,
+            collected_at: Date.now(),
+          },
+        },
+      })
+    }
+
+    // n3：agent 升级（请求体必须恰好 version/url/sha256 三字段）
+    const agentUpgrade = /^\/api\/v1\/servers\/([^/]+)\/agent-upgrade$/.exec(path)
+    if (agentUpgrade && method === 'POST') {
+      state.upgradeCalls += 1
+      state.upgradeBodies.push(JSON.parse(request.postData() || '{}'))
+      if (state.upgradeMode === 'fail') {
+        return json(200, { server_id: state.server.id, ok: false, error: UPGRADE_ERROR })
+      }
+      return json(202, { server_id: state.server.id, ok: true })
+    }
+
     return json(404, { error: { code: 'not_found', message: `mock api 未覆盖 ${method} ${path}` } })
   })
 }
@@ -437,6 +528,15 @@ async function run() {
     filesCalls: 0,
     logsCalls: 0,
     patchBodies: [],
+    // n3：指标曲线 / 测试连接 / 刷新主机信息 / agent 升级
+    metricsCalls: [],
+    metricsMode: 'ok',
+    connectionCalls: 0,
+    connectionMode: 'ok',
+    hostCalls: 0,
+    upgradeCalls: 0,
+    upgradeMode: 'ok',
+    upgradeBodies: [],
   }
   const context = await browser.newContext({ viewport: { width: 320, height: 800 } })
   await installMockApi(context, state)
@@ -467,6 +567,7 @@ async function run() {
       const activeRect = active.getBoundingClientRect()
       return activeRect.left >= listRect.left - 1 && activeRect.right <= listRect.right + 1
     })
+
 
   try {
     // 1) 登录 → 详情页（320px 视口）
@@ -631,6 +732,280 @@ async function run() {
     await page.waitForFunction(() => !location.hash.includes('tab='), null, { timeout: 5000 })
     check('切回概览后 URL 去掉 tab 参数', !page.url().includes('tab='))
 
+    // 11) n3 新界面：指标曲线 / 测试连接 / 刷新主机信息 / agent 升级
+    const metricsCard = page.locator('.ls-metrics')
+    check('指标卡挂在概览里', (await metricsCard.count()) === 1)
+    await page.waitForSelector('.ls-metrics__grid', { timeout: 15000 })
+    const autoQuery = state.metricsCalls[state.metricsCalls.length - 1] || null
+    check(
+      '进详情自动拉指标且默认窗口 1h',
+      autoQuery !== null && autoQuery.to - autoQuery.from === 3600000,
+      JSON.stringify(autoQuery),
+    )
+    check('自动拉取用默认步长 raw', autoQuery !== null && autoQuery.step === 'raw', String(autoQuery?.step))
+
+    const metricsRequest = () =>
+      page.waitForResponse(
+        (response) =>
+          response.request().method() === 'GET' &&
+          /\/api\/v1\/servers\/srv-alpha\/metrics\?/.test(response.url()),
+        { timeout: 10000 },
+      )
+
+    /** 点一下就等这次 /metrics 请求回来，再留 150ms 让 svg 重渲染。 */
+    const clickAndAwaitMetrics = async (locator) => {
+      const before = state.metricsCalls.length
+      await Promise.all([metricsRequest(), locator.click()])
+      await page.waitForTimeout(150)
+      return state.metricsCalls.length > before ? state.metricsCalls[state.metricsCalls.length - 1] : null
+    }
+
+    state.metricsMode = 'ok'
+    state.metricsCalls = []
+    const metricsRefresh = page.locator('.ls-metrics .ls-card__actions > button')
+    check('指标卡有手动刷新入口', (await metricsRefresh.count()) === 1)
+    await page.waitForFunction(
+      () => {
+        const button = document.querySelector('.ls-metrics .ls-card__actions > button')
+        return button !== null && button.disabled === false
+      },
+      null,
+      { timeout: 10000 },
+    )
+    const baselineQuery = await clickAndAwaitMetrics(metricsRefresh)
+    await page.waitForFunction(
+      () => document.querySelectorAll('.ls-metrics__line').length === 2,
+      null,
+      { timeout: 10000 },
+    )
+    check('指标卡画了两条曲线（memory/disk）', (await page.locator('.ls-metrics__line').count()) === 2)
+    const memoryPoints = (await page.locator('.ls-metrics__line').first().getAttribute('points')) || ''
+    const memoryPointCount = memoryPoints.trim().split(/\s+/).filter(Boolean).length
+    check('polyline points 非空', memoryPoints.trim().length > 0, memoryPoints.slice(0, 40))
+    check(
+      'polyline 点数与 mock 数据点一致',
+      memoryPointCount === METRIC_POINTS,
+      `${memoryPointCount} vs ${METRIC_POINTS}`,
+    )
+    check(
+      '默认时间窗 1h（from/to 差 3600000）',
+      baselineQuery !== null && baselineQuery.to - baselineQuery.from === 3600000,
+      JSON.stringify(baselineQuery),
+    )
+    check('默认步长 raw', baselineQuery !== null && baselineQuery.step === 'raw', String(baselineQuery?.step))
+
+    const stepButtons = page.locator('.ls-metrics .ls-seg').first().locator('.ls-seg__btn')
+    check('步长三档都在', (await stepButtons.count()) === 3, String(await stepButtons.count()))
+    const sentSteps = []
+    for (const index of [1, 2, 0]) {
+      const query = await clickAndAwaitMetrics(stepButtons.nth(index))
+      sentSteps.push(query ? query.step : null)
+    }
+    check('step 三档都按档位发出（1m/1h/raw）', sentSteps.join(',') === '1m,1h,raw', sentSteps.join(','))
+    check(
+      '步长选中态跟随点击',
+      (await stepButtons.nth(0).getAttribute('aria-pressed')) === 'true' &&
+        (await stepButtons.nth(2).getAttribute('aria-pressed')) === 'false',
+    )
+
+    const windowButtons = page.locator('.ls-metrics .ls-seg').nth(1).locator('.ls-seg__btn')
+    check('时间窗三档都在', (await windowButtons.count()) === 3, String(await windowButtons.count()))
+    // 1h 是默认档，先点 6h/24h 再回 1h，保证每次点击都真的触发一次请求
+    const windowQueries = []
+    for (const index of [1, 2, 0]) {
+      const query = await clickAndAwaitMetrics(windowButtons.nth(index))
+      windowQueries.push(query)
+    }
+    const windowSpans = windowQueries.map((query) => (query ? query.to - query.from : null))
+    check(
+      '切 6h/24h/1h 时 from/to 真实变化',
+      windowSpans.join(',') === '21600000,86400000,3600000',
+      windowSpans.join(','),
+    )
+    check(
+      '窗口越大 from 越靠前',
+      windowQueries[0] !== null &&
+        windowQueries[1] !== null &&
+        windowQueries[0].from < (baselineQuery?.from ?? 0) &&
+        windowQueries[1].from < windowQueries[0].from,
+      `6h.from=${windowQueries[0]?.from} 24h.from=${windowQueries[1]?.from} 1h.from=${baselineQuery?.from}`,
+    )
+    check(
+      '切时间窗后 step 不变',
+      state.metricsCalls[state.metricsCalls.length - 1]?.step === 'raw',
+      String(state.metricsCalls[state.metricsCalls.length - 1]?.step),
+    )
+
+    // 空态
+    state.metricsMode = 'empty'
+    await clickAndAwaitMetrics(windowButtons.nth(1))
+    await page.waitForFunction(
+      () => (document.querySelector('.ls-metrics')?.textContent || '').includes('暂无指标数据'),
+      null,
+      { timeout: 10000 },
+    )
+    check('空数据显示「暂无指标数据」', (await metricsCard.innerText()).includes('暂无指标数据'))
+    check('空数据不画曲线', (await page.locator('.ls-metrics__line').count()) === 0)
+
+    // 错误态 + 重试
+    state.metricsMode = 'error'
+    await clickAndAwaitMetrics(metricsRefresh)
+    await page.waitForSelector('.ls-metrics [role="alert"]', { timeout: 10000 })
+    const metricsErrorText = await page.locator('.ls-metrics [role="alert"]').innerText()
+    check('500 时指标卡显示后端错误原文', metricsErrorText.includes(METRICS_ERROR), metricsErrorText.slice(0, 60))
+    check('错误态提供重试按钮', (await page.locator('.ls-metrics [role="alert"] button').count()) === 1)
+    check('错误态不再画曲线', (await page.locator('.ls-metrics__line').count()) === 0)
+
+    state.metricsMode = 'ok'
+    const retryQuery = await clickAndAwaitMetrics(page.locator('.ls-metrics [role="alert"] button'))
+    await page.waitForFunction(
+      () => document.querySelectorAll('.ls-metrics__line').length === 2,
+      null,
+      { timeout: 10000 },
+    )
+    check('重试重新请求并恢复曲线', retryQuery !== null && (await page.locator('.ls-metrics__line').count()) === 2)
+    check(
+      '重试请求仍带当前窗口（6h）与步长',
+      retryQuery !== null && retryQuery.to - retryQuery.from === 21600000 && retryQuery.step === 'raw',
+      JSON.stringify(retryQuery),
+    )
+
+    // 320px 横向溢出（先确认根元素已就绪再量 scrollWidth）
+    const metricsOverflow = await page.evaluate(() => {
+      const card = document.querySelector('.ls-metrics')
+      const root = document.documentElement
+      return {
+        card: card ? card.scrollWidth - card.clientWidth : -1,
+        root: root.scrollWidth - root.clientWidth,
+        width: window.innerWidth,
+      }
+    })
+    check(
+      '320px 指标卡无横向溢出',
+      metricsOverflow.width === 320 && metricsOverflow.card <= 0 && metricsOverflow.root <= 0,
+      JSON.stringify(metricsOverflow),
+    )
+
+    // 12) 测试连接：ok=true 显示延迟/banner，ok=false 原样显示 error
+    const connCard = page.locator('section[aria-label="测试连接"]')
+    check('测试连接卡存在', (await connCard.count()) === 1)
+    const connButton = connCard.locator('header button.ls-btn')
+    state.connectionMode = 'ok'
+    state.connectionCalls = 0
+    await connButton.click()
+    await page.waitForFunction(
+      () => (document.querySelector('section[aria-label="测试连接"] .ls-conn')?.textContent || '').includes('12 ms'),
+      null,
+      { timeout: 10000 },
+    )
+    const connOkText = await connCard.innerText()
+    check('测试连接 POST 发出一次', state.connectionCalls === 1, `${state.connectionCalls} 次`)
+    check('ok=true 显示延迟', connOkText.includes('12 ms'))
+    check('ok=true 显示 banner', connOkText.includes('SSH-2.0-OpenSSH_9.6p1'))
+    check('ok=true 显示连接正常', connOkText.includes('连接正常'))
+
+    state.connectionMode = 'fail'
+    await connButton.click()
+    await page.waitForFunction(
+      (message) =>
+        (document.querySelector('section[aria-label="测试连接"]')?.textContent || '').includes(message),
+      CONN_ERROR,
+      { timeout: 10000 },
+    )
+    const connFailText = await connCard.innerText()
+    check('ok=false 原样显示后端 error', connFailText.includes(CONN_ERROR), connFailText.replace(/\s+/g, ' ').slice(0, 80))
+    check('ok=false 不误报连接正常', !connFailText.includes('连接正常'))
+
+    // 13) 刷新主机信息：POST 恰好 1 次，成功后展示新主机名
+    const hostCard = page.locator('section[aria-label="主机信息"]')
+    state.hostCalls = 0
+    await hostCard.locator('header button.ls-btn').click()
+    await page.waitForFunction(
+      (hostname) =>
+        (document.querySelector('section[aria-label="主机信息"]')?.textContent || '').includes(hostname),
+      NEW_HOSTNAME,
+      { timeout: 10000 },
+    )
+    check('刷新主机信息 POST 恰好 1 次', state.hostCalls === 1, `${state.hostCalls} 次`)
+    check('成功后展示新主机名', (await hostCard.innerText()).includes(NEW_HOSTNAME))
+    // 真值断言：读「主机名」这一行的 dd，必须等于后端 host_info.hostname，而不是空/占位。
+    // 后端返回 {data:{host_info:{...}}}，前端若漏解包这里会显示「—」或空态文案。
+    const refreshedHostname = await page.evaluate(() => {
+      const section = document.querySelector('section[aria-label="主机信息"]')
+      const rows = Array.from(section?.querySelectorAll('dl.ls-kv > div') ?? [])
+      const row = rows.find((item) => (item.querySelector('dt')?.textContent || '').includes('主机名'))
+      return row?.querySelector('dd')?.textContent?.trim() ?? ''
+    })
+    check(
+      '刷新后主机名等于后端 host_info.hostname（非空、非 —）',
+      refreshedHostname === NEW_HOSTNAME && refreshedHostname !== '—',
+      JSON.stringify({ refreshedHostname, expected: NEW_HOSTNAME }),
+    )
+    check(
+      '刷新后不再显示主机信息空态',
+      !(await hostCard.innerText()).includes('尚未采集'),
+    )
+    check('成功后有「主机信息已更新」提示', (await hostCard.innerText()).includes('主机信息已更新'))
+
+    // 14) agent 升级：sha256 前端校验 + POST 体三字段 + ok=false 原样 error
+    const upgradeCard = page.locator('section[aria-label="升级 Agent"]')
+    check('升级卡存在', (await upgradeCard.count()) === 1)
+    const upgradeSubmit = upgradeCard.locator('button[type="submit"]')
+    const AGENT_VERSION = '0.9.9'
+    const AGENT_URL = 'https://dl.example.com/leadstack-agent_0.9.9_linux_amd64.tar.gz'
+    const AGENT_SHA = 'a1b2c3d4e5f60718'.repeat(4)
+    state.upgradeMode = 'ok'
+    state.upgradeCalls = 0
+    state.upgradeBodies = []
+    await page.fill('#server-agent-upgrade-version', AGENT_VERSION)
+    await page.fill('#server-agent-upgrade-url', AGENT_URL)
+    await page.fill('#server-agent-upgrade-sha256', 'abc')
+    await upgradeSubmit.click()
+    await page.waitForTimeout(500)
+    check('sha256 非法时不发请求', state.upgradeCalls === 0, `${state.upgradeCalls} 次`)
+    check('sha256 非法时显示格式错误', (await upgradeCard.innerText()).includes('64 位十六进制'))
+    check('sha256 非法时没有结果块', (await page.locator('.ls-upgrade__result').count()) === 0)
+
+    await page.fill('#server-agent-upgrade-sha256', AGENT_SHA)
+    const [upgradeResponse] = await Promise.all([
+      page.waitForResponse(
+        (response) => response.request().method() === 'POST' && response.url().includes('/agent-upgrade'),
+        { timeout: 10000 },
+      ),
+      upgradeSubmit.click(),
+    ])
+    await page.waitForFunction(
+      () => (document.querySelector('.ls-upgrade__result')?.textContent || '').includes('升级指令已排队'),
+      null,
+      { timeout: 10000 },
+    )
+    check('合法 sha256 只发一次 POST', state.upgradeCalls === 1, `${state.upgradeCalls} 次`)
+    check('升级接口回 202', upgradeResponse.status() === 202, String(upgradeResponse.status()))
+    const upgradeBody = state.upgradeBodies[state.upgradeBodies.length - 1] || {}
+    check(
+      'POST 体恰好 version/url/sha256 三字段',
+      Object.keys(upgradeBody).sort().join(',') === 'sha256,url,version',
+      Object.keys(upgradeBody).join(','),
+    )
+    check(
+      'POST 体字段值与表单一致',
+      upgradeBody.version === AGENT_VERSION &&
+        upgradeBody.url === AGENT_URL &&
+        upgradeBody.sha256 === AGENT_SHA,
+      JSON.stringify(upgradeBody).slice(0, 120),
+    )
+    check('升级成功显示排队提示', (await upgradeCard.innerText()).includes('升级指令已排队（HTTP 202）'))
+
+    state.upgradeMode = 'fail'
+    await upgradeSubmit.click()
+    await page.waitForFunction(
+      (message) => (document.querySelector('.ls-upgrade__result')?.textContent || '').includes(message),
+      UPGRADE_ERROR,
+      { timeout: 10000 },
+    )
+    check('升级 ok=false 原样显示 error', (await upgradeCard.innerText()).includes(UPGRADE_ERROR))
+
+
     // 8) 未知服务器 id → 404 提示而不是白屏
     await page.goto(`${base}/#/servers/does-not-exist`, { waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(2000)
@@ -655,6 +1030,14 @@ async function run() {
       filesCalls: 0,
       logsCalls: 0,
       patchBodies: [],
+      metricsCalls: [],
+      metricsMode: 'ok',
+      connectionCalls: 0,
+      connectionMode: 'ok',
+      hostCalls: 0,
+      upgradeCalls: 0,
+      upgradeMode: 'ok',
+      upgradeBodies: [],
     }
     const limitedContext = await browser.newContext({ viewport: { width: 320, height: 800 } })
     await installMockApi(limitedContext, limitedState)
@@ -700,6 +1083,67 @@ async function run() {
       await limitedContext.close().catch(() => {})
     }
 
+    // 13) 只读（仅 server.read）：指标仍可见，写操作按钮全隐且零请求
+    const readonlyState = {
+      server: structuredClone(SERVER),
+      permissions: ['server.read'],
+      detailCalls: 0,
+      accessCalls: 0,
+      panelCalls: 0,
+      loginCalls: 0,
+      checkCalls: 0,
+      ticketCalls: 0,
+      filesCalls: 0,
+      logsCalls: 0,
+      patchBodies: [],
+      metricsCalls: [],
+      metricsMode: 'ok',
+      connectionCalls: 0,
+      connectionMode: 'ok',
+      hostCalls: 0,
+      upgradeCalls: 0,
+      upgradeMode: 'ok',
+      upgradeBodies: [],
+    }
+    const readonlyContext = await browser.newContext({ viewport: { width: 320, height: 800 } })
+    await installMockApi(readonlyContext, readonlyState)
+    const readonlyPage = await readonlyContext.newPage()
+    const readonlyErrors = []
+    readonlyPage.on('pageerror', (error) => readonlyErrors.push(error.message))
+    try {
+      await readonlyPage.goto(`${base}/#/login`, { waitUntil: 'domcontentloaded' })
+      await readonlyPage.waitForSelector('#login-username', { timeout: 15000 })
+      await readonlyPage.fill('#login-username', 'admin')
+      await readonlyPage.fill('#login-password', PASSWORD)
+      await readonlyPage.click('#login-submit')
+      await readonlyPage.waitForSelector('.ls-shell', { timeout: 15000 })
+      await readonlyPage.goto(`${base}/#/servers/srv-alpha`, { waitUntil: 'domcontentloaded' })
+      await readonlyPage.waitForSelector('.ls-detail__title', { timeout: 15000 })
+      await readonlyPage.waitForSelector('.ls-metrics__grid', { timeout: 15000 })
+      check(
+        '只读用户仍能看到指标曲线',
+        (await readonlyPage.locator('.ls-metrics__chart polyline.ls-metrics__line').count()) === 2,
+      )
+      check('只读用户自动拉指标', readonlyState.metricsCalls.length === 1, `${readonlyState.metricsCalls.length} 次`)
+      check(
+        '只读用户看不到刷新主机信息按钮',
+        (await readonlyPage.locator('section[aria-label="主机信息"] button').count()) === 0,
+      )
+      check(
+        '只读用户看不到测试连接按钮',
+        (await readonlyPage.locator('section[aria-label="测试连接"] button').count()) === 0,
+      )
+      check('只读用户看不到 agent 升级卡', (await readonlyPage.locator('section[aria-label="升级 Agent"]').count()) === 0)
+      check(
+        '只读用户零写请求',
+        readonlyState.hostCalls === 0 && readonlyState.connectionCalls === 0 && readonlyState.upgradeCalls === 0,
+        `${readonlyState.hostCalls}/${readonlyState.connectionCalls}/${readonlyState.upgradeCalls}`,
+      )
+      check('只读页面无未捕获异常', readonlyErrors.length === 0, readonlyErrors.join(' | ').slice(0, 120))
+    } finally {
+      await readonlyContext.close().catch(() => {})
+    }
+
     check('页面无未捕获异常', pageErrors.length === 0, pageErrors.join(' | ').slice(0, 120))
   } catch (error) {
     console.error(`✗ 冒烟中断：${error && error.message ? error.message.split('\n')[0] : error}`)
@@ -719,7 +1163,7 @@ async function run() {
     process.exitCode = 1
     return
   }
-  console.log(`✓ 服务器详情页冒烟全部通过（${results.length} 项）`)
+  console.log(`✓ 服务器详情页冒烟全部通过（共 ${results.length} 项，失败 0 项）`)
 }
 
 run().catch((error) => {

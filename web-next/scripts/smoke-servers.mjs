@@ -48,14 +48,22 @@ const MIME = {
 
 const TOKEN = 'smoke-servers-token'
 const PASSWORD = 'smoke-servers-password'
+/** 批量动作里 srv-beta 的失败原文：弹窗必须原样透传，不得被前端包装。 */
+const BATCH_FAIL_ERROR = 'agent offline: 无法执行批量动作（mock 失败原文）'
+/** 重试仍失败时的第二次 error 原文：用于反例断言「失败段 error 被更新」。 */
+const RETRY_STILL_FAIL_ERROR = 'agent offline: 重试仍失败（第二次原文）'
 
-function user(terminalUse) {
+function user(terminalUse, write = false) {
   return {
     id: 'smoke-servers-user',
     username: 'admin',
     role: 'admin',
     role_name: '管理员',
-    permissions: terminalUse ? ['server.read', 'terminal.use'] : ['server.read'],
+    permissions: [
+      'server.read',
+      ...(terminalUse ? ['terminal.use'] : []),
+      ...(write ? ['server.write'] : []),
+    ],
     scope: { mode: 'all', group_ids: [], server_ids: [] },
   }
 }
@@ -227,10 +235,10 @@ async function installMockApi(context, state) {
       route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) })
 
     if (path === '/api/v1/auth/login' && method === 'POST') {
-      return json(200, { token: TOKEN, user: user(state.terminalUse) })
+      return json(200, { token: TOKEN, user: user(state.terminalUse, state.write) })
     }
     if (path === '/api/v1/auth/me' && method === 'GET') {
-      return json(200, { data: user(state.terminalUse) })
+      return json(200, { data: user(state.terminalUse, state.write) })
     }
     if (path === '/api/v1/auth/logout' && method === 'POST') {
       return route.fulfill({ status: 204, body: '' })
@@ -275,6 +283,24 @@ async function installMockApi(context, state) {
         })
       }
       return json(200, { data: { entries: [] } })
+    }
+
+    if (path === '/api/v1/servers/batch' && method === 'POST') {
+      state.batchCalls += 1
+      const body = JSON.parse(request.postData() || '{}')
+      state.batchBodies.push(body)
+      // 默认按「alpha 成功 / beta 失败」返回；指定 batchResponder 时按调用序号定制（重试场景）。
+      const data =
+        typeof state.batchResponder === 'function'
+          ? state.batchResponder(state.batchCalls, body)
+          : {
+              results: [
+                { id: 'srv-alpha', ok: true },
+                { id: 'srv-beta', ok: false, error: BATCH_FAIL_ERROR },
+              ],
+              summary: { ok: 1, failed: 1 },
+            }
+      return json(200, { data })
     }
 
     return json(404, { error: { code: 'not_found', message: `mock api 未覆盖 ${method} ${path}` } })
@@ -327,7 +353,7 @@ async function run() {
     return
   }
 
-  const state = { terminalUse: false, serverCalls: 0, filePaths: [] }
+  const state = { terminalUse: false, write: false, serverCalls: 0, filePaths: [], batchCalls: 0, batchBodies: [] }
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
   await installMockApi(context, state)
   const page = await context.newPage()
@@ -708,6 +734,321 @@ async function run() {
     await page.waitForTimeout(500)
     check('刷新按钮重新请求列表', state.serverCalls > callsBefore, `${callsBefore} → ${state.serverCalls}`)
     await shot(page, 'servers-1280-list-expanded')
+
+    // 9) n3 批量操作（有 server.write）：选择集 → POST /servers/batch 请求体、结果弹窗、删除二次确认
+    const batchContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    const batchState = { terminalUse: false, write: true, serverCalls: 0, filePaths: [], batchCalls: 0, batchBodies: [] }
+    await installMockApi(batchContext, batchState)
+    const batchPage = await batchContext.newPage()
+    const batchErrors = []
+    batchPage.on('pageerror', (error) => batchErrors.push(error.message))
+    const loginAs = async (target) => {
+      await target.goto(`${base}/#/login`, { waitUntil: 'domcontentloaded' })
+      await target.waitForSelector('#login-username', { timeout: 15000 })
+      await target.fill('#login-username', 'admin')
+      await target.fill('#login-password', PASSWORD)
+      await target.click('#login-submit')
+      await target.waitForSelector('.ls-shell', { timeout: 15000 })
+      await target.goto(`${base}/#/servers`, { waitUntil: 'domcontentloaded' })
+      await target.waitForSelector('.ls-srv-row', { timeout: 15000 })
+    }
+    try {
+      await loginAs(batchPage)
+      check('有 server.write 时每行出现选择框', (await batchPage.locator('.ls-srv-row__select input').count()) === 2)
+      check('未选中时不出批量工具条', (await batchPage.locator('.ls-servers-batch').count()) === 0)
+      await batchPage.locator('.ls-srv-row__select input').nth(0).check()
+      await batchPage.locator('.ls-srv-row__select input').nth(1).check()
+      await batchPage.waitForSelector('.ls-servers-batch', { timeout: 5000 })
+      const batchBarText = (await batchPage.locator('.ls-servers-batch__count').innerText()).trim()
+      check('批量工具条显示已选 2 台', batchBarText === '已选 2 台', batchBarText)
+
+      await batchPage.locator('.ls-servers-batch__actions button', { hasText: '设置分组' }).click()
+      await batchPage.waitForSelector('#servers-batch-form', { timeout: 5000 })
+      const groupOptions = await batchPage.locator('#servers-batch-group option').allInnerTexts()
+      check(
+        '分组下拉带出既有分组',
+        groupOptions.includes('默认分组') && groupOptions.includes('测试分组'),
+        groupOptions.join(' / '),
+      )
+      await batchPage.selectOption('#servers-batch-group', { label: '测试分组' })
+      const batchResponse = batchPage.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/servers/batch',
+        { timeout: 10000 },
+      )
+      await batchPage.locator('.ls-modal__foot button', { hasText: '设置分组' }).click()
+      await batchResponse
+      await batchPage.waitForSelector('.ls-batch-result', { timeout: 10000 })
+
+      const batchBody = batchState.batchBodies.at(-1) || {}
+      check('设置分组只发一次 POST /servers/batch', batchState.batchCalls === 1, `${batchState.batchCalls} 次`)
+      check(
+        '请求体 ids 恰好是选中的 2 台',
+        Array.isArray(batchBody.ids) &&
+          batchBody.ids.length === 2 &&
+          batchBody.ids.includes('srv-alpha') &&
+          batchBody.ids.includes('srv-beta'),
+        JSON.stringify(batchBody.ids),
+      )
+      check('请求体 action 为 set-group', batchBody.action === 'set-group', String(batchBody.action))
+      check(
+        '请求体 params 只带 group',
+        Boolean(batchBody.params) &&
+          Object.keys(batchBody.params).length === 1 &&
+          batchBody.params.group === '测试分组',
+        JSON.stringify(batchBody.params),
+      )
+
+      const summaryText = (await batchPage.locator('.ls-batch-result__summary').innerText()).trim()
+      check('结果弹窗汇总等于「成功 1 台，失败 1 台」', summaryText === '成功 1 台，失败 1 台', summaryText)
+      const failedRowText = (await batchPage.locator('.ls-batch-result__error').innerText()).trim()
+      check('失败行原样显示后端 error 文案', failedRowText === BATCH_FAIL_ERROR, failedRowText)
+      await batchPage.locator('.ls-modal__foot button', { hasText: '关闭' }).click()
+      await batchPage.waitForSelector('.ls-batch-result', { state: 'detached', timeout: 5000 })
+
+      // 删除必须二次确认：取消后一次请求都不能发
+      await batchPage.locator('.ls-srv-row__select input').nth(0).check()
+      await batchPage.locator('.ls-srv-row__select input').nth(1).check()
+      await batchPage.waitForSelector('.ls-servers-batch', { timeout: 5000 })
+      await batchPage.locator('.ls-servers-batch__actions button', { hasText: '删除' }).click()
+      await batchPage.waitForSelector('.ls-batch-form__warning', { timeout: 5000 })
+      const deleteWarning = (await batchPage.locator('.ls-batch-form__warning').innerText()).trim()
+      check('删除确认写明将永久删除 2 台', deleteWarning.includes('2 台'), deleteWarning)
+      await batchPage.locator('.ls-modal__foot button', { hasText: '取消' }).click()
+      await batchPage.waitForTimeout(400)
+      check('删除取消后零请求', batchState.batchCalls === 1, `${batchState.batchCalls} 次`)
+
+      // 320px：批量工具条必须换行而不是横向溢出（先等字体与布局稳定再量）
+      await batchPage.setViewportSize({ width: 320, height: 800 })
+      await batchPage.waitForSelector('.ls-servers-batch', { timeout: 5000 })
+      await batchPage.evaluate(() => document.fonts.ready)
+      await batchPage.waitForTimeout(400)
+      const narrowBatch = await batchPage.evaluate(() => {
+        const root = document.documentElement
+        const bar = document.querySelector('.ls-servers-batch')
+        return {
+          overflow: root.scrollWidth - root.clientWidth,
+          barWidth: bar ? bar.getBoundingClientRect().width : 0,
+          viewport: window.innerWidth,
+          buttons: document.querySelectorAll('.ls-servers-batch__actions button').length,
+        }
+      })
+      check(
+        '320px 批量工具条不横向溢出',
+        narrowBatch.overflow <= 0 && narrowBatch.barWidth <= narrowBatch.viewport + 1,
+        `溢出 ${narrowBatch.overflow}px / 工具条 ${Math.round(narrowBatch.barWidth)}px / ${narrowBatch.buttons} 个动作`,
+      )
+      check('批量页无未捕获异常', batchErrors.length === 0, batchErrors.slice(0, 2).join(' | '))
+    } finally {
+      await batchContext.close().catch(() => {})
+    }
+
+    // 10) 无 server.write：选择框与工具条都不渲染，批量接口零请求
+    const readOnlyBatchContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    const readOnlyBatchState = {
+      terminalUse: false,
+      write: false,
+      serverCalls: 0,
+      filePaths: [],
+      batchCalls: 0,
+      batchBodies: [],
+    }
+    await installMockApi(readOnlyBatchContext, readOnlyBatchState)
+    const readOnlyBatchPage = await readOnlyBatchContext.newPage()
+    const readOnlyBatchErrors = []
+    readOnlyBatchPage.on('pageerror', (error) => readOnlyBatchErrors.push(error.message))
+    try {
+      await loginAs(readOnlyBatchPage)
+      check(
+        '无 server.write 时不渲染选择框',
+        (await readOnlyBatchPage.locator('.ls-srv-row__select input').count()) === 0,
+      )
+      check(
+        '无 server.write 时不渲染批量工具条',
+        (await readOnlyBatchPage.locator('.ls-servers-batch').count()) === 0,
+      )
+      check(
+        '无 server.write 时 POST /servers/batch 零请求',
+        readOnlyBatchState.batchCalls === 0,
+        `${readOnlyBatchState.batchCalls} 次`,
+      )
+      check('无 server.write 页面无未捕获异常', readOnlyBatchErrors.length === 0, readOnlyBatchErrors.slice(0, 2).join(' | '))
+    } finally {
+      await readOnlyBatchContext.close().catch(() => {})
+    }
+
+    // 11) 失败行单独重试：只重发失败那台；重试成功后失败段消失、汇总变「成功 2 台，失败 0 台」
+    const retryContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    const retryState = {
+      terminalUse: false,
+      write: true,
+      serverCalls: 0,
+      filePaths: [],
+      batchCalls: 0,
+      batchBodies: [],
+      // 第一次批量：alpha 成功 + beta 失败；第二次（重试）：beta 成功
+      batchResponder: (call) =>
+        call === 1
+          ? {
+              results: [
+                { id: 'srv-alpha', ok: true },
+                { id: 'srv-beta', ok: false, error: BATCH_FAIL_ERROR },
+              ],
+              summary: { ok: 1, failed: 1 },
+            }
+          : { results: [{ id: 'srv-beta', ok: true }], summary: { ok: 1, failed: 0 } },
+    }
+    await installMockApi(retryContext, retryState)
+    const retryPage = await retryContext.newPage()
+    const retryErrors = []
+    retryPage.on('pageerror', (error) => retryErrors.push(error.message))
+    try {
+      await loginAs(retryPage)
+      await retryPage.locator('.ls-srv-row__select input').nth(0).check()
+      await retryPage.locator('.ls-srv-row__select input').nth(1).check()
+      await retryPage.waitForSelector('.ls-servers-batch', { timeout: 5000 })
+      const firstBatch = retryPage.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === '/api/v1/servers/batch',
+      )
+      await retryPage.locator('.ls-servers-batch__actions button', { hasText: '设置分组' }).click()
+      await retryPage.waitForSelector('#servers-batch-form', { timeout: 5000 })
+      await retryPage.selectOption('#servers-batch-group', { label: '测试分组' })
+      await retryPage.locator('.ls-modal__foot button', { hasText: '设置分组' }).click()
+      await firstBatch
+      await retryPage.waitForSelector('.ls-batch-result', { timeout: 10000 })
+      const firstBody = retryState.batchBodies[0] || {}
+
+      const retryFailedRows = retryPage.locator('.ls-batch-result__row--failed')
+      const failedRowCount = await retryFailedRows.count()
+      check('失败段只出现 srv-beta 一行', failedRowCount === 1, `${failedRowCount} 行`)
+      const failedRowName = (await retryFailedRows.locator('.ls-batch-result__name').innerText()).trim()
+      check('失败行显示 srv-beta 的名称 beta-node', failedRowName === 'beta-node', failedRowName)
+      const failedRowError = (await retryFailedRows.locator('.ls-batch-result__error').innerText()).trim()
+      check('失败行原样显示后端 error 文案', failedRowError === BATCH_FAIL_ERROR, failedRowError)
+      const retryButtons = retryFailedRows.locator('.ls-batch-result__retry')
+      const retryButtonCount = await retryButtons.count()
+      check('失败行重试按钮恰 1 个', retryButtonCount === 1, `${retryButtonCount} 个`)
+
+      const retryResponse = retryPage.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === '/api/v1/servers/batch',
+      )
+      await retryButtons.first().click()
+      await retryResponse
+      const retryBody = retryState.batchBodies.at(-1) || {}
+      check(
+        '重试只重发失败的那台',
+        Array.isArray(retryBody.ids) && retryBody.ids.length === 1 && retryBody.ids[0] === 'srv-beta',
+        JSON.stringify(retryBody.ids),
+      )
+      check('重试新增恰好 1 次 POST', retryState.batchCalls === 2, `${retryState.batchCalls} 次`)
+      check(
+        '重试 action 与首次相同',
+        retryBody.action === firstBody.action && retryBody.action === 'set-group',
+        String(retryBody.action),
+      )
+      check(
+        '重试 params 与首次相同',
+        JSON.stringify(retryBody.params) === JSON.stringify(firstBody.params),
+        JSON.stringify(retryBody.params),
+      )
+
+      await retryPage.waitForFunction(
+        () => document.querySelectorAll('.ls-batch-result__row--failed').length === 0,
+        null,
+        { timeout: 10000 },
+      )
+      check('重试成功后失败段消失', (await retryFailedRows.count()) === 0, `${await retryFailedRows.count()} 行`)
+      const okSummary = (await retryPage.locator('.ls-batch-result__summary').innerText()).trim()
+      check('重试成功后汇总变为成功 2 台失败 0 台', okSummary === '成功 2 台，失败 0 台', okSummary)
+      const okRowCount = await retryPage.locator('.ls-batch-result__row--ok').count()
+      check('重试成功后成功段为 2 行', okRowCount === 2, `${okRowCount} 行`)
+      check('重试页无未捕获异常', retryErrors.length === 0, retryErrors.slice(0, 2).join(' | '))
+    } finally {
+      await retryContext.close().catch(() => {})
+    }
+
+    // 12) 反例：重试仍失败 —— srv-beta 留在失败段，error 更新为第二次的原文
+    const retryFailContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    const retryFailState = {
+      terminalUse: false,
+      write: true,
+      serverCalls: 0,
+      filePaths: [],
+      batchCalls: 0,
+      batchBodies: [],
+      batchResponder: (call) =>
+        call === 1
+          ? {
+              results: [
+                { id: 'srv-alpha', ok: true },
+                { id: 'srv-beta', ok: false, error: BATCH_FAIL_ERROR },
+              ],
+              summary: { ok: 1, failed: 1 },
+            }
+          : {
+              results: [{ id: 'srv-beta', ok: false, error: RETRY_STILL_FAIL_ERROR }],
+              summary: { ok: 0, failed: 1 },
+            },
+    }
+    await installMockApi(retryFailContext, retryFailState)
+    const retryFailPage = await retryFailContext.newPage()
+    try {
+      await loginAs(retryFailPage)
+      await retryFailPage.locator('.ls-srv-row__select input').nth(0).check()
+      await retryFailPage.locator('.ls-srv-row__select input').nth(1).check()
+      await retryFailPage.waitForSelector('.ls-servers-batch', { timeout: 5000 })
+      const firstFailBatch = retryFailPage.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === '/api/v1/servers/batch',
+      )
+      await retryFailPage.locator('.ls-servers-batch__actions button', { hasText: '设置分组' }).click()
+      await retryFailPage.waitForSelector('#servers-batch-form', { timeout: 5000 })
+      await retryFailPage.selectOption('#servers-batch-group', { label: '测试分组' })
+      await retryFailPage.locator('.ls-modal__foot button', { hasText: '设置分组' }).click()
+      await firstFailBatch
+      await retryFailPage.waitForSelector('.ls-batch-result', { timeout: 10000 })
+
+      const stillFailedRows = retryFailPage.locator('.ls-batch-result__row--failed')
+      const secondFailBatch = retryFailPage.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === '/api/v1/servers/batch',
+      )
+      await stillFailedRows.locator('.ls-batch-result__retry').first().click()
+      await secondFailBatch
+      await retryFailPage.waitForFunction(
+        (expected) => {
+          const error = document.querySelector('.ls-batch-result__row--failed .ls-batch-result__error')
+          return error !== null && error.textContent.trim() === expected
+        },
+        RETRY_STILL_FAIL_ERROR,
+        { timeout: 10000 },
+      )
+      const stillFailedCount = await stillFailedRows.count()
+      const stillFailedName = (await stillFailedRows.locator('.ls-batch-result__name').innerText()).trim()
+      check(
+        '反例：重试仍失败时 srv-beta 留在失败段',
+        stillFailedCount === 1 && stillFailedName === 'beta-node',
+        `${stillFailedCount} 行 / ${stillFailedName}`,
+      )
+      const stillFailedError = (await stillFailedRows.locator('.ls-batch-result__error').innerText()).trim()
+      check('反例：error 更新为第二次原文', stillFailedError === RETRY_STILL_FAIL_ERROR, stillFailedError)
+      const stillFailedSummary = (await retryFailPage.locator('.ls-batch-result__summary').innerText()).trim()
+      check('反例：汇总仍为成功 1 台失败 1 台', stillFailedSummary === '成功 1 台，失败 1 台', stillFailedSummary)
+      const stillFailedIds = retryFailState.batchBodies.at(-1)?.ids
+      check(
+        '反例：重试请求仍只发失败的那台',
+        Array.isArray(stillFailedIds) && stillFailedIds.length === 1 && stillFailedIds[0] === 'srv-beta',
+        JSON.stringify(stillFailedIds),
+      )
+    } finally {
+      await retryFailContext.close().catch(() => {})
+    }
 
     check('页面无未捕获异常', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '))
   } catch (error) {

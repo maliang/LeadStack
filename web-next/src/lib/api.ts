@@ -2984,11 +2984,13 @@ export const api = {
     })
   },
 
-  /** 契约第 10 节：POST /servers/{id}/refresh-host-info → host_info */
+  /** 契约第 10 节：POST /servers/{id}/refresh-host-info → {host_info:{...}}（request 已解外层 data） */
   refreshHostInfo(id: string): Promise<HostInfo | null> {
     return request<unknown>(`/servers/${encodeURIComponent(id)}/refresh-host-info`, {
       method: 'POST',
-    }).then(normalizeHostInfo)
+      // 后端返回 {data:{host_info:{...}}}，request() 解开 data 后拿到 {host_info:{...}}；
+      // 同时兼容旧形状（直接返回 host_info 平铺），两种都归一。
+    }).then((raw) => normalizeHostInfo(toRecord(raw)?.host_info ?? raw))
   },
 
   /** 契约第 10 节：POST /servers/batch → 逐台结果 + 汇总 */

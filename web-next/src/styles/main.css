@@ -7120,3 +7120,187 @@ body.ls-scroll-locked {
     width: auto;
   }
 }
+
+/* ---------- 服务器详情：指标曲线 / 主机信息 / 运维操作 ---------- */
+
+/* 只读开关状态用色块 + 文字双层区分，不依赖单一颜色 */
+.ls-seg {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--ls-border-strong);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-surface);
+}
+
+.ls-seg__btn {
+  min-height: var(--ls-hit-size);
+  padding: 0 var(--ls-space-3);
+  border: 0;
+  background: transparent;
+  color: var(--ls-text-muted);
+  font: 500 var(--ls-text-xs) / 1 var(--ls-font-sans);
+  cursor: pointer;
+  transition:
+    background-color var(--ls-duration) ease,
+    color var(--ls-duration) ease;
+}
+
+.ls-seg__btn + .ls-seg__btn {
+  border-left: 1px solid var(--ls-border);
+}
+
+.ls-seg__btn:hover:not(:disabled) {
+  background: var(--ls-surface-muted);
+  color: var(--ls-text);
+}
+
+.ls-seg__btn:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ls-brand-500);
+}
+
+.ls-seg__btn--active {
+  background: var(--ls-primary-soft);
+  color: var(--ls-primary);
+  font-weight: 600;
+}
+
+.ls-seg__btn:disabled {
+  color: var(--ls-text-subtle);
+  cursor: not-allowed;
+}
+
+.ls-metrics {
+  min-width: 0;
+}
+
+.ls-metrics__state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+  min-height: 4rem;
+  color: var(--ls-text-muted);
+  font: 400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+}
+
+.ls-metrics__state .ls-card__note {
+  margin: 0;
+}
+
+.ls-metrics__range {
+  margin: 0;
+  color: var(--ls-text-subtle);
+  font: 400 var(--ls-text-2xs) / 1.5 var(--ls-font-mono);
+}
+
+.ls-metrics__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--ls-space-3);
+  min-width: 0;
+}
+
+.ls-metrics__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-1);
+  min-width: 0;
+  padding: var(--ls-space-2) var(--ls-space-3);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-surface);
+}
+
+.ls-metrics__itemHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-metrics__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ls-text-muted);
+  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ls-metrics__value {
+  flex: none;
+  color: var(--ls-text);
+  font: 600 var(--ls-text-sm) / 1.2 var(--ls-font-mono);
+}
+
+.ls-metrics__chart {
+  display: block;
+  width: 100%;
+  height: 4.5rem;
+  overflow: visible;
+}
+
+.ls-metrics__baseline {
+  stroke: var(--ls-border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.ls-metrics__line {
+  fill: none;
+  stroke: var(--ls-primary-fill);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.ls-metrics__dot {
+  fill: var(--ls-primary-fill);
+}
+
+.ls-metrics__axis {
+  margin: 0;
+  color: var(--ls-text-subtle);
+  font: 400 var(--ls-text-2xs) / 1.4 var(--ls-font-mono);
+}
+
+/* 测试连接 / Agent 升级并排；窄宽自动单列 */
+.ls-overview__panes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: var(--ls-space-3);
+  min-width: 0;
+}
+
+.ls-overview__panes > .ls-card {
+  min-width: 0;
+}
+
+.ls-conn,
+.ls-upgrade__result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-upgrade__result {
+  gap: var(--ls-space-1);
+}
+
+.ls-metrics__monoInput {
+  font-family: var(--ls-font-mono);
+}
+
+.ls-card__note p {
+  margin: 0;
+}
+
+@media (max-width: 480px) {
+  .ls-seg__btn {
+    padding: 0 var(--ls-space-2);
+  }
+}

@@ -20,12 +20,22 @@ const props = defineProps<{
   server: Server
   expanded: boolean
   terminalAllowed: boolean
+  /** 无 server.write 时页面传 false：多选框不渲染 */
+  selectable?: boolean
+  selected?: boolean
 }>()
 
-const emit = defineEmits<{ (event: 'toggle', id: string): void }>()
+const emit = defineEmits<{
+  (event: 'toggle', id: string): void
+  (event: 'select', id: string, selected: boolean): void
+}>()
 
 const { t } = useI18n()
 const router = useRouter()
+
+function onSelect(event: Event): void {
+  emit('select', props.server.id, (event.target as HTMLInputElement).checked)
+}
 
 const panelsId = computed(() => `server-panels-${props.server.id}`)
 const address = computed(() => serverAddress(props.server))
@@ -37,8 +47,9 @@ const openDetail = (): void => {
   void router.push(detailTarget.value)
 }
 
-/** 整行可点只对「空白/摘要区」生效：行内链接、按钮与展开面板保持原行为。 */
-const INTERACTIVE = 'a, button, input, select, textarea, [role="button"], [role="tab"], .ls-srv-row__panels'
+/** 整行可点只对「空白/摘要区」生效：行内链接、按钮、多选框与展开面板保持原行为。 */
+const INTERACTIVE =
+  'a, button, input, select, textarea, label, [role="button"], [role="tab"], .ls-srv-row__panels'
 function openDetailFromRow(event: MouseEvent): void {
   const target = event.target instanceof Element ? event.target : null
   if (target && target.closest(INTERACTIVE)) return
@@ -56,6 +67,14 @@ function openDetailFromRow(event: MouseEvent): void {
   >
     <div class="ls-srv-row__main">
       <div class="ls-srv-row__identity">
+        <label v-if="props.selectable" class="ls-srv-row__select">
+          <input
+            type="checkbox"
+            :checked="props.selected"
+            :aria-label="t('serversBatch.selectOne', { name: server.name })"
+            @change="onSelect"
+          />
+        </label>
         <span class="ls-srv-status" :class="`ls-srv-status--${serverStatusTone(server.status)}`">
           <span class="ls-srv-status__dot" aria-hidden="true" />
           {{ t(serverStatusLabelKey(server.status)) }}
@@ -142,5 +161,24 @@ function openDetailFromRow(event: MouseEvent): void {
 .ls-srv-row:focus-visible {
   outline: none;
   box-shadow: var(--ls-focus-ring);
+}
+
+/* 多选框：命中区 24px，列宽不随字号抖动 */
+.ls-srv-row__select {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  cursor: pointer;
+}
+
+.ls-srv-row__select input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--ls-primary-fill);
+  cursor: pointer;
 }
 </style>

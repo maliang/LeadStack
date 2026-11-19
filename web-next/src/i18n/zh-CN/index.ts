@@ -1,5 +1,6 @@
 import common from './common'
 import servers from './servers'
+import serversBatch from './serversBatch'
 import deploy from './deploy'
 import system from './system'
 import tools from './tools'
@@ -17,6 +18,7 @@ import upgrade from './upgrade'
 const zhCN: Record<string, string> = {
   ...common,
   ...servers,
+  ...serversBatch,
   ...deploy,
   ...system,
   ...tools,
