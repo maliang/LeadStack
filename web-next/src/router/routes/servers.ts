@@ -11,31 +11,31 @@ export const serverRoutes: RouteRecordRaw[] = [
     path: '/',
     name: 'home',
     component: () => import('@/pages/dashboard/DashboardPage.vue'),
-    meta: { title: '总览', permission: 'server.read' },
+    meta: { titleKey: 'nav.overview', permission: 'server.read' },
   },
   {
     path: '/servers',
     name: 'servers',
     component: () => import('@/pages/ServersPage.vue'),
-    meta: { title: '服务器', permission: 'server.read' },
+    meta: { titleKey: 'nav.servers', permission: 'server.read' },
   },
   {
     // 静态段 /servers 先于本参数路由注册也无妨：vue-router 4 按路径特异度打分，静态段优先命中。
     path: '/servers/:id',
     name: 'server-detail',
     component: () => import('@/pages/ServerDetailPage.vue'),
-    meta: { title: '服务器详情', permission: 'server.read' },
+    meta: { titleKey: 'crumb.serverDetail', permission: 'server.read' },
   },
   {
     path: '/checks',
     name: 'checks',
     component: () => import('@/pages/ChecksPage.vue'),
-    meta: { title: '检测', permission: 'check.read' },
+    meta: { titleKey: 'nav.checks', permission: 'check.read' },
   },
   {
     path: '/alerts',
     name: 'alerts',
     component: () => import('@/pages/AlertsPage.vue'),
-    meta: { title: '告警', permission: 'alert.read' },
+    meta: { titleKey: 'nav.alerts', permission: 'alert.read' },
   },
 ]

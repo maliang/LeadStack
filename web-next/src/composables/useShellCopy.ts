@@ -31,27 +31,28 @@ export interface ShellCopy {
   navEmptyHint: string
 }
 
-/** 纯函数：给定语言字典返回整屏文案。 */
+/** 纯函数：按当前语言（t 内部读取）返回整屏文案。 */
 export function shellCopy(): ShellCopy {
   return {
+    // 品牌名：中英文界面都显示「LeadStack 领栈」，属于商标/品牌，不翻译。
     appName: 'LeadStack 领栈',
-    appTagline: '运维控制台',
+    appTagline: t('shell.appTagline'),
     openNav: t('nav.openMenu'),
     closeNav: t('common.close'),
     mainNav: t('nav.main'),
     breadcrumbNav: t('nav.breadcrumb'),
-    skipToContent: '跳到主要内容',
+    skipToContent: t('shell.skipToContent'),
     logout: t('nav.logout'),
     loading: t('common.loading'),
     retry: t('common.retry'),
-    currentUser: '当前账号',
-    roleFallback: '成员',
-    sessionErrorTitle: '会话校验失败',
-    sessionErrorHint: '后端不可达或返回异常。可重试；若持续失败请重新登录。',
-    anonymousTitle: '未登录',
-    anonymousHint: '登录后显示可用导航；当前仅能访问公开页面。',
-    navEmptyTitle: '没有可访问的导航',
-    navEmptyHint: '当前账号缺少模块权限，请联系管理员分配角色。',
+    currentUser: t('shell.currentUser'),
+    roleFallback: t('shell.roleFallback'),
+    sessionErrorTitle: t('shell.sessionErrorTitle'),
+    sessionErrorHint: t('shell.sessionErrorHint'),
+    anonymousTitle: t('shell.anonymousTitle'),
+    anonymousHint: t('shell.anonymousHint'),
+    navEmptyTitle: t('shell.navEmptyTitle'),
+    navEmptyHint: t('shell.navEmptyHint'),
   }
 }
 

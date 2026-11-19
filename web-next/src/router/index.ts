@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory, type RouteLocationNormalized } from 'vue-router'
+import { getLanguage, t } from '@/i18n'
 import { useAuth } from '@/composables/useAuth'
 import { routes } from './routes'
 
@@ -20,7 +21,8 @@ import { routes } from './routes'
  */
 declare module 'vue-router' {
   interface RouteMeta {
-    title?: string
+    /** i18n 键（如 nav.servers / crumb.serverDetail），文档标题按当前语言现取译文 */
+    titleKey?: string
     /** 公开页：不要求登录（登录页、错误页） */
     public?: boolean
     /** 页面级权限点，缺失时进入 /forbidden */
@@ -86,9 +88,29 @@ router.beforeEach(async (to: RouteLocationNormalized) => {
   return true
 })
 
-router.afterEach((to) => {
-  const title = typeof to.meta.title === 'string' ? to.meta.title : ''
-  document.title = title ? `${title} · LeadStack 领栈` : 'LeadStack 领栈'
+/**
+ * 现取当前路由与语言，拼文档标签题并同步 <html lang>。
+ *
+ * 必须读 router.currentRoute.value / getLanguage() 的当前值，不在模块顶层缓存：
+ * ① 导航后由 afterEach 调用；② 用户在「设置 → 外观」切语言时没有导航，
+ * 由 App.vue 的 watch(language) 调用。两条入口共用本函数，避免两处各拼一份标题。
+ */
+export function applyDocumentTitle(): void {
+  const language = getLanguage()
+  const current = router.currentRoute.value
+  const titleKey = typeof current.meta.titleKey === 'string' ? current.meta.titleKey : ''
+  const title = titleKey ? t(titleKey) : ''
+  // 标签题品牌后缀按语言取：中文界面保留商标全称「LeadStack 领栈」，
+  // 英文界面只留拉丁商标「LeadStack」——英文标签题里混入中文属于 i18n 残留
+  // （m2 回归断言 smoke-i18n-shell.mjs 要求 en 标题 0 CJK 且以「· LeadStack」结尾）。
+  // 侧栏 appName 不受影响（品牌名中英文都显示「LeadStack 领栈」，见 useShellCopy）。
+  const brandSuffix = language === 'en-US' ? 'LeadStack' : 'LeadStack 领栈'
+  document.title = title ? `${title} · ${brandSuffix}` : brandSuffix
+  document.documentElement.lang = language === 'en-US' ? 'en' : 'zh-CN'
+}
+
+router.afterEach(() => {
+  applyDocumentTitle()
 })
 
 export default router

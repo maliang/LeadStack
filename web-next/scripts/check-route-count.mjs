@@ -32,37 +32,35 @@ const ROUTER_FILE = resolve(root, 'src/router/index.ts')
 const EXPECTED_TOTAL = 26
 /** 独立页与兜底：不挂菜单、不计入业务路由。 */
 const MISC_PATHS = new Set(['/login', '/forbidden', '/about', '/:pathMatch(.*)*'])
-/** 占位页：当前必须仍由 NotYetView 承接（路由守卫/页面替换要单独评审）。 */
-const NOT_YET_PATHS = new Set([])
 
-/** 逐条基线：[path, name, meta.title, meta.permission, meta.toolKind]。 */
+/** 逐条基线：[path, name, meta.titleKey, meta.permission, meta.toolKind]。 */
 const BASELINE = [
-  ['/', 'home', '总览', 'server.read', null],
-  ['/servers', 'servers', '服务器', 'server.read', null],
-  ['/servers/:id', 'server-detail', '服务器详情', 'server.read', null],
-  ['/checks', 'checks', '检测', 'check.read', null],
-  ['/alerts', 'alerts', '告警', 'alert.read', null],
-  ['/terminal', 'terminal', '终端', 'terminal.use', 'terminal'],
-  ['/files', 'files', '文件', 'terminal.use', 'files'],
-  ['/logs', 'logs', '日志', 'terminal.use', 'logs'],
-  ['/scheduled-tasks', 'scheduled-tasks', '定时任务', 'task.read', null],
-  ['/import', 'import', '导入主机', 'server.write', null],
-  ['/apps', 'apps', '应用', 'deploy.read', null],
-  ['/apps/:id', 'app-detail', '应用详情', 'deploy.read', null],
-  ['/releases', 'releases', '发布', 'deploy.read', null],
-  ['/releases/:id', 'release-detail', '发布详情', 'deploy.read', null],
-  ['/credentials', 'credentials', '凭证', 'server.write', null],
-  ['/users', 'users', '用户', 'user.manage', null],
-  ['/roles', 'roles', '角色与权限', 'role.manage', null],
-  ['/groups', 'groups', '服务器分组', 'server.read', null],
-  ['/tokens', 'tokens', 'API 令牌', 'token.manage', null],
-  ['/audit', 'audit', '审计', 'audit.read', null],
-  ['/backups', 'backups', '备份', 'backup.read', null],
-  ['/settings', 'settings', '设置', null, null],
-  ['/login', 'login', '登录', null, null],
-  ['/forbidden', 'forbidden', '无权限', null, null],
-  ['/about', 'about', '关于', null, null],
-  ['/:pathMatch(.*)*', 'not-found', '页面不存在', null, null],
+  ['/', 'home', 'nav.overview', 'server.read', null],
+  ['/servers', 'servers', 'nav.servers', 'server.read', null],
+  ['/servers/:id', 'server-detail', 'crumb.serverDetail', 'server.read', null],
+  ['/checks', 'checks', 'nav.checks', 'check.read', null],
+  ['/alerts', 'alerts', 'nav.alerts', 'alert.read', null],
+  ['/terminal', 'terminal', 'nav.terminal', 'terminal.use', 'terminal'],
+  ['/files', 'files', 'nav.files', 'terminal.use', 'files'],
+  ['/logs', 'logs', 'nav.logs', 'terminal.use', 'logs'],
+  ['/scheduled-tasks', 'scheduled-tasks', 'nav.scheduledTasks', 'task.read', null],
+  ['/import', 'import', 'nav.import', 'server.write', null],
+  ['/apps', 'apps', 'nav.apps', 'deploy.read', null],
+  ['/apps/:id', 'app-detail', 'crumb.appDetail', 'deploy.read', null],
+  ['/releases', 'releases', 'nav.releases', 'deploy.read', null],
+  ['/releases/:id', 'release-detail', 'crumb.releaseDetail', 'deploy.read', null],
+  ['/credentials', 'credentials', 'nav.credentials', 'server.write', null],
+  ['/users', 'users', 'nav.users', 'user.manage', null],
+  ['/roles', 'roles', 'nav.roles', 'role.manage', null],
+  ['/groups', 'groups', 'nav.groups', 'server.read', null],
+  ['/tokens', 'tokens', 'nav.tokens', 'token.manage', null],
+  ['/audit', 'audit', 'nav.audit', 'audit.read', null],
+  ['/backups', 'backups', 'nav.backups', 'backup.read', null],
+  ['/settings', 'settings', 'nav.settings', null, null],
+  ['/login', 'login', 'shell.title.login', null, null],
+  ['/forbidden', 'forbidden', 'shell.title.forbidden', null, null],
+  ['/about', 'about', 'shell.title.about', null, null],
+  ['/:pathMatch(.*)*', 'not-found', 'shell.title.notFound', null, null],
 ]
 
 const failures = []
@@ -97,7 +95,7 @@ check(
 )
 check(misc.length === MISC_PATHS.size, `独立页/兜底应为 ${MISC_PATHS.size}，实际 ${misc.length}`)
 
-// ① 逐条基线：path / name / meta.title / meta.permission / meta.toolKind 全等。
+// ① 逐条基线：path / name / meta.titleKey / meta.permission / meta.toolKind 全等。
 const actualByPath = new Map()
 for (const route of routes) {
   if (actualByPath.has(route.path)) failures.push(`path 重复：${route.path}`)
@@ -111,7 +109,7 @@ for (const [path] of BASELINE) {
     continue
   }
   const meta = route.meta ?? {}
-  const actual = [route.path, route.name, meta.title, meta.permission ?? null, meta.toolKind ?? null]
+  const actual = [route.path, route.name, meta.titleKey, meta.permission ?? null, meta.toolKind ?? null]
   const expected = BASELINE.find(([p]) => p === path)
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     failures.push(`路由字段漂移：期望 ${JSON.stringify(expected)}，实际 ${JSON.stringify(actual)}`)
@@ -156,15 +154,7 @@ check(
   `发现同步页面 import（必须改回 () => import(...)）：\n    ${staticPageImports.join('\n    ')}`,
 )
 
-// ④ 占位页必须仍是 NotYetView（顺序与守卫无关，但页面替换要显式改基线）。
-for (const path of NOT_YET_PATHS) {
-  const route = actualByPath.get(path)
-  if (!route) continue
-  const source = route.component?.toString?.() ?? ''
-  check(source.includes('NotYetView'), `占位页 ${path} 的组件不再是 NotYetView（需评审并同步基线）`)
-}
-
-// ⑤ index.ts 只留守卫与实例：不得重新内联 route 记录，守卫关键行为不得丢。
+// ④ index.ts 只留守卫与实例：不得重新内联 route 记录，守卫关键行为不得丢。
 const routerSource = readFileSync(ROUTER_FILE, 'utf8')
 check(
   !/const\s+routes\s*:\s*RouteRecordRaw\[\]/.test(routerSource),
@@ -189,7 +179,7 @@ console.log(`  业务路由 ${business.length} 条（预期 ${expectedBusiness}�
 console.log(`  独立页/兜底 ${misc.length} 条：${[...MISC_PATHS].join(' ')}`)
 console.log(`  注册总数 ${routes.length} 条（预期 ${EXPECTED_TOTAL}）`)
 console.log(
-  `  逐条基线 ${BASELINE.length} 条 / 懒加载 ${routes.length - notLazy.length}/${routes.length} / 占位页 ${NOT_YET_PATHS.size} 条 NotYetView`,
+  `  逐条基线 ${BASELINE.length} 条 / 懒加载 ${routes.length - notLazy.length}/${routes.length}`,
 )
 console.log(`  /settings meta.permission = ${JSON.stringify(settings?.meta?.permission ?? null)}（必须为 null）`)
 

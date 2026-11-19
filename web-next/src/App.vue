@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineComponent } from 'vue'
+import { computed, defineComponent, watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { SConfigProvider, useTheme } from '@vean/ui'
 import type { ConfigProviderThemeOptions } from '@vean/ui'
@@ -7,6 +7,7 @@ import type { ConfigProviderThemeOptions } from '@vean/ui'
 import AppShell from '@/components/AppShell.vue'
 import { BRAND_PRESET } from '@/theme/brand'
 import { setLanguage, useI18n } from '@/i18n'
+import { applyDocumentTitle } from '@/router'
 import {
   appearanceDensity,
   DEFAULT_APPEARANCE,
@@ -51,6 +52,12 @@ const AppearanceDefaultMode = defineComponent({
 })
 
 const { language } = useI18n()
+
+/**
+ * 切语言不是导航，路由 afterEach 不会触发：这里监听语言变化重拼标签题，
+ * 否则用户从中文切到 English 后标签题仍是中文，直到下次跳转才更新。
+ */
+watch(language, () => applyDocumentTitle())
 
 /** Vean 组件的内置文案（SThemeModeSelect 的自动/浅色/深色）跟随界面语言。 */
 const providerLocale = computed(() => (language.value === 'en-US' ? 'en' : 'zh-CN'))

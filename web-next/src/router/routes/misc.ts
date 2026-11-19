@@ -13,24 +13,24 @@ export const miscRoutes: RouteRecordRaw[] = [
     path: '/login',
     name: 'login',
     component: () => import('@/pages/LoginPage.vue'),
-    meta: { title: '登录', public: true, layout: 'blank' },
+    meta: { titleKey: 'shell.title.login', public: true, layout: 'blank' },
   },
   {
     path: '/forbidden',
     name: 'forbidden',
     component: () => import('@/pages/ForbiddenPage.vue'),
-    meta: { title: '无权限', public: true },
+    meta: { titleKey: 'shell.title.forbidden', public: true },
   },
   {
     path: '/about',
     name: 'about',
     component: () => import('@/views/AboutView.vue'),
-    meta: { title: '关于' },
+    meta: { titleKey: 'shell.title.about' },
   },
   {
     path: '/:pathMatch(.*)*',
     name: 'not-found',
     component: () => import('@/views/NotFoundView.vue'),
-    meta: { title: '页面不存在' },
+    meta: { titleKey: 'shell.title.notFound' },
   },
 ]

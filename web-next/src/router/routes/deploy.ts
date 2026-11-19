@@ -11,24 +11,24 @@ export const deployRoutes: RouteRecordRaw[] = [
     path: '/apps',
     name: 'apps',
     component: () => import('@/pages/apps/AppsPage.vue'),
-    meta: { title: '应用', permission: 'deploy.read' },
+    meta: { titleKey: 'nav.apps', permission: 'deploy.read' },
   },
   {
     path: '/apps/:id',
     name: 'app-detail',
     component: () => import('@/pages/apps/AppDetailPage.vue'),
-    meta: { title: '应用详情', permission: 'deploy.read' },
+    meta: { titleKey: 'crumb.appDetail', permission: 'deploy.read' },
   },
   {
     path: '/releases',
     name: 'releases',
     component: () => import('@/pages/releases/ReleasesPage.vue'),
-    meta: { title: '发布', permission: 'deploy.read' },
+    meta: { titleKey: 'nav.releases', permission: 'deploy.read' },
   },
   {
     path: '/releases/:id',
     name: 'release-detail',
     component: () => import('@/pages/releases/ReleaseDetailPage.vue'),
-    meta: { title: '发布详情', permission: 'deploy.read' },
+    meta: { titleKey: 'crumb.releaseDetail', permission: 'deploy.read' },
   },
 ]
