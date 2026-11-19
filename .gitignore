@@ -21,9 +21,6 @@ backup.pass
 
 # 前端依赖与产物
 node_modules/
-web/node_modules/
-web/dist/
-web/.vite/
 # go:embed 的前端产物（由 make build / make web-embed 生成）
 # 例外：只入库一个点开头的占位文件，保证 fresh clone 的 go vet / go build 不会因为
 # //go:embed all:dist 找不到任何文件而失败（CI 就是这么红的）。

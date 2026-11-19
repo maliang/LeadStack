@@ -54,7 +54,7 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量 agent，跨平台、开箱即用
 <details>
 <summary>展开其余界面</summary>
 
-**服务器详情** —— 指标曲线、主机信息、检测/终端/文件/日志入口。
+**服务器详情** —— 基础信息、面板入口、登录信息、一键登录与服务器档案；检测 / 终端 / 文件 / 日志各是独立标签页。
 
 ![服务器详情](docs/images/server-detail.png)
 
@@ -66,7 +66,7 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量 agent，跨平台、开箱即用
 
 ![用户](docs/images/users.png)
 
-**深色主题** —— 明暗主题、6 种强调色（默认绿色）、14/16/18px 字号、舒适/紧凑密度。
+**深色主题** —— 深色主题预览（当前版本深色由样式令牌支持，控制台内尚未提供外观切换入口）。
 
 ![深色主题](docs/images/dashboard-dark.png)
 
@@ -252,7 +252,8 @@ data/
 - **发布**：应用 / 发布记录
 - **系统**：凭证 / 用户 / API Token / 审计 / 备份 / 设置
 
-右上角「外观设置」可切换主题（浅色/深色/跟随系统）、主题色、字号、密度、语言（中文/English）。
+当前版本**尚未提供外观设置入口**：主题（浅色 / 深色 / 跟随系统）、主题色、界面密度与界面语言都还不能在控制台里切换
+（深色仅由样式令牌支持，见上方[界面一览](#界面一览)）。
 
 ### 3. 接入服务器（三选一）
 
@@ -376,7 +377,10 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 ### 5. 配置告警
 
-1. **渠道**：Webhook / 钉钉 / 企业微信 / 飞书 / Slack / Telegram / 邮件；填完点「测试发送」，失败会给出分类原因
+> **控制台界面待接入**：`web-next` 目前只提供告警列表、确认与恢复轨迹，**渠道与规则的增改还没有界面**；
+> 在界面补齐前，请直接调接口（`/api/v1/alert-channels`、`/api/v1/alert-rules`，字段见[架构与接口契约](docs/ARCHITECTURE.md)）。
+
+1. **渠道**：Webhook / 钉钉 / 企业微信 / 飞书 / Slack / Telegram / 邮件；填完可调 `POST /alert-channels/{id}/test` 做「测试发送」，失败会给出分类原因
    （DNS 失败 / 连接失败 / 凭据被拒 / 服务商拒绝）并附探测结果；
 2. **规则**：触发来源三选一 —— 检测项变 `down`、服务器离线、指标（如 `cpu.pct > 90`、`disk.used_pct >= 85`）；
 3. 设**持续时长**（滤抖动）、**去重窗口**（未恢复不重复打扰）、严重级别、渠道；
@@ -598,12 +602,14 @@ leadstack network --show
 发布物在 GitHub Releases（每个 tag 产出 5 平台 × 2 二进制 + `checksums.txt`；到不了 GitHub 见「快速开始 → 方式 4」）。地址与各平台实测结论见
 [升级链路验证报告](docs/UPGRADE-VERIFY.md)，完整 runbook 见 [UPGRADE.md](docs/UPGRADE.md)。
 
-**控制台一键升级（推荐）**：新版出现在用户菜单「版本与升级」与设置页，点一下完成
-**检查 → 自动备份 → 下载校验 → A/B 替换 → 重启**；新版本起不来时**独立 watchdog 自动回退**（含数据恢复到升级前）。
-可关掉：`LEADSTACK_UPGRADE_ENABLED=false`。自动升级只在你点击时发生，不会后台偷跑；Windows 不支持进程内自升级。
+**控制端自升级（控制台界面待接入）**：后端已实现
+**检查 → 自动备份 → 下载校验 → A/B 替换 → 重启**，入口为 `/api/v1/system/update/check`、`/apply`、`/status`；
+新版本起不来时**独立 watchdog 自动回退**（含数据恢复到升级前）。`web-next` 控制台**尚未提供「版本与升级」入口**，
+界面补齐前请走下方「手动三步」或直接调接口。
+可关掉：`LEADSTACK_UPGRADE_ENABLED=false`。自动升级只在触发后发生，不会后台偷跑；Windows 不支持进程内自升级。
 
 **卡住不动**：每个阶段超过 `LEADSTACK_UPGRADE_STALL_TIMEOUT`（默认 `10m`）没有推进，控制端会自己判失败并释放升级锁（不会一直 409）。
-取证与自救见 [架构契约 §51.4](docs/ARCHITECTURE.md) 与下方常见问题；面板会把 `stalled` 当终态停轮询并给出「重新升级」，但判定仍以接口为准。
+取证与自救见 [架构契约 §51.4](docs/ARCHITECTURE.md) 与下方常见问题；`stalled` 的展示面板尚未接入控制台，判定仍以接口为准。
 
 **手动三步**：
 
@@ -643,7 +649,7 @@ sudo systemctl start leadstack
 sha256 校验的是**下载到的包本体**，解包取 `leadstack-agent` 后再 A/B 重命名替换；包坏、缺可执行文件、校验不匹配都保留旧版不断连
 （契约见 [架构契约 §44](docs/ARCHITECTURE.md)）。
 
-**GitHub 不通时怎么升级**：控制台一键升级要访问 GitHub Releases。网络到不了 GitHub 时，按「快速开始 → 方式 4」
+**GitHub 不通时怎么升级**：控制端自升级要访问 GitHub Releases。网络到不了 GitHub 时，按「快速开始 → 方式 4」
 用镜像前缀或离线二进制（`--from-file` / `--agent-from-file`）换，命令与装新机完全一致——重复执行安装命令就是升级。
 
 > **发版前必跑 `make verify-upgrade`**（29 项）：在本地 mock GitHub Releases 上真走
@@ -665,10 +671,10 @@ leadstack restore --file /tmp/leadstack.lsbak --data-dir ./data # 离线恢复�
 > ⚠️ **`backup.pass` 是解密备份的唯一钥匙，必须与备份文件分开保管**（另一台机器 / 密码管理器 / 离线介质）。
 > 它不在归档里，丢了备份永久无法解密。恢复前数据会自动移到 `<data_dir>.pre-restore-<时间>/`。
 
-**界面里恢复（不用停服务）**：上传归档 → 校验后**暂存**到 `<data_dir>/.restore-pending/` → 提示「重启后生效」并给出
-linux / darwin / docker 三条重启命令（带复制按钮）。重启后回到备份页，页面每 5 秒查一次
-`/api/v1/system/backup/restore-status`，状态从「待应用」变成**「恢复已完成（归档 <sha 前 8 位>）」**。
-暂存目录还在时重复上传会被拒绝（409 并说明原因）。
+**暂存恢复（不用停服务，控制台界面待接入）**：后端接口已支持上传归档 → 校验后**暂存**到 `<data_dir>/.restore-pending/` →
+返回「重启后生效」并给出 linux / darwin / docker 三条重启命令；`web-next` 备份页目前只有创建 / 下载 / 删除，
+**上传恢复入口尚未接入**。重启后查 `GET /api/v1/system/backup/restore-status`，状态从「待应用」变成
+**「恢复已完成（归档 <sha 前 8 位>）」**。暂存目录还在时重复上传会被拒绝（409 并说明原因）。
 
 ---
 
@@ -745,7 +751,7 @@ leadstack-agent --insecure                   # 跳过 TLS 校验（不推荐）
 到服务器编辑里改地址或重新确认指纹（旧记录会被清除）。
 
 **收不到告警？**
-按顺序查：规则是否启用 → 渠道「测试发送」是否成功 → 规则目标是否正确 → 是否在静默期 → 级别是否被过滤。
+按顺序查：规则是否启用 → 渠道测试发送（`POST /alert-channels/{id}/test`）是否成功 → 规则目标是否正确 → 是否在静默期 → 级别是否被过滤。
 审计日志里有规则增改记录。
 
 **发布失败了，线上没事吧？**
@@ -762,10 +768,10 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/system/up
 ```
 
 - `job.stalled=true` 只是**预警**（阶段走了一半），还没失败；`phase=stalled` + `done=true` + `error` 才是判失败。
-- 卡在 `exec` 之前（备份/下载/校验/解压/换文件）：二进制没动过，修好网络或磁盘后**直接重新点升级**，不用恢复备份、也不用重启进程。
+- 卡在 `exec` 之前（备份/下载/校验/解压/换文件）：二进制没动过，修好网络或磁盘后**重新触发升级**，不用恢复备份、也不用重启进程。
 - 卡在 `exec` 之后（新版本已就位却没起来）：独立 watchdog 会在 `LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT`（默认 `120s`）内自动回退，先别手工搬文件，等一个周期看 `/healthz` 版本与状态接口里的 `history`（`outcome` 为 `rollback`，带 `reason`）。
 - `running=true` 且 `phase_elapsed_s` 远超 `stall_timeout_s` 仍不转 `stalled`：说明看门狗没在跑（进程卡死），重启控制端再判断；手工回滚见[版本升级与回滚 §7](docs/UPGRADE.md)。
-- 面板会把 `stalled` 视为终态（前端 `isUpdateFinished` 判定）：识别到之后停止轮询、展示失败面板并给出「重新升级」入口；排障仍以接口的 `done`/`error` 为准。
+- `stalled` 只是接口状态，控制台的升级面板尚未接入；排障以接口的 `done`/`error` 为准。
 
 字段语义、看门狗周期与 `state.json` 判据见 [架构契约 §51.4](docs/ARCHITECTURE.md)。
 
@@ -782,8 +788,8 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/system/up
 现在过滤在 SQL 里排在 `LIMIT` 之前，游标也变成「我范围内第 N 条起」，**客户端不用改**；代价是只有最后一页会短
 （细节见 [§66](docs/ARCHITECTURE.md)）。
 
-**界面里恢复备份后，怎么确认真的生效？**
-上传只是暂存，重启时才应用。备份页每 5 秒查一次，重启回来后状态变成「恢复已完成（归档 <sha 前 8 位>）」。
+**调接口暂存恢复后，怎么确认真的生效？**
+上传只是暂存，重启时才应用。轮询 `restore-status`（备份页接入后会每 5 秒查一次），重启回来后状态变成「恢复已完成（归档 <sha 前 8 位>）」。
 命令行等价查法：
 
 ```bash
@@ -821,7 +827,6 @@ internal/
 └── webui/              内嵌前端产物
 pkg/protocol/           agent ↔ 控制端消息契约
 web-next/               Vue 3 控制台（构建后内嵌进二进制，唯一在维护的前端）
-web/                    旧 React 控制台（仅保留只读参照，不再参与构建）
 deploy/                 安装脚本、systemd 单元、Docker Compose
 docs/                   架构契约、升级 runbook、交付报告
 scripts/                端到端验收脚本
@@ -846,7 +851,7 @@ node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐�
 ```
 
 > **内嵌前端 = `web-next/`**：`make build` 先构建 `web-next/dist/`，再由 `make web-embed` 复制到 `internal/webui/dist/`、经 `go:embed` 打进二进制。
-> 旧 `web/`（React）自本版起仅保留只读参照，不参与构建；新功能与修复一律落在 `web-next/`，不要再去改 `web/`。
+> 旧 `web/`（React）已删除，历史参考见 git 历史；新功能与修复一律落在 `web-next/`。
 
 前端文案按领域拆在 `web-next/src/i18n/<locale>/{common,servers,deploy,system,tools,alerts,checks,legacy}.ts`，
 两份语言的领域文件同名同结构、键集合必须逐字相等；改文案只动对应领域文件，不要塞回合并入口。

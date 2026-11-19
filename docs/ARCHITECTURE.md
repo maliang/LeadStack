@@ -21,7 +21,7 @@ LeadStack-领栈/
 │   └── agent/                agent 运行时           [agent]
 ├── pkg/protocol/             消息定义（两侧共享）    [lead]
 ├── web-next/                 Vue 3 SPA（内嵌前端唯一来源） [frontend]
-├── web/                      旧 React SPA（只读参照，不参与构建） [frontend]
+├── web/                      旧 React SPA（已删除，历史参考见 git 历史） [frontend]
 ├── deploy/                   install.sh / systemd / compose [devops]
 ├── docs/                     契约与手册             [lead]
 ├── go.mod / go.sum           依赖清单               [lead]
@@ -1409,9 +1409,9 @@ POST /servers/import
 ## 46. 中英双语 · 主题 · 字号 · 布局（前端规范）
 
 > **范围**：内嵌前端 = `web-next/`（Vue 3 + `@vean/ui`），由 `make build` 经 `make web-embed` 复制到 `internal/webui/dist/` 后 `go:embed` 进二进制。
-> 本节文中出现的 `web/src/**` 是旧 React 控制台的历史路径；旧 `web/` 仅保留只读参照、不再参与构建，新改动一律落在 `web-next/`。
+> 本节文中出现的 `web/src/**` 是旧 React 控制台的历史路径；旧 `web/` 已删除，历史参考见 git 历史，新改动一律落在 `web-next/`。
 
-**i18n**： zh-CN（默认）/ en-US：`web/src/i18n/{zh-CN,en-US}.ts` + `useI18n()`；语言存 `localStorage.leadstack.lang`；所有界面文案走 `t('key')`，**不允许硬编码中文残留**（验收会 grep 抽查）。
+**i18n**： zh-CN（默认）/ en-US：`web-next/src/i18n/zh-CN/index.ts` 与 `web-next/src/i18n/en-US/index.ts` + `useI18n()`（`web-next/src/i18n/index.ts`）；语言存 `localStorage.leadstack.lang`；所有界面文案走 `t('key')`，**不允许硬编码中文残留**（验收会 grep 抽查）。
 
 **主题**：`light` / `dark` / `system` 三态 + 主题色预设（至少 蓝/靛/青/绿/紫 5 种）；写入 `document.documentElement.dataset.theme` 与 `--accent` CSS 变量；图表（uPlot）需随主题重绘。
 
@@ -1421,7 +1421,7 @@ POST /servers/import
 
 **布局与动线（必须遵守）**
 1. 左侧导航**分组**：监控（总览/服务器/检测/告警）· 运维（终端、文件、定时任务、日志）· 发布（应用/发布）· 系统（凭证/用户/审计/备份/设置）。
-   > **总览与服务器必须是两个页面**（`web/src/pages/DashboardPage.tsx` / `web/src/pages/ServersPage.tsx`）：总览只回答「现在整体怎么样」（KPI + 检测/告警/发布摘要 + 需要关注的离线机器，不含全量表格与批量操作），服务器页负责「具体某一台怎么操作」（筛选、批量、增删改、标签分组）。两者共用同一个组件曾导致点哪个菜单都一模一样（`App.tsx` 里 `/` 与 `/servers` 指向同一 element），改动时不要退回那种写法。
+   > **总览与服务器必须是两个页面**（`web-next/src/pages/dashboard/DashboardPage.vue` / `web-next/src/pages/ServersPage.vue`）：总览只回答「现在整体怎么样」（KPI + 检测/告警/发布摘要 + 需要关注的离线机器，不含全量表格与批量操作），服务器页负责「具体某一台怎么操作」（筛选、批量、增删改、标签分组）。两者共用同一个组件曾导致点哪个菜单都一模一样（旧 `App.tsx` 里 `/` 与 `/servers` 指向同一 element；现分别由 `web-next/src/router/routes/servers.ts` 的两条路由承载），改动时不要退回那种写法。
 2. 顶部：面包屑 + 当前页操作区（主操作靠右）；移动端折叠为抽屉导航。
 3. 详情页统一结构：标题区（名称、状态徽标、主操作）→ 概览卡 → 标签页（概览/检测/监控/终端/文件/日志）。
 4. 所有危险操作（删除/回滚/恢复/重启）使用**确认弹窗 + 影响面描述**。
@@ -1690,7 +1690,7 @@ jq . /var/lib/leadstack/data/upgrade/state.json
 tail -n 3 /var/lib/leadstack/data/upgrade/upgrade-history.jsonl | jq -c .
 ```
 
-**停滞后的面板行为**：前端 `isUpdateFinished`（`web/src/components/SystemUpdate.tsx`）把 `success` / `failed` / `rolled_back` / `stalled` 一并当终态。看门狗判出 `phase=stalled` 后，面板停止轮询并直接切到失败面板，给出「重新升级」入口；排障仍以接口的 `done` / `error` 为准，不要把「面板还在转」当成还在正常执行。
+**停滞后的面板行为**：前端 `isUpdateFinished`（旧实现 `web/src/components/SystemUpdate.tsx`，该文件已删除；该升级面板尚未移植到 `web-next/`）把 `success` / `failed` / `rolled_back` / `stalled` 一并当终态。看门狗判出 `phase=stalled` 后，面板停止轮询并直接切到失败面板，给出「重新升级」入口；排障仍以接口的 `done` / `error` 为准，不要把「面板还在转」当成还在正常执行。
 
 ### 51.5 GitHub 主分支自动发版（CI）
 
@@ -2498,7 +2498,7 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 - **500 `internal`**：其余服务端内部错误，同样带 `request_id`；
 - 判定口径：参数非法仍是 400、权限不足 403、越界 404、资源冲突 409；**502 只承担「远端不可达 / 远端命令失败」**（不再被包装成 500，否则用户会以为控制端自己出问题）；**凡是控制端本地的配置或装配问题一律 503**，不要推给目标机——否则用户会拿着「体检失败」去目标机翻日志，一条线索都查不到。
 
-前端不再只弹「操作失败」：错误 toast 自动追加「请求编号 xxx」（`web/src/lib/errors.ts` 的 `errorMessage` / `withRequestId`，消息里已有该号时不重复追加）。
+前端不再只弹「操作失败」：错误 toast 自动追加「请求编号 xxx」（`web-next/src/lib/errors.ts` 的 `errorMessage` / `withRequestId`，消息里已有该号时不重复追加）。
 
 ### 65.2 409 的 `message` 透出精确原因
 
@@ -2540,7 +2540,7 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 - 读的是 `<data_dir>/.restore-pending/meta.json`：不读数据库、不加锁、不触发恢复；
 - `archive_sha256_prefix` 只给归档 sha256 的前 8 位，够人眼比对又不搬全量摘要；`verified_at`、`hint` 可能不出现（`omitempty`）；
 - 已有暂存时再次上传归档 → `409 conflict`，提示先重启应用或清理暂存目录；
-- 前端（`web/src/pages/BackupsPage.tsx`）在上传成功后每 5s 轮询一次，暂存卡片给出 linux / darwin / docker 三条重启命令（带复制按钮）；`pending` 由 `true` 变 `false` 时弹「恢复已完成（归档 <sha 前 8 位>）」。
+- 前端（`web-next/src/pages/ops/BackupsPage.vue`）在上传成功后每 5s 轮询一次，暂存卡片给出 linux / darwin / docker 三条重启命令（带复制按钮）；`pending` 由 `true` 变 `false` 时弹「恢复已完成（归档 <sha 前 8 位>）」。
 
 ### 65.5 `POST /system/update/check` 增加 `agent_assets`
 
@@ -2558,10 +2558,10 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 
 ### 65.6 前端交互变更
 
-- **中止发布**：发布详情页对进行中的 run 提供「中止发布」（`web/src/pages/ReleaseDetailPage.tsx`），二次确认写明「已完成的 N 台不会回滚，剩余 pending 的会被取消」；成功后 toast「已中止 N 台」，N 取 `POST /releases/{id}/cancel` 响应里的 `canceled`（响应缺该字段时回落到操作前的 active 台数）。它与「取消」（关闭弹窗）严格区分措辞，避免让人以为能撤销已完成的服务器。
+- **中止发布**：发布详情页对进行中的 run 提供「中止发布」（`web-next/src/pages/releases/ReleaseDetailPage.vue`），二次确认写明「已完成的 N 台不会回滚，剩余 pending 的会被取消」；成功后 toast「已中止 N 台」，N 取 `POST /releases/{id}/cancel` 响应里的 `canceled`（响应缺该字段时回落到操作前的 active 台数）。它与「取消」（关闭弹窗）严格区分措辞，避免让人以为能撤销已完成的服务器。
 
-  中止之后的**发布整体状态显示「取消」而不是红色「失败」**：状态徽标由 `ReleaseStatusBadge`（`web/src/components/DeployBadges.tsx`）按 `release.status` 渲染，`canceled` 是琥珀色（`s.0416` →「已取消」），`failed` 才是红色（`s.0301`）。这**不需要改前端代码**：页面上的台数统计取自每个 `run.status`（`ReleaseDetailPage.tsx` 的 `stats`），「重试失败项」入口看 `stats.failed > 0`、「回退」入口看 `stats.success > 0`，都与 `release.status` 无关；本轮只改了后端汇聚规则（见 §23）与对应的 e2e 断言。
-- **探测通道**：`tcp` / `http` / `ping` 检测项可在向导里选「控制端直连 / 由目标机 agent 代检」，落库为 `params.probe_via = "control" | "agent"`（`web/src/components/CheckFormDialog.tsx`）。后端只接受这两个值（大小写与空白归一，空串等于删除该键）；`process` / `script` 传该字段 → 400「只适用于 tcp/http/ping（process/script 本身就在目标机执行）」。`agent` 代检要求服务器是 agent 接入：执行通道不支持时检测项**直接判失败并给出原因，不静默回落控制端直连**（`internal/checker/probe.go`）。列表与服务器详情用「agent 代检」徽标标出（`web/src/components/CheckBadges.tsx`）。
+  中止之后的**发布整体状态显示「取消」而不是红色「失败」**：状态徽标由 `ReleaseStatusBadge` 的等价实现（`web-next/src/lib/deploy-domain.ts` 的 `releaseStatusLabelKey` / `releaseStatusTone`，在 `web-next/src/pages/releases/ReleaseDetailPage.vue` 渲染）按 `release.status` 渲染，`canceled` 是琥珀色（`s.0416` →「已取消」），`failed` 才是红色（`s.0301`）。这**不需要改前端代码**：页面上的台数统计取自每个 `run.status`（`web-next/src/pages/releases/ReleaseDetailPage.vue` 的 `stats`），「重试失败项」入口看 `stats.failed > 0`、「回退」入口看 `stats.success > 0`，都与 `release.status` 无关；本轮只改了后端汇聚规则（见 §23）与对应的 e2e 断言。
+- **探测通道**：`tcp` / `http` / `ping` 检测项可在向导里选「控制端直连 / 由目标机 agent 代检」，落库为 `params.probe_via = "control" | "agent"`（旧实现 `web/src/components/CheckFormDialog.tsx`，该文件已删除；web-next 目前只在 `web-next/src/pages/ChecksPage.vue` 展示 `probe_via === 'agent'` 的提示，尚无向导选择 UI）。后端只接受这两个值（大小写与空白归一，空串等于删除该键）；`process` / `script` 传该字段 → 400「只适用于 tcp/http/ping（process/script 本身就在目标机执行）」。`agent` 代检要求服务器是 agent 接入：执行通道不支持时检测项**直接判失败并给出原因，不静默回落控制端直连**（`internal/checker/probe.go`）。列表与服务器详情用「agent 代检」徽标标出（旧实现 `web/src/components/CheckBadges.tsx`，该文件已删除；现由 `web-next/src/pages/ChecksPage.vue` 的 `agentProbeCount` 提示条呈现）。
 - **按授权分组选机**：发布向导与检测向导一律按 `group_ids.includes(groupId)` 过滤，旧的文本字段 `servers.group` 只做展示、不再参与过滤；计数文案固定为「已选 N 台 / 该分组共 M 台」，切换分组时把已选集合裁剪到该分组内，避免「列表里看不见的服务器被一并提交」。
 - **错误 toast**：`error` 级不自动消失、可关闭、可复制，容器 `role="alert"` + `aria-live="assertive"`（普通提示仍是 4s 自动消失）；文案自动追加请求编号（见 §65.1）。
 - **升级 Agent 入口**：`mode=agent` 的服务器详情页有「升级 Agent」弹窗，按 `os` / `arch` 从 `agent_assets` 预填 `version` / `url` / `sha256` 且允许手改；没有 `agent.upgrade` 权限时入口禁用并说明原因。
@@ -2595,9 +2595,9 @@ for _, rel := range releases {
 }
 ```
 
-后果链条很具体：用户范围内那条发布若排在全局第 6 位之后，SQL 只回 5 条、全被丢掉 → 接口返回 `data: []` → 前端渲染「你所授权分组与服务器范围内暂无发布记录。」（`web/src/i18n/zh-CN.ts` 的 `dashboard.recentReleasesScopedEmpty`，用在 `web/src/pages/DashboardPage.tsx`）→ **发布明明存在**。这类「假空列表」比 500 更难查：接口 200、日志无异常、权限也对，用户只能反复核对角色范围。
+后果链条很具体：用户范围内那条发布若排在全局第 6 位之后，SQL 只回 5 条、全被丢掉 → 接口返回 `data: []` → 前端渲染「你所授权分组与服务器范围内暂无发布记录。」（`web-next/src/i18n/zh-CN/system.ts` 的 `dashboard.recentReleasesScopedEmpty`，总览页见 `web-next/src/pages/dashboard/DashboardPage.vue`）→ **发布明明存在**。这类「假空列表」比 500 更难查：接口 200、日志无异常、权限也对，用户只能反复核对角色范围。
 
-`/alerts` 是同一形状，后果更重：`handleListAlerts` 曾把 `limit` 直接交给 `ListAlerts` 先截断，再按 `optionalServerVisible` 在内存里过滤。范围内那条更早的告警被截掉，页面显示「当前筛选条件下没有告警，试试放宽时间范围或清除筛选」（`web/src/i18n/zh-CN.ts` 的 `s.0717`）—— **真有故障却说没有告警**，是这套系统里代价最高的一种误报。
+`/alerts` 是同一形状，后果更重：`handleListAlerts` 曾把 `limit` 直接交给 `ListAlerts` 先截断，再按 `optionalServerVisible` 在内存里过滤。范围内那条更早的告警被截掉，页面显示「当前筛选条件下没有告警，试试放宽时间范围或清除筛选」（键 `s.0717` 现位于 `web-next/src/i18n/zh-CN/legacy.ts`，告警页见 `web-next/src/pages/AlertsPage.vue`）—— **真有故障却说没有告警**，是这套系统里代价最高的一种误报。
 
 正确形状（两处一致）：范围条件进 `WHERE`，参数排在 `LIMIT` 参数之前，`ORDER BY … LIMIT ?` 固定收尾。
 
@@ -2844,7 +2844,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 - 配置弹窗内置两个示例（宝塔 / 1Panel），一键填入后用户只需改地址；
   底部固定一段风险说明（脚本以服务进程权限执行、不要把密码写进脚本）。
 
-配置弹窗里宝塔示例的脚本原文（`web/src/pages/ServerDetailPage.tsx` 的 `LOGIN_SCRIPT_SAMPLES` 中 `key: 'baota'` 一项）：
+配置弹窗里宝塔示例的脚本原文（旧实现 `web/src/pages/ServerDetailPage.tsx` 的 `LOGIN_SCRIPT_SAMPLES` 中 `key: 'baota'` 一项，该文件已删除；示例数据尚未移植到 `web-next/`）：
 
 ```bash
 #!/usr/bin/env bash
@@ -3034,14 +3034,16 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   'http://127.0.0.1:8080/api/v1/audit-logs?action=server.update&limit=1' | jq '.data[0] | {action,detail}'
 ```
 
-### 69.8 前端实现注记（`web/src/pages/ServerDetailPage.tsx`）
+### 69.8 前端实现注记（现实现 `web-next/src/pages/ServerDetailPage.vue`）
 
-档案卡片是 `ServerMetaCard`（`web/src/pages/ServerDetailPage.tsx:974`），渲染在「登录信息」卡（`ServerAccessCard`）之后（同文件 `:1640`）。以下四个易错点已被实现固化，改这块代码时别打破：
+> **历史说明**：旧实现 `web/src/pages/ServerDetailPage.tsx` 已删除，以下四条是设计意图（旧 TSX 行号已失效，不再保留）；现实现见 `web-next/src/pages/ServerDetailPage.vue` 与 `web-next/src/components/server-detail/ServerMetaTab.vue`。
 
-1. **保存后必须重读详情**：`PATCH` 的响应是列表形状的服务器对象、不含 `notes` / `custom_fields`，所以 `save()` 在 `updateServer` 成功后紧接着 `await api.server(server.id)`，用详情返回值重置本地 `notes` / `rows`（`web/src/pages/ServerDetailPage.tsx:1046-1051`）。同时把「已提交但重读失败」与「保存失败」分成两条提示（`server.meta.reloadFailed` / `server.meta.saveFailed`），前者不能报成保存失败、诱导用户重复提交。
-2. **轮询/同名对象不重置草稿**：详情页会轮询刷新，`server` 对象引用变化不等于档案内容变化。用 `${server.notes}\u0002${metaFieldsKey(server.custom_fields)}` 拼内容签名 `incomingSignature`：签名未变直接返回；只有签名变化且本地不脏（`dirtyRef.current === false`）时才覆盖 `notes` / `rows`（`web/src/pages/ServerDetailPage.tsx:995-1004`）。否则每次轮询都会把正在编辑的草稿打回旧值。
+档案卡片是 `ServerMetaCard` 的等价实现 `web-next/src/components/server-detail/ServerMetaTab.vue`，渲染在「登录信息」卡（`web-next/src/components/server-detail/ServerAccessTab.vue`）之后。以下四个易错点已被实现固化，改这块代码时别打破：
+
+1. **保存后必须重读详情**：`PATCH` 的响应是列表形状的服务器对象、不含 `notes` / `custom_fields`，所以 `save()` 在 `updateServer` 成功后紧接着 `await api.server(server.id)`，用详情返回值重置本地 `notes` / `rows`（现实现见 `web-next/src/pages/ServerDetailPage.vue:245` 的 `api.updateServer` 与 `:256` 的 `api.server` 重读）。同时把「已提交但重读失败」与「保存失败」分成两条提示（`server.meta.reloadFailed` / `server.meta.saveFailed`），前者不能报成保存失败、诱导用户重复提交。
+2. **轮询/同名对象不重置草稿**：详情页会轮询刷新，`server` 对象引用变化不等于档案内容变化。现实现见 `web-next/src/components/server-detail/ServerMetaTab.vue:46-58`：用 `dirty` 标记本地是否有未保存修改，并只在 `server.id` / `savedAt` 变化时 `resetDraft()`，轮询引起的对象引用变化不触发覆盖。否则每次轮询都会把正在编辑的草稿打回旧值。
 3. **外人改动时本地有未保存修改先不覆盖**：同上判断，`dirty` 为真时保留草稿不动（宁可看起来「没更新」，也不吞掉输入）。当前**不弹冲突提示**——W2 随 Vean 重画档案卡时再补「有他人改动，是否放弃本地修改」；现阶段取舍是靠「放弃修改」按钮手动重置。
 4. **无 `server.write` 时只读**：`canWrite` 来自 `can('server.write')`，只读时备注/字段输入框、添加/删除、预设模板全部禁用，保存按钮不可点，卡片底部显示 `server.meta.readOnly`（「只能查看」）。接口侧仍有 `server.write` 校验兜底（§69.1），前端禁用只是体验优化、不是权限边界。
 
-文案键集中在 `web/src/i18n/zh-CN.ts` 与 `web/src/i18n/en-US.ts` 的 `server.meta.*`（标题、备注计数、六个预设名、四类校验错误、保存/重读失败、只读提示）；新增文案两边都要加，缺键会把 key 直接显示在界面上。
+文案键集中在 `web-next/src/i18n/zh-CN/servers.ts` 与 `web-next/src/i18n/en-US/servers.ts` 的 `server.meta.*`（标题、备注计数、六个预设名、四类校验错误、保存/重读失败、只读提示）；新增文案两边都要加，缺键会把 key 直接显示在界面上。
 
