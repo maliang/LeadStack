@@ -43,7 +43,7 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量 agent，跨平台、开箱即用
 
 ![检测](docs/images/checks.png)
 
-**告警** —— 触发、去重、确认、恢复的完整轨迹。
+**告警** —— 触发、去重、确认、恢复的完整轨迹；同一页面还管**通知渠道与规则**（增删改、临时静默、「测试发送」）。
 
 ![告警](docs/images/alerts.png)
 
@@ -377,8 +377,9 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 ### 5. 配置告警
 
-> **控制台界面待接入**：`web-next` 目前只提供告警列表、确认与恢复轨迹，**渠道与规则的增改还没有界面**；
-> 在界面补齐前，请直接调接口（`/api/v1/alert-channels`、`/api/v1/alert-rules`，字段见[架构与接口契约](docs/ARCHITECTURE.md)）。
+> **控制台已接入**：`web-next` 的告警页分「事件 / 规则 / 渠道」三个标签——事件保留确认与恢复轨迹，
+> 规则与渠道可直接新增、编辑、删除，渠道支持「测试发送」。写操作需要 `alert.write` 权限，只读账号只能看列表；
+> 字段与错误码见[架构与接口契约](docs/ARCHITECTURE.md)。
 
 1. **渠道**：Webhook / 钉钉 / 企业微信 / 飞书 / Slack / Telegram / 邮件；填完可调 `POST /alert-channels/{id}/test` 做「测试发送」，失败会给出分类原因
    （DNS 失败 / 连接失败 / 凭据被拒 / 服务商拒绝）并附探测结果；

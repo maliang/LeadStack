@@ -171,6 +171,107 @@ function buildAlerts() {
   return alerts
 }
 
+/**
+ * 规则 mock：覆盖 check（两项检测）与 metric 两种来源，行内按钮齐全。
+ * 字段名严格按 api.ts / handlers_alerts.go，不凭猜。
+ */
+function alertRuleFixture(overrides) {
+  return {
+    id: 'rule-cpu',
+    name: 'CPU 持续高位',
+    enabled: true,
+    source: 'check',
+    check_ids: ['chk-cpu', 'chk-load'],
+    server_ids: [],
+    groups: [],
+    tags: [],
+    metric: null,
+    comparator: null,
+    threshold: null,
+    for_duration_s: 300,
+    severity: 'warning',
+    dedup_window_s: 300,
+    channel_ids: ['ch-ok'],
+    silence_until: null,
+    created_at: NOW - 86_400_000,
+    ...overrides,
+  }
+}
+
+function buildAlertRules() {
+  return [
+    alertRuleFixture(),
+    alertRuleFixture({
+      id: 'rule-disk',
+      name: '磁盘空间不足',
+      enabled: false,
+      source: 'metric',
+      check_ids: [],
+      metric: 'disk.used.pct',
+      comparator: '>',
+      threshold: 90,
+      for_duration_s: 0,
+      severity: 'critical',
+      dedup_window_s: 0,
+      channel_ids: [],
+      created_at: NOW - 172_800_000,
+    }),
+  ]
+}
+
+/** 渠道 mock：config 一律是后端脱敏后的形态（含 ***），用来验证前端不回显。 */
+function alertChannelFixture(overrides) {
+  return {
+    id: 'ch-ok',
+    name: '运维 Webhook',
+    kind: 'webhook',
+    enabled: true,
+    config: { url: 'https://hooks.example.com/services/T000/***' },
+    last_error: null,
+    last_ok_at: NOW - 600_000,
+    created_at: NOW - 2 * 86_400_000,
+    ...overrides,
+  }
+}
+
+function buildAlertChannels() {
+  return [
+    alertChannelFixture(),
+    alertChannelFixture({
+      id: 'ch-bad',
+      name: 'Telegram 值班群',
+      kind: 'telegram',
+      config: { chat_id: '-1001234567', bot_token: '***' },
+      last_error: '401 Unauthorized: bot token invalid',
+      last_ok_at: null,
+    }),
+  ]
+}
+
+function buildChecks() {
+  return [
+    { id: 'chk-cpu', name: 'CPU 使用率', kind: 'metric', target: 'cpu.pct', interval_s: 60, timeout_s: 5, server_ids: [], enabled: true },
+    { id: 'chk-load', name: '系统负载', kind: 'metric', target: 'load1', interval_s: 60, timeout_s: 5, server_ids: [], enabled: true },
+    { id: 'chk-disk', name: '磁盘使用率', kind: 'metric', target: 'disk.used.pct', interval_s: 60, timeout_s: 5, server_ids: [], enabled: true },
+  ]
+}
+
+/** 服务器 mock：metrics_summary 必须非空，否则 api.servers() 会补拉详情（mock 未覆盖）。 */
+function buildServers() {
+  return [
+    {
+      id: 'srv-alpha',
+      name: 'alpha-node',
+      host: '10.0.0.11',
+      port: 9700,
+      mode: 'agent',
+      status: 'online',
+      tags: [],
+      metrics_summary: { cpu_pct: 12, mem_used_pct: 40, disk_used_pct: 55, load1: 0.4, uptime_s: 86400 },
+    },
+  ]
+}
+
 function log(step, message) {
   console.log(`  [${step}] ${message}`)
 }
@@ -339,6 +440,105 @@ async function installMockApi(context, state) {
       return found ? json(200, { data: found }) : json(404, { error: { code: 'not_found' } })
     }
 
+    /* ---------------- 告警规则 / 通知渠道（h2 起） ---------------- */
+    // 任何 /alert-rules* 与 /alert-channels* 的非 GET 请求都记账，
+    // 「缺 alert.write 时零写请求」直接用它做断言。
+    const isAlertWrite =
+      method !== 'GET' &&
+      (path.startsWith('/api/v1/alert-rules') || path.startsWith('/api/v1/alert-channels'))
+    if (isAlertWrite) state.writeCalls.push(`${method} ${path}`)
+
+    if (path === '/api/v1/checks' && method === 'GET') return json(200, { data: state.checks })
+    if (path === '/api/v1/servers' && method === 'GET') return json(200, { data: state.servers })
+
+    if (path === '/api/v1/alert-rules' && method === 'GET') return json(200, { data: state.rules })
+    if (path === '/api/v1/alert-rules' && method === 'POST') {
+      const body = request.postDataJSON()
+      state.ruleCreateCalls.push(body)
+      const created = {
+        ...body,
+        id: `rule-new-${state.ruleCreateCalls.length}`,
+        silence_until: null,
+        created_at: Date.now(),
+      }
+      state.rules.unshift(created)
+      return json(201, { data: created })
+    }
+
+    const ruleSilence = /^\/api\/v1\/alert-rules\/([^/]+)\/silence$/.exec(path)
+    if (ruleSilence && method === 'POST') {
+      const id = decodeURIComponent(ruleSilence[1])
+      const body = request.postDataJSON()
+      state.silenceCalls.push({ id, body })
+      const found = state.rules.find((item) => item.id === id)
+      if (!found) return json(404, { error: { code: 'not_found', message: '规则不存在' } })
+      // 与后端一致：duration_s 秒后解除，0 表示取消静默
+      found.silence_until = body.duration_s > 0 ? Date.now() + body.duration_s * 1000 : null
+      return json(200, { data: found })
+    }
+
+    const ruleDetail = /^\/api\/v1\/alert-rules\/([^/]+)$/.exec(path)
+    if (ruleDetail && method === 'PATCH') {
+      const id = decodeURIComponent(ruleDetail[1])
+      const body = request.postDataJSON()
+      state.rulePatchCalls.push({ id, body })
+      const found = state.rules.find((item) => item.id === id)
+      if (!found) return json(404, { error: { code: 'not_found', message: '规则不存在' } })
+      Object.assign(found, body)
+      return json(200, { data: found })
+    }
+    if (ruleDetail && method === 'DELETE') {
+      const id = decodeURIComponent(ruleDetail[1])
+      state.ruleDeleteCalls.push(id)
+      state.rules = state.rules.filter((item) => item.id !== id)
+      return route.fulfill({ status: 204, body: '' })
+    }
+
+    if (path === '/api/v1/alert-channels' && method === 'GET') return json(200, { data: state.channels })
+    if (path === '/api/v1/alert-channels' && method === 'POST') {
+      const body = request.postDataJSON()
+      state.channelCreateCalls.push(body)
+      const created = {
+        ...body,
+        id: `ch-new-${state.channelCreateCalls.length}`,
+        last_error: null,
+        last_ok_at: null,
+        created_at: Date.now(),
+      }
+      state.channels.unshift(created)
+      return json(201, { data: created })
+    }
+
+    const channelTest = /^\/api\/v1\/alert-channels\/([^/]+)\/test$/.exec(path)
+    if (channelTest && method === 'POST') {
+      const id = decodeURIComponent(channelTest[1])
+      state.channelTestCalls.push(id)
+      const found = state.channels.find((item) => item.id === id)
+      if (!found) return json(404, { error: { code: 'not_found', message: '渠道不存在' } })
+      // ch-bad 固定失败：前端必须原样显示后端 error，不能自己编文案
+      if (id === 'ch-bad') {
+        return json(200, { data: { ok: false, error: '401 Unauthorized: bot token invalid' } })
+      }
+      return json(200, { data: { ok: true } })
+    }
+
+    const channelDetail = /^\/api\/v1\/alert-channels\/([^/]+)$/.exec(path)
+    if (channelDetail && method === 'PATCH') {
+      const id = decodeURIComponent(channelDetail[1])
+      const body = request.postDataJSON()
+      state.channelPatchCalls.push({ id, body })
+      const found = state.channels.find((item) => item.id === id)
+      if (!found) return json(404, { error: { code: 'not_found', message: '渠道不存在' } })
+      Object.assign(found, body)
+      return json(200, { data: found })
+    }
+    if (channelDetail && method === 'DELETE') {
+      const id = decodeURIComponent(channelDetail[1])
+      state.channelDeleteCalls.push(id)
+      state.channels = state.channels.filter((item) => item.id !== id)
+      return route.fulfill({ status: 204, body: '' })
+    }
+
     return json(404, { error: { code: 'not_found', message: `mock api 未覆盖 ${method} ${path}` } })
   })
 }
@@ -411,6 +611,7 @@ async function run() {
       alerts: buildAlerts(),
       listCalls: 0,
       ackCalls: [],
+      writeCalls: [],
     }
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     await installMockApi(context, state)
@@ -582,13 +783,473 @@ async function run() {
     await context.close()
 
     /* ------------------------------------------------------------------ */
-    /* 场景 2：无 alert.read —— 0 请求 + /forbidden                        */
+    /* 场景 2：规则 tab —— 深链 / 新建 / 编辑 / 静默 / 删除 / 320px        */
+    /* ------------------------------------------------------------------ */
+    const ruleState = {
+      permissions: ['server.read', 'check.read', 'alert.read', 'alert.write'],
+      alerts: buildAlerts(),
+      listCalls: 0,
+      ackCalls: [],
+      rules: buildAlertRules(),
+      channels: buildAlertChannels(),
+      checks: buildChecks(),
+      servers: buildServers(),
+      ruleCreateCalls: [],
+      rulePatchCalls: [],
+      ruleDeleteCalls: [],
+      silenceCalls: [],
+      channelCreateCalls: [],
+      channelPatchCalls: [],
+      channelDeleteCalls: [],
+      channelTestCalls: [],
+      writeCalls: [],
+    }
+    const adminContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    await installMockApi(adminContext, ruleState)
+    const adminPage = await adminContext.newPage()
+    adminPage.on('pageerror', (error) => pageErrors.push(`rules: ${error.message}`))
+
+    await login(adminPage, base)
+    log('step', '深链 #/alerts?tab=rules')
+    await adminPage.goto(`${base}/#/alerts?tab=rules`, { waitUntil: 'domcontentloaded' })
+    await adminPage.waitForSelector('#alerts-panel-rules .ls-alerts__panel-title', { timeout: 15000 })
+    await adminPage.waitForFunction(
+      () => document.querySelectorAll('#alerts-panel-rules .ls-alertspage__row').length === 2,
+      undefined,
+      { timeout: 15000 },
+    )
+    const ruleRows = adminPage.locator('#alerts-panel-rules .ls-alertspage__row')
+    check(
+      '深链 ?tab=rules 直达规则表',
+      (await ruleRows.count()) === 2 &&
+        (await adminPage.locator('#alerts-tab-rules').getAttribute('aria-selected')) === 'true' &&
+        /2 条规则/.test(await adminPage.locator('#alerts-panel-rules .ls-alerts__count').innerText()),
+      `${await ruleRows.count()} 行 / ${(await adminPage.locator('#alerts-panel-rules .ls-alerts__count').innerText()).trim()}`,
+    )
+
+    const historyBefore = await adminPage.evaluate(() => window.history.length)
+    await adminPage.click('#alerts-tab-events')
+    await adminPage.waitForSelector('#alerts-count', { timeout: 10000 })
+    await adminPage.click('#alerts-tab-channels')
+    await adminPage.waitForSelector('#alerts-panel-channels .ls-alerts__panel-title', { timeout: 10000 })
+    await adminPage.waitForFunction(
+      () => document.querySelectorAll('#alerts-panel-channels .ls-alertspage__row').length === 2,
+      undefined,
+      { timeout: 10000 },
+    )
+    await adminPage.click('#alerts-tab-rules')
+    await adminPage.waitForFunction(
+      () => document.querySelectorAll('#alerts-panel-rules .ls-alertspage__row').length === 2,
+      undefined,
+      { timeout: 10000 },
+    )
+    const historyAfter = await adminPage.evaluate(() => window.history.length)
+    check(
+      'tab 切换用 replace 不新增历史',
+      historyAfter === historyBefore && new URL(adminPage.url()).hash.includes('tab=rules'),
+      `history ${historyBefore} → ${historyAfter} / ${new URL(adminPage.url()).hash}`,
+    )
+
+    // ---- 新建 check 规则：两项检测 + warning + 关联一个渠道 ----
+    log('step', '新建 check 规则')
+    await adminPage.click('#alerts-rule-create')
+    await adminPage.waitForSelector('#alerts-rule-form', { timeout: 10000 })
+    await adminPage.waitForFunction(
+      () => document.querySelectorAll('#alerts-rule-form fieldset')[0]?.querySelectorAll('input[type="checkbox"]').length === 3,
+      undefined,
+      { timeout: 10000 },
+    )
+    await adminPage.fill('#alerts-rule-name', '磁盘增长过快')
+    await adminPage.selectOption('#alerts-rule-severity', 'warning')
+    await adminPage.fill('#alerts-rule-duration', '120')
+    const checkBoxes = adminPage.locator('#alerts-rule-form fieldset').nth(0).locator('input[type="checkbox"]')
+    await checkBoxes.nth(0).check()
+    await checkBoxes.nth(1).check()
+    await adminPage
+      .locator('#alerts-rule-form fieldset')
+      .nth(1)
+      .locator('input[type="checkbox"]')
+      .nth(0)
+      .check()
+    await adminPage.click('#alerts-rule-save')
+    await adminPage.waitForFunction(
+      () =>
+        [...document.querySelectorAll('#alerts-panel-rules .ls-alertspage__row')].some((row) =>
+          row.textContent.includes('磁盘增长过快'),
+        ),
+      undefined,
+      { timeout: 10000 },
+    )
+    const expectedRuleCreate = {
+      name: '磁盘增长过快',
+      enabled: true,
+      source: 'check',
+      for_duration_s: 120,
+      severity: 'warning',
+      dedup_window_s: 300,
+      channel_ids: ['ch-ok'],
+      check_ids: ['chk-cpu', 'chk-load'],
+      server_ids: [],
+    }
+    check(
+      '新建规则 POST /alert-rules 恰 1 次且请求体与表单一致',
+      ruleState.ruleCreateCalls.length === 1 &&
+        JSON.stringify(ruleState.ruleCreateCalls[0]) === JSON.stringify(expectedRuleCreate),
+      JSON.stringify(ruleState.ruleCreateCalls[0]),
+    )
+    check(
+      '新建成功后规则表出现新行',
+      (await adminPage
+        .locator('#alerts-panel-rules .ls-alertspage__row')
+        .filter({ hasText: '磁盘增长过快' })
+        .count()) === 1,
+    )
+
+    // ---- 编辑：只发 PATCH，体只含变更字段 ----
+    log('step', '编辑规则：只改名称')
+    await adminPage.locator('.ls-alertspage__row[data-rule-id="rule-cpu"]').locator('#alerts-rule-edit-rule-cpu').click()
+    await adminPage.waitForSelector('#alerts-rule-form', { timeout: 10000 })
+    await adminPage.waitForFunction(() => document.querySelector('#alerts-rule-name')?.value === 'CPU 持续高位')
+    await adminPage.fill('#alerts-rule-name', 'CPU 持续高位（已调整）')
+    await adminPage.click('#alerts-rule-save')
+    await adminPage.waitForFunction(
+      () =>
+        [...document.querySelectorAll('#alerts-panel-rules .ls-alertspage__row')].some((row) =>
+          row.textContent.includes('CPU 持续高位（已调整）'),
+        ),
+      undefined,
+      { timeout: 10000 },
+    )
+    const patchCall = ruleState.rulePatchCalls[0]
+    check(
+      '编辑只发 1 次 PATCH 且体只含变更字段 name',
+      ruleState.rulePatchCalls.length === 1 &&
+        patchCall.id === 'rule-cpu' &&
+        JSON.stringify(patchCall.body) === JSON.stringify({ name: 'CPU 持续高位（已调整）' }),
+      JSON.stringify(patchCall?.body),
+    )
+    check(
+      '编辑未触发 POST / DELETE / 静默请求',
+      ruleState.ruleCreateCalls.length === 1 &&
+        ruleState.ruleDeleteCalls.length === 0 &&
+        ruleState.silenceCalls.length === 0,
+    )
+
+    // ---- 删除：二次确认 ----
+    log('step', '删除规则：先取消再确认')
+    await adminPage.click('#alerts-rule-delete-rule-disk')
+    await adminPage.waitForSelector('#alerts-delete-confirm', { timeout: 10000 })
+    await adminPage.click('#alerts-delete-cancel')
+    await adminPage.waitForSelector('#alerts-delete-confirm', { state: 'detached', timeout: 10000 })
+    check(
+      '规则删除二次确认：取消后 0 次 DELETE 且行还在',
+      ruleState.ruleDeleteCalls.length === 0 &&
+        (await adminPage.locator('.ls-alertspage__row[data-rule-id="rule-disk"]').count()) === 1,
+      `${ruleState.ruleDeleteCalls.length} 次 DELETE`,
+    )
+    await adminPage.click('#alerts-rule-delete-rule-disk')
+    await adminPage.waitForSelector('#alerts-delete-confirm', { timeout: 10000 })
+    await adminPage.click('#alerts-delete-confirm')
+    await adminPage.waitForSelector('.ls-alertspage__row[data-rule-id="rule-disk"]', {
+      state: 'detached',
+      timeout: 10000,
+    })
+    check(
+      '规则删除二次确认：确认 1 次 DELETE 且行消失',
+      ruleState.ruleDeleteCalls.length === 1 && ruleState.ruleDeleteCalls[0] === 'rule-disk',
+      ruleState.ruleDeleteCalls.join(','),
+    )
+
+    // ---- 静默 1h ----
+    log('step', '静默 1h')
+    await adminPage.click('#alerts-rule-silence-rule-new-1')
+    await adminPage.waitForSelector('#alerts-silence-3600', { timeout: 10000 })
+    await adminPage.click('#alerts-silence-3600')
+    await adminPage.waitForSelector('#alerts-rule-unsilence-rule-new-1', { timeout: 10000 })
+    check(
+      '静默体为秒：{"duration_s":3600}',
+      ruleState.silenceCalls.length === 1 &&
+        JSON.stringify(ruleState.silenceCalls[0].body) === '{"duration_s":3600}',
+      `共 ${ruleState.silenceCalls.length} 次静默请求`,
+    )
+    check('静默 1h 后行内出现取消静默按钮', (await adminPage.locator('#alerts-rule-unsilence-rule-new-1').count()) === 1)
+
+    // ---- 320px：规则 tab ----
+    log('step', '320px 规则 tab')
+    await adminPage.setViewportSize({ width: 320, height: 800 })
+    await adminPage.waitForTimeout(250)
+    const rulesNarrow = await adminPage.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+      rows: document.querySelectorAll('#alerts-panel-rules .ls-alertspage__row').length,
+    }))
+    check(
+      '320px 规则 tab 无横向滚动',
+      rulesNarrow.rows >= 2 && rulesNarrow.scrollWidth <= rulesNarrow.innerWidth + 1,
+      `scrollWidth=${rulesNarrow.scrollWidth}`,
+    )
+    await shot(adminPage, 'alerts-rules-320')
+
+    /* ------------------------------------------------------------------ */
+    /* 场景 3：渠道 tab —— 新建 / 测试 ok·fail / 密钥不回显 / 320px        */
+    /* ------------------------------------------------------------------ */
+    log('step', '320px 渠道 tab')
+    await adminPage.click('#alerts-tab-channels')
+    await adminPage.waitForSelector('#alerts-panel-channels .ls-alerts__panel-title', { timeout: 10000 })
+    await adminPage.waitForFunction(
+      () => document.querySelectorAll('#alerts-panel-channels .ls-alertspage__row').length === 2,
+      undefined,
+      { timeout: 10000 },
+    )
+    const channelsNarrow = await adminPage.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+      rows: document.querySelectorAll('#alerts-panel-channels .ls-alertspage__row').length,
+    }))
+    check(
+      '320px 渠道 tab 无横向滚动',
+      channelsNarrow.rows >= 2 && channelsNarrow.scrollWidth <= channelsNarrow.innerWidth + 1,
+      `scrollWidth=${channelsNarrow.scrollWidth}`,
+    )
+    await shot(adminPage, 'alerts-channels-320')
+    await adminPage.setViewportSize({ width: 1280, height: 900 })
+
+    log('step', '新建 webhook 渠道')
+    await adminPage.click('#alerts-channel-create')
+    await adminPage.waitForSelector('#alerts-channel-form', { timeout: 10000 })
+    await adminPage.fill('#alerts-channel-name', '值班 Webhook')
+    await adminPage.fill('#alerts-channel-url', 'https://hooks.example.com/services/T111/B222')
+    await adminPage.click('#alerts-channel-save')
+    await adminPage.waitForFunction(
+      () =>
+        [...document.querySelectorAll('#alerts-panel-channels .ls-alertspage__row')].some((row) =>
+          row.textContent.includes('值班 Webhook'),
+        ),
+      undefined,
+      { timeout: 10000 },
+    )
+    const expectedChannelCreate = {
+      name: '值班 Webhook',
+      kind: 'webhook',
+      enabled: true,
+      config: { url: 'https://hooks.example.com/services/T111/B222' },
+    }
+    check(
+      '新建 webhook 渠道 POST /alert-channels 恰 1 次',
+      ruleState.channelCreateCalls.length === 1 &&
+        JSON.stringify(ruleState.channelCreateCalls[0]) === JSON.stringify(expectedChannelCreate),
+      JSON.stringify(ruleState.channelCreateCalls[0]),
+    )
+    check(
+      '新建成功后渠道表出现新行',
+      (await adminPage
+        .locator('#alerts-panel-channels .ls-alertspage__row')
+        .filter({ hasText: '值班 Webhook' })
+        .count()) === 1,
+    )
+
+    log('step', '测试渠道：ok=true')
+    await adminPage.click('#alerts-channel-test-ch-ok')
+    await adminPage.waitForFunction(
+      () => document.querySelector('#alerts-channel-test-result')?.textContent.includes('测试消息已发送'),
+      undefined,
+      { timeout: 10000 },
+    )
+    const okResult = adminPage.locator('#alerts-channel-test-result')
+    check(
+      '渠道测试 ok=true 显示成功文案',
+      (await okResult.getAttribute('class')).includes('ls-alerts__notice--ok') &&
+        (await okResult.innerText()).includes('运维 Webhook'),
+      (await okResult.innerText()).replace(/\s+/g, ' '),
+    )
+
+    log('step', '测试渠道：ok=false')
+    await adminPage.click('#alerts-channel-test-ch-bad')
+    await adminPage.waitForFunction(
+      () =>
+        document
+          .querySelector('#alerts-channel-test-result')
+          ?.textContent.includes('401 Unauthorized: bot token invalid'),
+      undefined,
+      { timeout: 10000 },
+    )
+    const badResult = adminPage.locator('#alerts-channel-test-result')
+    check(
+      '渠道测试 ok=false 原样显示后端 error',
+      (await badResult.getAttribute('class')).includes('ls-alerts__notice--error') &&
+        (await badResult.innerText()).includes('401 Unauthorized: bot token invalid'),
+      (await badResult.innerText()).replace(/\s+/g, ' '),
+    )
+    check(
+      '两次测试分别打到各自渠道',
+      JSON.stringify(ruleState.channelTestCalls) === JSON.stringify(['ch-ok', 'ch-bad']),
+      ruleState.channelTestCalls.join(','),
+    )
+
+    const channelsText = await adminPage.locator('#alerts-panel-channels').innerText()
+    await adminPage.click('#alerts-channel-edit-ch-ok')
+    await adminPage.waitForSelector('#alerts-channel-url', { timeout: 10000 })
+    const maskedInput = await adminPage.locator('#alerts-channel-url').inputValue()
+    const maskedPlaceholder = await adminPage.locator('#alerts-channel-url').getAttribute('placeholder')
+    const channelModalText = await adminPage.locator('#alerts-channel-form').innerText()
+    await adminPage.click('#alerts-channel-cancel')
+    await adminPage.waitForSelector('#alerts-channel-form', { state: 'detached', timeout: 10000 })
+    check(
+      '渠道密钥不回显：列表与弹窗都不含 *** 或明文',
+      !channelsText.includes('***') &&
+        !channelsText.includes('hooks.example.com') &&
+        maskedInput === '' &&
+        Boolean(maskedPlaceholder && maskedPlaceholder.length > 0) &&
+        !channelModalText.includes('***') &&
+        !channelModalText.includes('hooks.example.com'),
+      `列表 ${channelsText.length} 字 / 弹窗输入 "${maskedInput}" / placeholder "${maskedPlaceholder}"`,
+    )
+    check('打开渠道编辑弹窗不做写入（取消后 0 次 PATCH）', ruleState.channelPatchCalls.length === 0)
+
+    check('规则/渠道场景无未捕获异常', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '))
+    await adminContext.close()
+
+    /* ------------------------------------------------------------------ */
+    /* 场景 4：有 alert.read 缺 alert.write —— 只读，零写请求               */
+    /* ------------------------------------------------------------------ */
+    const readOnly = {
+      permissions: ['server.read', 'check.read', 'alert.read'],
+      alerts: buildAlerts(),
+      listCalls: 0,
+      ackCalls: [],
+      rules: buildAlertRules(),
+      channels: buildAlertChannels(),
+      checks: buildChecks(),
+      servers: buildServers(),
+      ruleCreateCalls: [],
+      rulePatchCalls: [],
+      ruleDeleteCalls: [],
+      silenceCalls: [],
+      channelCreateCalls: [],
+      channelPatchCalls: [],
+      channelDeleteCalls: [],
+      channelTestCalls: [],
+      writeCalls: [],
+    }
+    const readOnlyContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    await installMockApi(readOnlyContext, readOnly)
+    const readOnlyPage = await readOnlyContext.newPage()
+    readOnlyPage.on('pageerror', (error) => pageErrors.push(`readonly: ${error.message}`))
+    await login(readOnlyPage, base)
+    await readOnlyPage.goto(`${base}/#/alerts?tab=rules`, { waitUntil: 'domcontentloaded' })
+    await readOnlyPage.waitForFunction(
+      () => document.querySelectorAll('#alerts-panel-rules .ls-alertspage__row').length === 2,
+      undefined,
+      { timeout: 15000 },
+    )
+    const ruleWriteIds = [
+      '#alerts-rule-create',
+      '#alerts-rule-edit-rule-cpu',
+      '#alerts-rule-silence-rule-cpu',
+      '#alerts-rule-delete-rule-cpu',
+      '#alerts-rule-enabled-rule-cpu',
+    ]
+    let ruleWriteButtons = 0
+    for (const selector of ruleWriteIds) ruleWriteButtons += await readOnlyPage.locator(selector).count()
+    check(
+      '缺 alert.write 时规则侧新建/编辑/静默/删除/开关均不渲染',
+      ruleWriteButtons === 0 && (await readOnlyPage.locator('#alerts-panel-rules').innerText()).includes('无写入权限'),
+      `${ruleWriteButtons} 个写按钮`,
+    )
+
+    // 零写请求断言的可分辨化：有写控件就逐个点（触发 onClick 全链路），
+    // 点完等 300ms 再关掉可能弹出的弹窗，然后才断言零写请求。
+    // 守卫有效时写控件数为 0 → controls=0、clicked=0，断言照常通过；
+    // 守卫失效时控件会渲染 → 点击必然产生写请求，断言变红。
+    // 点击用 DOM click 直接命中控件本身，避免弹窗遮罩吞掉真实点击造成假绿。
+    const writeClickStats = { controls: 0, clicked: 0, selectors: [] }
+    const dismissAlertModal = async () => {
+      for (const cancel of [
+        '#alerts-rule-cancel',
+        '#alerts-silence-cancel',
+        '#alerts-delete-cancel',
+        '#alerts-channel-cancel',
+      ]) {
+        const button = await readOnlyPage.$(cancel)
+        if (button) {
+          await button.evaluate((el) => el.click()).catch(() => {})
+          await readOnlyPage.waitForTimeout(100)
+        }
+      }
+    }
+    const clickWriteControls = async (selectors) => {
+      for (const selector of selectors) {
+        const matched = await readOnlyPage.$$(selector)
+        writeClickStats.selectors.push(`${selector}=${matched.length}`)
+        writeClickStats.controls += matched.length
+        for (let index = 0; index < matched.length; index += 1) {
+          const current = await readOnlyPage.$$(selector)
+          const handle = current[index]
+          if (!handle) continue
+          try {
+            await handle.evaluate((el) => el.click())
+          } catch {
+            continue
+          }
+          writeClickStats.clicked += 1
+          await readOnlyPage.waitForTimeout(300)
+          await dismissAlertModal()
+        }
+      }
+    }
+    await clickWriteControls([
+      '#alerts-rule-create',
+      'button[id^="alerts-rule-edit-"]',
+      'button[id^="alerts-rule-silence-"]',
+      'button[id^="alerts-rule-unsilence-"]',
+      'button[id^="alerts-rule-delete-"]',
+      'input[id^="alerts-rule-enabled-"]',
+    ])
+
+    await readOnlyPage.click('#alerts-tab-channels')
+    await readOnlyPage.waitForFunction(
+      () => document.querySelectorAll('#alerts-panel-channels .ls-alertspage__row').length === 2,
+      undefined,
+      { timeout: 10000 },
+    )
+    const channelWriteIds = [
+      '#alerts-channel-create',
+      '#alerts-channel-test-ch-ok',
+      '#alerts-channel-edit-ch-ok',
+      '#alerts-channel-delete-ch-ok',
+    ]
+    let channelWriteButtons = 0
+    for (const selector of channelWriteIds) channelWriteButtons += await readOnlyPage.locator(selector).count()
+    check(
+      '缺 alert.write 时渠道侧新建/测试/编辑/删除均不渲染',
+      channelWriteButtons === 0 && (await readOnlyPage.locator('#alerts-panel-channels').innerText()).includes('无写入权限'),
+      `${channelWriteButtons} 个写按钮`,
+    )
+    await clickWriteControls([
+      '#alerts-channel-create',
+      'button[id^="alerts-channel-test-"]',
+      'button[id^="alerts-channel-edit-"]',
+      'button[id^="alerts-channel-delete-"]',
+    ])
+    const readOnlyWriteCalls = readOnly.writeCalls.length
+    check(
+      `零写请求断言可分辨：写控件 ${writeClickStats.controls} 个、已点击 ${writeClickStats.clicked} 次、writeCalls=${readOnlyWriteCalls}`,
+      readOnlyWriteCalls === 0,
+      readOnlyWriteCalls === 0
+        ? ''
+        : `${readOnly.writeCalls.slice(0, 3).join(' | ')}；${writeClickStats.selectors.join('、')}`,
+    )
+    await readOnlyContext.close()
+
+    /* ------------------------------------------------------------------ */
+    /* 场景 5：无 alert.read —— 0 请求 + /forbidden                        */
     /* ------------------------------------------------------------------ */
     const denied = {
       permissions: ['server.read'],
       alerts: buildAlerts(),
       listCalls: 0,
       ackCalls: [],
+      writeCalls: [],
     }
     const deniedContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     await installMockApi(deniedContext, denied)
@@ -611,7 +1272,7 @@ async function run() {
 
   const failed = results.filter((item) => !item.ok)
   console.log(
-    `\n${failed.length === 0 ? '✓ 告警页冒烟全部通过' : `✗ ${failed.length}/${results.length} 项失败`}（${results.length} 项）`,
+    `\n${failed.length === 0 ? '✓ 告警页冒烟全部通过' : '✗ 告警页冒烟存在失败'}：共 ${results.length} 项，失败 ${failed.length} 项`,
   )
   if (failed.length > 0) {
     for (const item of failed) console.log(`  - ${item.name}${item.detail ? `：${item.detail}` : ''}`)

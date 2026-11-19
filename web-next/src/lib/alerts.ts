@@ -1,5 +1,14 @@
 import { t } from '../i18n'
-import type { AlertItem, AlertSeverity, AlertStatus } from './api'
+import type {
+  AlertChannel,
+  AlertComparator,
+  AlertItem,
+  AlertRule,
+  AlertSeverity,
+  AlertSource,
+  AlertStatus,
+  ChannelKind,
+} from './api'
 import { formatDateTime, formatRelativeTime } from './format'
 
 /**
@@ -167,4 +176,132 @@ export function eventKindText(kind: string): string {
   const key = `alert.event.${raw}`
   const text = t(key)
   return text === key ? raw : text
+}
+
+/* ------------------------- 告警规则 / 通知渠道（同页三个 tab） ------------------------- */
+
+/** 页面顶部 tab：事件列表（默认，不写 query）、规则、渠道。 */
+export type AlertsTab = 'rules' | 'channels' | 'events'
+
+export interface AlertsTabOption {
+  key: AlertsTab
+  labelKey: string
+}
+
+export const ALERTS_TABS: readonly AlertsTabOption[] = [
+  { key: 'events', labelKey: 'alerts.rules.eventsTab' },
+  { key: 'rules', labelKey: 'alerts.rules.tab' },
+  { key: 'channels', labelKey: 'alerts.channels.tab' },
+]
+
+/** 深链归一化：`?tab=rules|channels` 原样认，其他（含数组首值）回 events。 */
+export function normalizeAlertsTab(raw: unknown): AlertsTab {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  if (value === 'rules' || value === 'channels') return value
+  return 'events'
+}
+
+export const RULE_SOURCES: readonly AlertSource[] = ['check', 'server', 'metric']
+
+export const ALERT_COMPARATORS: readonly AlertComparator[] = ['>', '>=', '<', '<=']
+
+export const CHANNEL_KINDS: readonly ChannelKind[] = [
+  'webhook',
+  'email',
+  'dingtalk',
+  'wecom',
+  'feishu',
+  'telegram',
+  'slack',
+]
+
+/** 渠道 kind 归一化：未知类型按 webhook 处理（编辑老数据时不至于表单空白）。 */
+export function normalizeChannelKind(raw: unknown): ChannelKind {
+  return typeof raw === 'string' && (CHANNEL_KINDS as readonly string[]).includes(raw)
+    ? (raw as ChannelKind)
+    : 'webhook'
+}
+
+/** 规则来源 → i18n key。 */
+export function ruleSourceLabelKey(source: AlertSource | string): string {
+  if (source === 'check') return 'alerts.rules.source.check'
+  if (source === 'server') return 'alerts.rules.source.server'
+  if (source === 'metric') return 'alerts.rules.source.metric'
+  return 'alerts.unknown'
+}
+
+/** 渠道类型 → i18n key（未知类型原样展示，交给调用方兜底）。 */
+export function channelKindLabelKey(kind: ChannelKind | string): string {
+  return `alerts.channels.kind.${kind}`
+}
+
+/** 静默四档：1h / 6h / 24h / 7d，单位秒（后端 silence duration_s）。 */
+export interface SilenceOption {
+  seconds: number
+  labelKey: string
+}
+
+export const SILENCE_OPTIONS: readonly SilenceOption[] = [
+  { seconds: 60 * 60, labelKey: 'alerts.rules.silence1h' },
+  { seconds: 6 * 60 * 60, labelKey: 'alerts.rules.silence6h' },
+  { seconds: 24 * 60 * 60, labelKey: 'alerts.rules.silence24h' },
+  { seconds: 7 * 24 * 60 * 60, labelKey: 'alerts.rules.silence7d' },
+]
+
+/** 规则目标包含的条目名称：check → 检测项，server → 服务器，metric → 指标名。 */
+export function ruleTargetNames(
+  rule: AlertRule,
+  checks: readonly { id: string; name: string }[],
+  servers: readonly { id: string; name: string }[],
+): string[] {
+  if (rule.source === 'metric') return rule.metric ? [rule.metric] : []
+  const pool = rule.source === 'check' ? checks : servers
+  const ids = rule.source === 'check' ? rule.check_ids : rule.server_ids
+  const names = new Map(pool.map((item) => [item.id, item.name]))
+  return ids.map((id) => names.get(id) ?? id)
+}
+
+/** 目标列文案：超过 2 项显示「前两项 +N」，避免撑坏表格。 */
+export function ruleTargetText(
+  rule: AlertRule,
+  checks: readonly { id: string; name: string }[],
+  servers: readonly { id: string; name: string }[],
+): string {
+  const names = ruleTargetNames(rule, checks, servers)
+  if (names.length === 0) {
+    if (rule.source === 'server') return t('alerts.rules.targetAllServers')
+    if (rule.source === 'metric') return t('alerts.rules.targetEmptyMetric')
+    return t('alerts.rules.targetAllChecks')
+  }
+  const separator = t('alerts.rules.targetSeparator')
+  if (names.length <= 2) return names.join(separator)
+  return `${names.slice(0, 2).join(separator)} +${names.length - 2}`
+}
+
+/** 阈值条件列：metric 三要素拼在一起，其他来源展示持续时长。 */
+export function ruleConditionText(rule: AlertRule): string {
+  if (rule.source === 'metric') {
+    const metric = (rule.metric ?? '').trim()
+    const comparator = (rule.comparator ?? '').trim()
+    if (metric === '' || comparator === '' || rule.threshold === null) return '—'
+    return `${metric} ${comparator} ${rule.threshold}`
+  }
+  return t('alerts.rules.conditionFor', { seconds: rule.for_duration_s })
+}
+
+/** 静默是否生效（silence_until 是毫秒时间戳，null 表示未静默）。 */
+export function isRuleSilenced(rule: AlertRule, now: number = Date.now()): boolean {
+  return rule.silence_until !== null && rule.silence_until > now
+}
+
+/** 静默状态列文案。 */
+export function ruleSilenceText(rule: AlertRule, now: number = Date.now()): string {
+  if (!isRuleSilenced(rule, now)) return t('alerts.rules.notSilenced')
+  return t('alerts.rules.silencedUntil', { time: formatDateTime(rule.silence_until) })
+}
+
+/** 渠道最近错误是否可展示（空串按「无错误」处理）。 */
+export function channelErrorText(channel: AlertChannel): string {
+  const text = (channel.last_error ?? '').trim()
+  return text === '' ? t('alerts.channels.noError') : text
 }
