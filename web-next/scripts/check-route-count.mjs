@@ -33,10 +33,7 @@ const EXPECTED_TOTAL = 26
 /** 独立页与兜底：不挂菜单、不计入业务路由。 */
 const MISC_PATHS = new Set(['/login', '/forbidden', '/about', '/:pathMatch(.*)*'])
 /** 占位页：当前必须仍由 NotYetView 承接（路由守卫/页面替换要单独评审）。 */
-const NOT_YET_PATHS = new Set([
-  '/scheduled-tasks',
-  '/import',
-])
+const NOT_YET_PATHS = new Set([])
 
 /** 逐条基线：[path, name, meta.title, meta.permission, meta.toolKind]。 */
 const BASELINE = [
