@@ -68,6 +68,7 @@ const ALL_PERMISSIONS = [
   'backup.read',
   'backup.write',
   'backup.delete',
+  'backup.restore',
   'system.manage',
   'user.manage',
   'role.manage',
@@ -237,7 +238,15 @@ function makeState() {
     backups: [backupFixture(), backupFixture({ name: 'leadstack-backup-20260118-120000.tar.gz.enc', size_bytes: 1_048_576, includes_artifacts: false, schema_version: 11, created_at: NOW - 93_600_000 })],
     backupCreates: [],
     backupDeletes: [],
+    backupListGets: 0,
     downloads: [],
+    verifyCalls: [],
+    restoreUploads: [],
+    restoreStatusCalls: 0,
+    backupSettingsGets: 0,
+    backupSettingsPatches: [],
+    // 贴近后端：PATCH 后用 time.Duration.String() 回填（24h0m0s），页面必须转回 24h。
+    backupSettings: { enabled: true, interval: '24h0m0s', retention: 7, include_artifacts: true },
     networkGets: 0,
     networkPuts: [],
     network: {
@@ -363,6 +372,7 @@ async function installMockApi(context, state) {
 
     /* ---------------- 备份 ---------------- */
     if (path === '/api/v1/backups' && method === 'GET') {
+      state.backupListGets += 1
       return json(200, { backups: state.backups.map((backup) => ({ ...backup })) })
     }
     if (path === '/api/v1/backups' && method === 'POST') {
@@ -390,6 +400,73 @@ async function installMockApi(context, state) {
         },
         body: 'leadstack-backup-bytes',
       })
+    }
+    const verifyMatch = /^\/api\/v1\/backups\/([^/]+)\/verify$/.exec(path)
+    if (verifyMatch && method === 'POST') {
+      const name = decodeURIComponent(verifyMatch[1])
+      state.verifyCalls.push(name)
+      if (name.includes('20260118')) {
+        return json(400, { error: { code: 'invalid_argument', message: 'manifest 缺少 schema 版本，归档可能已损坏' } })
+      }
+      return json(200, {
+        ok: true,
+        manifest: {
+          format_version: 1,
+          app_version: '1.9.3',
+          schema_version: 12,
+          created_at: NOW - 7_200_000,
+          includes_artifacts: true,
+          files: [
+            { name: 'leadstack.db', size_bytes: 12_582_912, sha256: 'b'.repeat(64) },
+            { name: 'artifacts.tar', size_bytes: 1_048_576, sha256: 'c'.repeat(64) },
+          ],
+        },
+      })
+    }
+    if (path === '/api/v1/backups/restore' && method === 'POST') {
+      const upload = String(request.postData() ?? '')
+      state.restoreUploads.push(upload)
+      // 坏归档：文件名带 bad 的上传必须被后端 400 拒绝（覆盖「恢复失败不进入暂存态」）。
+      if (upload.includes('bad.tar.gz')) {
+        return json(400, { error: { code: 'invalid_argument', message: '归档格式无效：缺少 manifest.json' } })
+      }
+      return json(202, {
+        restart_required: true,
+        staged: {
+          archive_name: 'upload.tar.gz',
+          uploaded_at: NOW,
+          size_bytes: 4_194_304,
+          schema_version: 12,
+          sha256: 'd'.repeat(64),
+          staged_path: '/var/lib/leadstack/restore/staged.tar.gz',
+        },
+      })
+    }
+    if (path === '/api/v1/system/backup/restore-status' && method === 'GET') {
+      state.restoreStatusCalls += 1
+      if (state.restoreStatusCalls <= 2) {
+        return json(200, {
+          pending: true,
+          source: 'upload',
+          schema_version: 12,
+          archive_sha256_prefix: 'dddddddd',
+          staged_at: Math.floor(NOW / 1000),
+          hint: 'systemctl restart leadstack',
+        })
+      }
+      return json(200, { pending: false })
+    }
+    if (path === '/api/v1/backup-settings' && method === 'GET') {
+      state.backupSettingsGets += 1
+      return json(200, { ...state.backupSettings })
+    }
+    if (path === '/api/v1/backup-settings' && method === 'PATCH') {
+      const payload = body()
+      state.backupSettingsPatches.push(payload)
+      const raw = String(payload.interval ?? '24h')
+      const canonical = /^\d+h$/.test(raw) ? `${raw}0m0s` : /^\d+m$/.test(raw) ? `${raw}0s` : raw
+      state.backupSettings = { ...state.backupSettings, ...payload, interval: canonical }
+      return json(200, { ...state.backupSettings })
     }
     const backupMatch = /^\/api\/v1\/backups\/([^/]+)$/.exec(path)
     if (backupMatch && method === 'DELETE') {
@@ -748,6 +825,265 @@ async function run() {
     await page.waitForTimeout(400)
     check('下载按钮触发下载请求', state.downloads.length === 1 && state.downloads[0] === backupName(), state.downloads.join(','))
 
+    /* ---- ④b 归档校验：成功展示 manifest 摘要，400 原样展示可读原因 ---- */
+    await page.click('[data-backup-name="leadstack-backup-20260120-090000.tar.gz.enc"] .ls-backupspage__verify')
+    await page.waitForSelector('[data-backup-verify-result]', { timeout: 8000 })
+    const verifyOkText = await page.locator('[data-backup-verify-result]').first().innerText()
+    check(
+      '校验面板显示 ok=true 与 manifest 文件条目',
+      verifyOkText.includes('ok=true') && verifyOkText.includes('leadstack.db') && verifyOkText.includes('归档文件（2 个）'),
+      verifyOkText.replace(/\s+/g, ' ').slice(0, 140),
+    )
+    check(
+      '校验请求打到 verify 端点',
+      state.verifyCalls.includes('leadstack-backup-20260120-090000.tar.gz.enc'),
+      state.verifyCalls.join(','),
+    )
+    check('校验请求恰发出 1 次', state.verifyCalls.length === 1, state.verifyCalls.join(','))
+    check(
+      '校验摘要非空且含后端 manifest 数值',
+      verifyOkText.trim().length > 0 && verifyOkText.includes('1.9.3') && verifyOkText.includes('12'),
+      verifyOkText.replace(/\s+/g, ' ').slice(0, 140),
+    )
+
+    await page.click('[data-backup-name="leadstack-backup-20260118-120000.tar.gz.enc"] .ls-backupspage__verify')
+    await page
+      .waitForFunction(() => document.body.innerText.includes('manifest 缺少 schema 版本'), null, { timeout: 8000 })
+      .catch(() => {})
+    check(
+      '校验失败原样展示后端 400 原因',
+      (await bodyText(page)).includes('manifest 缺少 schema 版本，归档可能已损坏'),
+      (await bodyText(page)).slice(0, 140),
+    )
+    check(
+      '坏归档校验失败后不进入暂存态',
+      (await page.locator('#backups-restore-staged').count()) === 0 && state.restoreUploads.length === 0,
+      `${await page.locator('#backups-restore-staged').count()}/${state.restoreUploads.length}`,
+    )
+
+    /* ---- ④c 从归档恢复：二次确认 → 202 暂存 → 轮询恢复状态 ---- */
+    await page.setInputFiles('#backups-restore-file', {
+      name: 'upload.tar.gz',
+      mimeType: 'application/gzip',
+      buffer: Buffer.from('smoke-restore-archive'),
+    })
+    await page.waitForSelector('#backups-restore-submit:not([disabled])', { timeout: 5000 })
+    await page.click('#backups-restore-submit')
+    await page.waitForSelector('#backups-restore-confirm', { timeout: 5000 })
+    const restoreConfirmText = await page.locator('.ls-modal').innerText()
+    check(
+      '恢复二次确认写明暂存、重启后生效、当前数据被覆盖',
+      restoreConfirmText.includes('暂存') && restoreConfirmText.includes('重启') && restoreConfirmText.includes('覆盖'),
+      restoreConfirmText.replace(/\s+/g, ' ').slice(0, 160),
+    )
+    // 取消二次确认：不得发出恢复请求。
+    await page.click('#backups-restore-cancel')
+    await page.waitForSelector('#backups-restore-confirm', { state: 'detached', timeout: 5000 })
+    check('恢复二次确认取消后不发请求', state.restoreUploads.length === 0, `${state.restoreUploads.length}`)
+    await page.click('#backups-restore-submit')
+    await page.waitForSelector('#backups-restore-confirm', { timeout: 5000 })
+    await page.click('#backups-restore-confirm')
+    await page.waitForSelector('#backups-restore-staged', { timeout: 8000 })
+    const stagedText = await page.locator('#backups-restore-staged').innerText()
+    check(
+      '恢复 202 后展示 restart_required 与重启提示',
+      stagedText.includes('restart_required = true') && stagedText.includes('重启控制端后自动应用'),
+      stagedText.replace(/\s+/g, ' ').slice(0, 160),
+    )
+    check(
+      '恢复上传为 multipart 且带上文件名',
+      state.restoreUploads.length === 1 && state.restoreUploads[0].includes('upload.tar.gz'),
+      String(state.restoreUploads[0]).slice(0, 80),
+    )
+
+    await page
+      .waitForFunction(
+        () => document.querySelector('#backups-restore-status')?.innerText.includes('已暂存，等待重启'),
+        null,
+        { timeout: 8000 },
+      )
+      .catch(() => {})
+    check(
+      '首次轮询显示 pending=true',
+      (await page.locator('#backups-restore-status').innerText()).includes('已暂存，等待重启'),
+    )
+    const stagedStatusText = await page.locator('#backups-restore-status').innerText()
+    check(
+      '「已暂存」卡片展示 schema_version 与 archive_sha256_prefix',
+      stagedStatusText.includes('12') && stagedStatusText.includes('dddddddd'),
+      stagedStatusText.replace(/\s+/g, ' ').slice(0, 160),
+    )
+    await page
+      .waitForFunction(
+        () => document.querySelector('#backups-restore-status')?.innerText.includes('恢复已完成'),
+        null,
+        { timeout: 15000 },
+      )
+      .catch(() => {})
+    check(
+      'pending=false 后显示恢复已完成且停止轮询',
+      (await page.locator('#backups-restore-status').innerText()).includes('恢复已完成') &&
+        (await page.locator('#backups-restore-polling').count()) === 0,
+    )
+    const callsAtStop = state.restoreStatusCalls
+    await page.waitForTimeout(3600)
+    check('轮询在 pending=false 后不再增长', state.restoreStatusCalls === callsAtStop, `${callsAtStop} → ${state.restoreStatusCalls}`)
+    check(
+      'restore-status 轮询到 pending=false 即停（再等 3s 请求数不增长）',
+      state.restoreStatusCalls === callsAtStop,
+      `${callsAtStop} → ${state.restoreStatusCalls}`,
+    )
+    check(
+      'restore-status 轮询共 3 次（2 次 pending=true + 1 次 false）',
+      callsAtStop === 3,
+      `${callsAtStop} 次`,
+    )
+
+    /* ---- ④d 备份策略：Go duration 回填、非法不发请求、保存后重新 GET ---- */
+    await page.waitForSelector('#backups-settings-form', { timeout: 8000 })
+    check(
+      '策略卡把 Go duration 回填成可编辑短串 24h',
+      (await page.inputValue('#backups-settings-interval')) === '24h',
+      await page.inputValue('#backups-settings-interval'),
+    )
+    check(
+      '策略卡回填 enabled 与 retention',
+      (await page.isChecked('#backups-settings-enabled')) && (await page.inputValue('#backups-settings-retention')) === '7',
+    )
+
+    await page.fill('#backups-settings-interval', '24h30')
+    await page.click('#backups-settings-save')
+    await page.waitForTimeout(300)
+    check(
+      '非法 interval 不发 PATCH 并提示示例',
+      state.backupSettingsPatches.length === 0 &&
+        (await page.locator('#backups-settings-error').innerText()).includes('30m'),
+      await page.locator('#backups-settings-error').innerText(),
+    )
+
+    await page.fill('#backups-settings-interval', 'abc')
+    await page.click('#backups-settings-save')
+    await page.waitForTimeout(300)
+    check(
+      'interval 填 abc 时不发 PATCH 且有内联错误提示',
+      state.backupSettingsPatches.length === 0 &&
+        (await page.locator('#backups-settings-error').innerText()).trim().length > 0,
+      await page.locator('#backups-settings-error').innerText(),
+    )
+
+    const settingsGetsBefore = state.backupSettingsGets
+    await page.fill('#backups-settings-interval', '6h')
+    await page.fill('#backups-settings-retention', '3')
+    await page.click('#backups-settings-save')
+    await page
+      .waitForFunction(
+        () => document.querySelector('#backups-settings-notice')?.innerText.includes('已保存'),
+        null,
+        { timeout: 8000 },
+      )
+      .catch(() => {})
+    check(
+      '合法策略发出 PATCH（6h / 3 份）',
+      state.backupSettingsPatches.length === 1 &&
+        state.backupSettingsPatches[0].interval === '6h' &&
+        state.backupSettingsPatches[0].retention === 3,
+      JSON.stringify(state.backupSettingsPatches[0]),
+    )
+    check(
+      '保存后重新 GET 回填生效值',
+      state.backupSettingsGets > settingsGetsBefore,
+      `${settingsGetsBefore} → ${state.backupSettingsGets}`,
+    )
+    check(
+      '生效值摘要显示 6h 与 3 份',
+      (await page.locator('#backups-settings-effective').innerText()).includes('6h') &&
+        (await page.locator('#backups-settings-effective').innerText()).includes('3'),
+      await page.locator('#backups-settings-effective').innerText(),
+    )
+
+    // 二次保存：12h / 14 份 / 关闭 include_artifacts —— PATCH 体只应含这三个变更字段。
+    const settingsGetsBeforeSecond = state.backupSettingsGets
+    await page.fill('#backups-settings-interval', '12h')
+    await page.fill('#backups-settings-retention', '14')
+    await page.uncheck('#backups-settings-artifacts')
+    await page.click('#backups-settings-save')
+    await page
+      .waitForFunction(
+        () => document.querySelector('#backups-settings-notice')?.innerText.includes('已保存'),
+        null,
+        { timeout: 8000 },
+      )
+      .catch(() => {})
+    const lastPatch = state.backupSettingsPatches.at(-1)
+    check(
+      'PATCH 体只含变更字段 interval/retention/include_artifacts',
+      lastPatch !== undefined &&
+        Object.keys(lastPatch).sort().join(',') === 'include_artifacts,interval,retention',
+      JSON.stringify(lastPatch),
+    )
+    check(
+      'PATCH 体取值正确（12h / 14 / include_artifacts=false）',
+      lastPatch?.interval === '12h' && lastPatch?.retention === 14 && lastPatch?.include_artifacts === false,
+      JSON.stringify(lastPatch),
+    )
+    check(
+      '保存后输入框回填 12h 与 14',
+      (await page.inputValue('#backups-settings-interval')) === '12h' &&
+        (await page.inputValue('#backups-settings-retention')) === '14',
+      `${await page.inputValue('#backups-settings-interval')}/${await page.inputValue('#backups-settings-retention')}`,
+    )
+    check(
+      '第二次保存后重新 GET 生效值',
+      state.backupSettingsGets > settingsGetsBeforeSecond,
+      `${settingsGetsBeforeSecond} → ${state.backupSettingsGets}`,
+    )
+    check(
+      '生效值摘要显示 12h 与 14 份',
+      (await page.locator('#backups-settings-effective').innerText()).includes('12h') &&
+        (await page.locator('#backups-settings-effective').innerText()).includes('14'),
+      await page.locator('#backups-settings-effective').innerText(),
+    )
+
+
+    /* ---- ④e 坏归档恢复被拒（400）：原样展示原因、不进入暂存态、不轮询 ---- */
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.ls-backupspage', { timeout: 15000 })
+    await gotoPage(page, base, '/backups', '.ls-backupspage__row')
+    await page.waitForSelector('#backups-restore-file', { timeout: 8000 })
+    const restoreUploadsBefore = state.restoreUploads.length
+    const restoreStatusBefore = state.restoreStatusCalls
+    await page.setInputFiles('#backups-restore-file', {
+      name: 'bad.tar.gz',
+      mimeType: 'application/gzip',
+      buffer: Buffer.from('bad-archive-not-a-tarball'),
+    })
+    await page.waitForSelector('#backups-restore-submit:not([disabled])', { timeout: 5000 })
+    await page.click('#backups-restore-submit')
+    await page.waitForSelector('#backups-restore-confirm', { timeout: 5000 })
+    await page.click('#backups-restore-confirm')
+    await page.waitForSelector('#backups-restore-error', { timeout: 8000 })
+    const badArchiveError = await page.locator('#backups-restore-error').innerText()
+    check(
+      '坏归档恢复被拒后原样展示后端 400 原因',
+      badArchiveError.includes('归档格式无效：缺少 manifest.json'),
+      badArchiveError.replace(/\s+/g, ' ').slice(0, 160),
+    )
+    check(
+      '坏归档恢复只发 1 次请求且不进入暂存态',
+      state.restoreUploads.length === restoreUploadsBefore + 1 &&
+        (await page.locator('#backups-restore-staged').count()) === 0 &&
+        (await page.locator('#backups-restore-restart').count()) === 0,
+      `${restoreUploadsBefore} → ${state.restoreUploads.length}`,
+    )
+    await page.waitForTimeout(3600)
+    check(
+      '坏归档不进入暂存态：不显示需要重启且 restore-status 不增长（未进轮询）',
+      (await bodyText(page)).includes('需要重启') === false &&
+        state.restoreStatusCalls === restoreStatusBefore &&
+        (await page.locator('#backups-restore-polling').count()) === 0,
+      `${restoreStatusBefore} → ${state.restoreStatusCalls}`,
+    )
+
     await page.click(`[data-backup-name="${backupName()}"] .ls-backupspage__delete`)
     await page.waitForSelector('#backups-delete-confirm-submit', { timeout: 5000 })
     check('备份删除二次确认列出归档名', (await page.locator('.ls-modal__desc').innerText()).includes(backupName()))
@@ -945,7 +1281,100 @@ async function run() {
     await page.waitForSelector('[data-group-id="grp-new"]', { state: 'detached', timeout: 8000 })
     check('确认删除分组发出 DELETE 且行消失', state.groupDeletes.join(',') === 'grp-new', state.groupDeletes.join(','))
 
-    /* ============ ⑧ 320px 窄宽 + 异常 ============ */
+    /* ============ ⑧ 备份权限收敛：缺 restore/write 不渲染且零请求 ============ */
+    const LIMITED_PERMISSIONS = ALL_PERMISSIONS.filter(
+      (permission) => permission !== 'backup.restore' && permission !== 'backup.write',
+    )
+    const resetBackupCounters = () => {
+      state.verifyCalls = []
+      state.restoreUploads = []
+      state.restoreStatusCalls = 0
+      state.backupSettingsPatches = []
+      state.backupSettingsGets = 0
+      state.backupListGets = 0
+    }
+
+    state.permissions = LIMITED_PERMISSIONS
+    resetBackupCounters()
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.ls-groupspage', { timeout: 15000 })
+    await gotoPage(page, base, '/backups', '.ls-backupspage__row')
+    check('缺 backup.restore 时不渲染校验按钮', (await page.locator('.ls-backupspage__verify').count()) === 0)
+    check('缺 backup.restore 时不渲染恢复区块', (await page.locator('#backups-restore').count()) === 0)
+    await page.waitForSelector('#backups-settings-form', { timeout: 8000 })
+    check(
+      '缺 backup.write 时策略卡只读且保存禁用',
+      (await page.locator('#backups-settings-readonly').count()) === 1 &&
+        (await page.locator('#backups-settings-save').isDisabled()),
+    )
+    check('缺 backup.write 时策略控件禁用', await page.locator('#backups-settings-enabled').isDisabled())
+    await page.waitForTimeout(300)
+    check(
+      '缺 backup.restore 时 verify=0 restore=0 restore-status=0',
+      state.verifyCalls.length === 0 && state.restoreUploads.length === 0 && state.restoreStatusCalls === 0,
+      `${state.verifyCalls.length}/${state.restoreUploads.length}/${state.restoreStatusCalls}`,
+    )
+    check('缺 backup.write 时不发 PATCH', state.backupSettingsPatches.length === 0, JSON.stringify(state.backupSettingsPatches))
+    check(
+      '策略读取仍发生（backup.read 存在）',
+      state.backupSettingsGets === 1 && state.backupListGets === 1,
+      `${state.backupListGets}/${state.backupSettingsGets}`,
+    )
+
+    // 仅 backup.read：校验/恢复整块不渲染且三个端点严格零请求；策略卡只读禁用。
+    state.permissions = ['backup.read']
+    resetBackupCounters()
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.ls-backupspage', { timeout: 15000 })
+    await gotoPage(page, base, '/backups', '.ls-backupspage__row')
+    check('仅 backup.read 时不渲染校验按钮', (await page.locator('.ls-backupspage__verify').count()) === 0)
+    check('仅 backup.read 时不渲染恢复区块', (await page.locator('#backups-restore').count()) === 0)
+    await page.waitForSelector('#backups-settings-form', { timeout: 8000 })
+    check(
+      '仅 backup.read 时策略卡只读且保存禁用',
+      (await page.locator('#backups-settings-readonly').count()) === 1 &&
+        (await page.locator('#backups-settings-save').isDisabled()),
+    )
+    check('仅 backup.read 时策略控件禁用', await page.locator('#backups-settings-enabled').isDisabled())
+    await page.waitForTimeout(500)
+    check(
+      '仅 backup.read 且缺 backup.restore 时 verify=0 restore=0 restore-status=0',
+      state.verifyCalls.length === 0 && state.restoreUploads.length === 0 && state.restoreStatusCalls === 0,
+      `${state.verifyCalls.length}/${state.restoreUploads.length}/${state.restoreStatusCalls}`,
+    )
+    check('仅 backup.read 时不发 PATCH', state.backupSettingsPatches.length === 0, JSON.stringify(state.backupSettingsPatches))
+    check(
+      '仅 backup.read 时列表与策略仍读取（各 1 次）',
+      state.backupListGets === 1 && state.backupSettingsGets === 1,
+      `${state.backupListGets}/${state.backupSettingsGets}`,
+    )
+
+    // 连 backup.read 都没有：整页只留无权限提示，列表与设置都不发请求。
+    state.permissions = []
+    resetBackupCounters()
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.ls-forbidden__title', { timeout: 8000 })
+    await page.waitForTimeout(300)
+    check(
+      '缺 backup.read 时路由守卫拦到无权限页，备份页不挂载',
+      (await page.locator('#backups-settings').count()) === 0 &&
+        (await page.locator('.ls-backupspage__row').count()) === 0 &&
+        (await page.locator('#backups-no-scope').count()) === 0,
+    )
+    check(
+      '缺 backup.read 时列表与策略都不发请求',
+      state.backupListGets === 0 && state.backupSettingsGets === 0,
+      `${state.backupListGets}/${state.backupSettingsGets}`,
+    )
+
+    state.permissions = ALL_PERMISSIONS
+    // 权限收敛期间会话已缓存旧权限，必须整页 reload 重新拉 /users/me，再切回备份页。
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.ls-forbidden__title', { timeout: 15000 })
+    await gotoPage(page, base, '/backups', '.ls-backupspage__row')
+    check('恢复全量权限后备份页重新可访问', (await page.locator('.ls-backupspage__row').count()) === 2)
+
+    /* ============ ⑨ 320px 窄宽 + 异常 ============ */
     await page.setViewportSize({ width: 320, height: 800 })
     const overflow = {}
     const narrowPages = []
@@ -954,13 +1383,15 @@ async function run() {
       // 必须等标题文本切到目标页，再测 scrollWidth，避免假绿。
       await gotoPage(page, base, hash, { title: TITLES[hash] })
       const heading = await readHeading(page, TITLES[hash])
-      // 目标页根类（分组再加行数）就绪才量宽度，否则量到的可能是上一页的 DOM。
+      // 目标页根类（分组/备份再加行数）就绪才量宽度，否则量到的可能是上一页的 DOM。
       const rootReady = await page
         .waitForFunction(
           (selector) => {
             const root = document.querySelector(selector)
             if (!root) return false
-            return selector !== '.ls-groupspage' || root.querySelectorAll('.ls-groupspage__row').length > 0
+            if (selector === '.ls-groupspage') return root.querySelectorAll('.ls-groupspage__row').length > 0
+            if (selector === '.ls-backupspage') return root.querySelectorAll('.ls-backupspage__row').length > 0
+            return true
           },
           PAGE_ROOT[hash],
           { timeout: 15000 },
@@ -995,7 +1426,28 @@ async function run() {
     })
     check('320px 下分组页按钮可见且命中区 ≥24px', hits.every((hit) => hit.ok), JSON.stringify(hits.filter((hit) => !hit.ok)))
 
-    check('全程无未捕获异常', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '))
+    // 备份页单独复核：必须真的渲染出行（否则 scrollWidth 测的是空壳），再量横向溢出。
+    await gotoPage(page, base, '/backups', { title: TITLES['/backups'] })
+    const backupRows320 = await page
+      .waitForFunction(
+        () =>
+          document.querySelector('.ls-backupspage') !== null &&
+          document.querySelectorAll('.ls-backupspage .ls-backupspage__row').length > 0,
+        null,
+        { timeout: 15000 },
+      )
+      .then(() => page.locator('.ls-backupspage__row').count())
+      .catch(() => 0)
+    const backupOverflow320 = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    )
+    check(
+      '320px 备份页已渲染（行数 >0）且无横向滚动',
+      backupRows320 > 0 && backupOverflow320 <= 0,
+      `rows=${backupRows320} overflow=${backupOverflow320}`,
+    )
+
+    check('全程 pageerror 0（无未捕获异常）', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '))
 
     if (SHOTS) {
       await page.setViewportSize({ width: 320, height: 900 })

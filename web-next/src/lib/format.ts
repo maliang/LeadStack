@@ -104,6 +104,32 @@ export function truncateMiddle(value: string | null | undefined, head = 14, tail
   return `${value.slice(0, head)}…${value.slice(-tail)}`
 }
 
+/**
+ * 后端 Go duration（24h0m0s / 1h30m0s / 90m0s / 45s）→ 备份策略输入框可编辑的等价短串。
+ *
+ * 备份策略的 interval 输入只接受 `\d+[smhd]`（如 24h、30m），但后端 PATCH 后会以
+ * time.Duration.String() 回填（24h0m0s）。这里换成同值短串，否则「保存一次就再也存不回去」。
+ * 无法用单个单位整除表示（如 1.5s）时原样返回，交给输入校验提示用户改。
+ */
+export function toEditableInterval(raw: string | null | undefined): string {
+  const value = (raw ?? '').trim()
+  if (value === '') return '24h'
+  if (/^\d+[smhd]$/.test(value)) return value
+  const pattern = /(\d+(?:\.\d+)?)(ms|h|m|s)/g
+  const unitSeconds: Record<string, number> = { h: 3600, m: 60, s: 1, ms: 0.001 }
+  let totalSeconds = 0
+  let matched = false
+  for (let match = pattern.exec(value); match; match = pattern.exec(value)) {
+    matched = true
+    totalSeconds += Number(match[1]) * unitSeconds[match[2]]
+  }
+  if (!matched || !Number.isFinite(totalSeconds) || totalSeconds <= 0) return value
+  if (!Number.isInteger(totalSeconds)) return value
+  if (totalSeconds % 3600 === 0) return `${totalSeconds / 3600}h`
+  if (totalSeconds % 60 === 0) return `${totalSeconds / 60}m`
+  return `${totalSeconds}s`
+}
+
 /** 指标 key → 中文名（契约 3.1 的点分命名）。 */
 export function metricLabel(metric: string): string {
   switch (metric) {

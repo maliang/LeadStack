@@ -3595,7 +3595,7 @@ export const api = {
     return request<unknown>('/backup-settings').then(normalizeBackupSettings)
   },
 
-  updateBackupSettings(payload: BackupSettings): Promise<BackupSettings> {
+  updateBackupSettings(payload: Partial<BackupSettings>): Promise<BackupSettings> {
     return request<unknown>('/backup-settings', { method: 'PATCH', body: payload }).then(
       normalizeBackupSettings,
     )

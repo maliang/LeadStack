@@ -672,9 +672,9 @@ leadstack restore --file /tmp/leadstack.lsbak --data-dir ./data # 离线恢复�
 > ⚠️ **`backup.pass` 是解密备份的唯一钥匙，必须与备份文件分开保管**（另一台机器 / 密码管理器 / 离线介质）。
 > 它不在归档里，丢了备份永久无法解密。恢复前数据会自动移到 `<data_dir>.pre-restore-<时间>/`。
 
-**暂存恢复（不用停服务，控制台界面待接入）**：后端接口已支持上传归档 → 校验后**暂存**到 `<data_dir>/.restore-pending/` →
-返回「重启后生效」并给出 linux / darwin / docker 三条重启命令；`web-next` 备份页目前只有创建 / 下载 / 删除，
-**上传恢复入口尚未接入**。重启后查 `GET /api/v1/system/backup/restore-status`，状态从「待应用」变成
+**暂存恢复（不用停服务，备份页已接入）**：上传归档 → 校验后**暂存**到 `<data_dir>/.restore-pending/` →
+返回「重启后生效」并给出 linux / darwin / docker 三条重启命令；`web-next` 备份页可校验归档、从归档恢复（需重启控制端生效）、配置自动备份策略。
+重启后查 `GET /api/v1/system/backup/restore-status`，状态从「待应用」变成
 **「恢复已完成（归档 <sha 前 8 位>）」**。暂存目录还在时重复上传会被拒绝（409 并说明原因）。
 
 ---
