@@ -1,5 +1,5 @@
 # LeadStack 控制端多阶段构建（[devops]）
-#   阶段 1：node 构建前端 SPA          -> web/dist
+#   阶段 1：node 构建前端 SPA          -> web-next/dist
 #   阶段 2：golang 构建两个 Go 二进制   -> /out/{leadstack,leadstack-agent}
 #   阶段 3：alpine 运行（非 root，暴露 8080，/data 卷）
 #
@@ -27,12 +27,12 @@ ARG RUNTIME_IMAGE=alpine:3.22
 # ---------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS web
 ARG PNPM_VERSION
-# web/package.json 未锁定 packageManager，这里显式装 pnpm，避免 corepack 交互式下载
+# web-next/package.json 未锁定 packageManager，这里显式装 pnpm，避免 corepack 交互式下载
 RUN npm install -g pnpm@${PNPM_VERSION} && pnpm --version
 WORKDIR /src
-COPY web/ ./web/
-RUN pnpm --dir web install --frozen-lockfile || pnpm --dir web install
-RUN pnpm --dir web build
+COPY web-next/ ./web-next/
+RUN pnpm --dir web-next install --frozen-lockfile || pnpm --dir web-next install
+RUN pnpm --dir web-next build
 
 # ---------------------------------------------------------------------------
 # 阶段 2：Go（CGO_ENABLED=0，modernc sqlite 为纯 Go 实现，静态可跑）
@@ -48,7 +48,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 # 用前端阶段产物覆盖 internal/webui/dist，保证 UI 真正内嵌进二进制
-COPY --from=web /src/web/dist ./internal/webui/dist
+COPY --from=web /src/web-next/dist ./internal/webui/dist
 # 让容器内 GET /install.sh 直接可用（与 make build 行为一致；安装脚本唯一来源仍是 deploy/install.sh）
 COPY deploy/install.sh ./internal/webui/dist/install.sh
 # 注意：只构建发布用二进制。cmd/leadstack-devssh 是 DEV-ONLY 测试 SSH 端点，

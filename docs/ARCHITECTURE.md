@@ -20,7 +20,8 @@ LeadStack-领栈/
 │   ├── webui/                前端产物 embed         [backend]
 │   └── agent/                agent 运行时           [agent]
 ├── pkg/protocol/             消息定义（两侧共享）    [lead]
-├── web/                      React SPA              [frontend]
+├── web-next/                 Vue 3 SPA（内嵌前端唯一来源） [frontend]
+├── web/                      旧 React SPA（只读参照，不参与构建） [frontend]
 ├── deploy/                   install.sh / systemd / compose [devops]
 ├── docs/                     契约与手册             [lead]
 ├── go.mod / go.sum           依赖清单               [lead]
@@ -1385,6 +1386,9 @@ POST /servers/import
 - 复用 纳管 的服务器创建逻辑；返回逐条结果。
 
 ## 46. 中英双语 · 主题 · 字号 · 布局（前端规范）
+
+> **范围**：内嵌前端 = `web-next/`（Vue 3 + `@vean/ui`），由 `make build` 经 `make web-embed` 复制到 `internal/webui/dist/` 后 `go:embed` 进二进制。
+> 本节文中出现的 `web/src/**` 是旧 React 控制台的历史路径；旧 `web/` 仅保留只读参照、不再参与构建，新改动一律落在 `web-next/`。
 
 **i18n**： zh-CN（默认）/ en-US：`web/src/i18n/{zh-CN,en-US}.ts` + `useI18n()`；语言存 `localStorage.leadstack.lang`；所有界面文案走 `t('key')`，**不允许硬编码中文残留**（验收会 grep 抽查）。
 

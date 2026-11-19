@@ -261,11 +261,11 @@ jobs:
       - name: 前端工程是否就绪
         id: web
         run: |
-          if [ -f web/package.json ]; then
+          if [ -f web-next/package.json ]; then
             echo "exists=1" >> "$GITHUB_OUTPUT"
           else
             echo "exists=0" >> "$GITHUB_OUTPUT"
-            echo "web/package.json 不存在，跳过镜像构建"
+            echo "web-next/package.json 不存在，跳过镜像构建"
           fi
 
       - name: 准备 Buildx

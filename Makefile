@@ -23,7 +23,7 @@ GOFMT ?= $(shell command -v gofmt 2>/dev/null || echo $(dir $(GO))gofmt)
 MODULE   := github.com/maliang/leadstack
 BIN_DIR  := bin
 DIST_DIR := dist
-WEB_DIR  := web
+WEB_DIR  := web-next
 WEBUI_DIR    := internal/webui
 WEBUI_DIST   := $(WEBUI_DIR)/dist
 CMD_CTL      := ./cmd/leadstack
@@ -94,7 +94,7 @@ web-install: ## 安装前端依赖（有 lockfile 时优先 frozen；离线时�
 		printf '>> 跳过前端依赖安装：%s/package.json 不存在（frontend 尚未落地）\n' '$(WEB_DIR)'; \
 	fi
 
-web: web-install ## 构建前端产物到 web/dist
+web: web-install ## 构建前端产物到 web-next/dist
 	@if [ -f $(WEB_DIR)/package.json ]; then \
 		printf '>> pnpm build (%s)\n' '$(WEB_DIR)'; \
 		$(PNPM) --dir $(WEB_DIR) run build; \
@@ -102,7 +102,7 @@ web: web-install ## 构建前端产物到 web/dist
 		printf '>> 跳过前端构建：%s/package.json 不存在\n' '$(WEB_DIR)'; \
 	fi
 
-web-embed: web ## 把 web/dist 复制进 internal/webui/dist 供 go:embed（并内嵌安装脚本）
+web-embed: web ## 把 web-next/dist 复制进 internal/webui/dist 供 go:embed（并内嵌安装脚本）
 	@if [ -f $(WEB_DIR)/dist/index.html ]; then \
 		rm -rf $(WEBUI_DIST)/*; \
 		mkdir -p $(WEBUI_DIST); \
@@ -340,6 +340,6 @@ docker-check: ## 容器冒烟：build → run → /healthz 200 → 容器内 bac
 	@$(DOCKER) volume rm leadstack-smoke-data >/dev/null 2>&1 || true
 	@printf '>> docker-check 完成（容器与卷已清理）\n'
 
-clean: ## 清理构建产物（bin/ dist/ web/dist/ internal/webui/dist/）
+clean: ## 清理构建产物（bin/ dist/ web-next/dist/ internal/webui/dist/）
 	rm -rf $(BIN_DIR) $(DIST_DIR) $(WEB_DIR)/dist $(WEBUI_DIST)
 	@printf '>> 已清理 bin/ dist/ %s/dist %s\n' '$(WEB_DIR)' '$(WEBUI_DIST)'

@@ -1,4 +1,4 @@
-# 构建上下文裁剪（Dockerfile 只需要源码 + web/ + deploy/install.sh，其余一律不进上下文）
+# 构建上下文裁剪（Dockerfile 只需要源码 + web-next/ + deploy/install.sh，其余一律不进上下文）
 .git
 .gitignore
 .github
@@ -13,8 +13,8 @@ deploy/*
 bin
 dist
 data
-web/node_modules
-web/dist
+web-next/node_modules
+web-next/dist
 internal/webui/dist
 .e2e-logs
 
