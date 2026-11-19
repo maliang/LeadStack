@@ -534,9 +534,33 @@ const TITLES = {
   '/groups': '服务器分组',
 }
 
+// 各页根类：懒加载 chunk 未到时旧页 DOM 仍在，标题相等是「已换页」的最强信号；
+// 根类 + 分组行数作为第二重证据，防止标题恰好相同/页面仍是旧壳。
+const PAGE_ROOT = {
+  '/tokens': '.ls-tokenspage',
+  '/audit': '.ls-auditpage',
+  '/backups': '.ls-backupspage',
+  '/settings': '.ls-settingspage',
+  '/credentials': '.ls-credentialspage',
+  '/groups': '.ls-groupspage',
+}
+
 async function gotoPage(page, base, hash, waitFor) {
   await page.goto(`${base}/#${hash}`, { waitUntil: 'domcontentloaded' })
-  if (waitFor) await page.waitForSelector(waitFor, { timeout: 15000 })
+  if (!waitFor) return
+  if (typeof waitFor === 'string') {
+    await page.waitForSelector(waitFor, { timeout: 15000 })
+    return
+  }
+  // 标题等待：hash 导航是同文档切换，`.ls-adminpage__title` 每页都有，
+  // 只等选择器会读到上一页；只有标题文本切到目标页才算真正换页。
+  await page
+    .waitForFunction(
+      (want) => document.querySelector('.ls-adminpage__title')?.textContent?.trim() === want,
+      waitFor.title,
+      { timeout: 15000 },
+    )
+    .catch(() => {})
 }
 
 /**
@@ -609,7 +633,8 @@ async function run() {
 
     /* ============ ① 六页渲染与标题 ============ */
     for (const [hash, title] of Object.entries(TITLES)) {
-      await gotoPage(page, base, hash, '.ls-adminpage__title')
+      // 通用类 `.ls-adminpage__title` 等不到换页（每页都有）；按标题文本等换页。
+      await gotoPage(page, base, hash, { title })
       const heading = await readHeading(page, title)
       check(`${hash} 渲染且标题为「${title}」`, heading === title, heading)
     }
@@ -923,11 +948,35 @@ async function run() {
     /* ============ ⑧ 320px 窄宽 + 异常 ============ */
     await page.setViewportSize({ width: 320, height: 800 })
     const overflow = {}
+    const narrowPages = []
     for (const hash of Object.keys(TITLES)) {
-      await gotoPage(page, base, hash, '.ls-adminpage__title')
+      // 只等选择器会在懒加载 chunk 未到时读到旧页（`.ls-adminpage__title` 每页都有），
+      // 必须等标题文本切到目标页，再测 scrollWidth，避免假绿。
+      await gotoPage(page, base, hash, { title: TITLES[hash] })
+      const heading = await readHeading(page, TITLES[hash])
+      // 目标页根类（分组再加行数）就绪才量宽度，否则量到的可能是上一页的 DOM。
+      const rootReady = await page
+        .waitForFunction(
+          (selector) => {
+            const root = document.querySelector(selector)
+            if (!root) return false
+            return selector !== '.ls-groupspage' || root.querySelectorAll('.ls-groupspage__row').length > 0
+          },
+          PAGE_ROOT[hash],
+          { timeout: 15000 },
+        )
+        .then(() => true)
+        .catch(() => false)
+      narrowPages.push({ hash, heading, rootReady })
       await page.waitForTimeout(250)
       overflow[hash] = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
     }
+    const narrowWrong = narrowPages.filter((entry) => entry.heading !== TITLES[entry.hash] || !entry.rootReady)
+    check(
+      '320px 循环均停留在目标页（标题匹配且根类存在，groups 行数 >0）',
+      narrowWrong.length === 0,
+      JSON.stringify(narrowWrong),
+    )
     const overflowing = Object.entries(overflow).filter(([, value]) => value > 0)
     check(
       '六页在 320px 下均无横向滚动',
@@ -950,7 +999,8 @@ async function run() {
 
     if (SHOTS) {
       await page.setViewportSize({ width: 320, height: 900 })
-      await gotoPage(page, base, '/tokens', '.ls-adminpage__title')
+      await gotoPage(page, base, '/tokens')
+      await readHeading(page, TITLES['/tokens'])
       await page.screenshot({ path: resolve(SHOTS, '01-tokens-320.png'), fullPage: true }).catch(() => {})
     }
   } catch (error) {

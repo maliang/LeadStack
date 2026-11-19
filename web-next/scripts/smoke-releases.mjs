@@ -30,7 +30,7 @@ const TOKEN = 'smoke-password-smoke-token'
 const PASSWORD = 'smoke-servers-password'
 
 const APPS = [
-  { id: 'app-shop', name: 'shop-web', slug: 'shop-web', root: '/srv/shop-web', deploy_mode: 'release', server_count: 2 },
+  { id: 'app-shop', name: 'shop-web-v2', slug: 'shop-web', root: '/srv/shop-web', deploy_mode: 'release', server_count: 2 },
   { id: 'app-api', name: 'api-service', slug: 'api-service', root: '/srv/api', deploy_mode: 'inplace', server_count: 1 },
 ]
 
@@ -50,8 +50,6 @@ function makeReleases() {
     {
       id: 'rel-success',
       app_id: 'app-shop',
-      app_name: 'shop-web',
-      app_slug: 'shop-web',
       template_id: 'tpl-1',
       template_name: '二进制发布',
       version: '1.4.2',
@@ -80,8 +78,6 @@ function makeReleases() {
     {
       id: 'rel-canary',
       app_id: 'app-shop',
-      app_name: 'shop-web',
-      app_slug: 'shop-web',
       template_id: 'tpl-1',
       template_name: '二进制发布',
       version: '1.5.0',
@@ -120,8 +116,6 @@ function makeReleases() {
     {
       id: 'rel-failed',
       app_id: 'app-api',
-      app_name: 'api-service',
-      app_slug: 'api-service',
       template_id: 'tpl-1',
       template_name: '二进制发布',
       version: '2.1.0',
@@ -182,6 +176,7 @@ async function installMockApi(context, state) {
       return route.fulfill({ status: 204, body: '' })
     }
     if (path === '/api/v1/apps' && method === 'GET') {
+      if (state.appsFail) return json(403, { error: { code: 'forbidden', message: 'forbidden' } })
       return json(200, { data: APPS })
     }
     if (path === '/api/v1/templates' && method === 'GET') {
@@ -219,8 +214,6 @@ async function installMockApi(context, state) {
       const release = {
         id: `rel-new-${state.releases.length + 1}`,
         app_id: body.app_id,
-        app_name: APPS.find((app) => app.id === body.app_id)?.name ?? '',
-        app_slug: APPS.find((app) => app.id === body.app_id)?.slug ?? '',
         template_id: body.template_id,
         template_name: TEMPLATES.find((template) => template.id === body.template_id)?.name ?? '',
         version: body.version,
@@ -322,7 +315,14 @@ async function run() {
   }
 
   const pageErrors = []
-  const state = { releases: makeReleases(), actions: [], releaseListCalls: 0, readOnly: false, permissions: null }
+  const state = {
+    releases: makeReleases(),
+    actions: [],
+    releaseListCalls: 0,
+    readOnly: false,
+    permissions: null,
+    appsFail: false,
+  }
 
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
@@ -344,6 +344,27 @@ async function run() {
     check('灰度发布显示 canary 进度', canaryRow.includes('灰度 1/2'))
     const failedRow = await page.locator('.ls-deploy__row[data-release-id="rel-failed"]').innerText()
     check('失败发布透出失败计数', failedRow.includes('失败'))
+
+    // 1b) 应用列：列表接口只给 app_id，页面须用一次 /apps 的映射显示应用名
+    await page.waitForFunction(
+      () => (document.querySelector('.ls-deploy__row[data-release-id="rel-success"]')?.textContent ?? '').includes('shop-web-v2'),
+      null,
+      { timeout: 5000 },
+    )
+    const shopRow = await page.locator('.ls-deploy__row[data-release-id="rel-success"]').innerText()
+    const apiRow = await page.locator('.ls-deploy__row[data-release-id="rel-failed"]').innerText()
+    check(
+      '列表应用列显示应用名而非 app_id',
+      shopRow.includes('shop-web-v2') &&
+        !shopRow.includes('app-shop') &&
+        apiRow.includes('api-service') &&
+        !apiRow.includes('app-api'),
+      `${shopRow.replace(/\s+/g, ' ')} | ${apiRow.replace(/\s+/g, ' ')}`,
+    )
+    const listText = await page.locator('body').innerText()
+    check('列表页不出现 app_id 形态文本', !/app-shop|app-api/.test(listText))
+    const appListGets = calls.filter((call) => call.method === 'GET' && call.path === '/api/v1/apps')
+    check('列表只拉一次应用列表（不按行请求）', appListGets.length === 1, `${appListGets.length} 次`)
 
     // 2) 搜索与状态筛选
     await page.fill('#releases-search', '2.1.0')
@@ -386,11 +407,23 @@ async function run() {
     await page.waitForTimeout(300)
     check('提交发出 1 次 POST /releases', posts().filter((call) => call.path === '/api/v1/releases').length === 1)
     check('新发布出现在列表', (await page.locator('.ls-deploy__row').count()) === 4)
+    const createdNotice = await page.locator('.ls-ok-hint').innerText()
+    check(
+      '创建成功提示展示应用名而非 app_id',
+      createdNotice.includes('shop-web-v2') && !createdNotice.includes('app-shop'),
+      createdNotice.replace(/\s+/g, ' '),
+    )
 
     // 4) 详情：步骤时间线 + 日志按需展开
     await page.goto(`${base}/#/releases/rel-success`, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('[data-testid="release-timeline"]', { timeout: 15000 })
     check('详情渲染步骤时间线', (await page.locator('.ls-timeline__item').count()) === 1)
+    const successTitle = await page.locator('#release-detail-title').innerText()
+    check(
+      '详情标题展示应用名而非 app_id',
+      successTitle.includes('shop-web-v2') && !successTitle.includes('app-shop'),
+      successTitle.replace(/\s+/g, ' '),
+    )
     check(
       '时间线按服务器展示成功态',
       (await page.locator('[data-run-server="srv-alpha"]').innerText()).includes('alpha-node'),
@@ -425,7 +458,17 @@ async function run() {
     await page.waitForTimeout(200)
     check('确认回滚发出一次请求', rollbackPosts() === 1, `${rollbackPosts()} 次`)
 
-    // 6) 中止进行中的发布：二次确认 + 取消不中止
+    // 6) 详情只给 app_id 时也能用 api.apps() 兜底出应用名
+    await page.goto(`${base}/#/releases/rel-failed`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-testid="release-timeline"]', { timeout: 15000 })
+    const fallbackTitle = await page.locator('#release-detail-title').innerText()
+    check(
+      '详情只给 app_id 时仍显示应用名（api.apps 兜底）',
+      fallbackTitle.includes('api-service') && !fallbackTitle.includes('app-api'),
+      fallbackTitle.replace(/\s+/g, ' '),
+    )
+
+    // 7) 中止进行中的发布：二次确认 + 取消不中止
     await page.goto(`${base}/#/releases/rel-canary`, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('[data-testid="release-timeline"]', { timeout: 15000 })
     check('灰度发布时间线两台服务器', (await page.locator('.ls-timeline__item').count()) === 2)
@@ -449,7 +492,7 @@ async function run() {
       state.actions.join(','),
     )
 
-    // 7) 320px：列表页与详情页都不横向滚动
+    // 8) 320px：列表页与详情页都不横向滚动
     await page.setViewportSize({ width: 320, height: 800 })
     await page.goto(`${base}/#/releases`, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('.ls-deploy__row', { timeout: 15000 })
@@ -463,7 +506,7 @@ async function run() {
     check('320px 发布详情无横向滚动', detailOverflow <= 1, `溢出 ${detailOverflow}px`)
     await page.setViewportSize({ width: 1280, height: 900 })
 
-    // 8) 无 deploy.write：写按钮隐藏且 0 写请求
+    // 9) 无 deploy.write：写按钮隐藏且 0 写请求
     state.readOnly = true
     const viewerContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     await installMockApi(viewerContext, state)
@@ -478,7 +521,7 @@ async function run() {
     check('只读账号 0 写请求', writes(viewerCalls).length === 0, `${writes(viewerCalls).length} 次`)
     await viewerContext.close()
 
-    // 9) 权限一致性：详情页与列表页同点 deploy.read；仅 server.read 不得绕过
+    // 10) 权限一致性：详情页与列表页同点 deploy.read；仅 server.read 不得绕过
     state.permissions = ['deploy.read']
     const deployOnlyContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     await installMockApi(deployOnlyContext, state)
@@ -525,6 +568,25 @@ async function run() {
     )
     await serverOnlyContext.close()
     state.permissions = null
+
+    // 11) 应用列表不可读（如仅 deploy.read）：列表主流程不受影响，应用列回退 app_id
+    state.appsFail = true
+    const noAppsContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    await installMockApi(noAppsContext, state)
+    const noApps = await noAppsContext.newPage()
+    noApps.on('pageerror', (error) => pageErrors.push(error.message))
+    await login(noApps, base, { username: 'deploy-only', password: PASSWORD })
+    await noApps.goto(`${base}/#/releases`, { waitUntil: 'domcontentloaded' })
+    await noApps.waitForSelector('.ls-deploy__row[data-release-id="rel-success"]', { timeout: 15000 })
+    check('应用列表不可读时发布列表仍渲染', (await noApps.locator('.ls-deploy__row').count()) === 4)
+    const noAppsRow = await noApps.locator('.ls-deploy__row[data-release-id="rel-success"]').innerText()
+    check('应用列表不可读时应用列回退 app_id', noAppsRow.includes('app-shop'), noAppsRow.replace(/\s+/g, ' '))
+    check(
+      '应用列表不可读时列表不显示加载失败',
+      (await noApps.locator('.ls-notice--error').count()) === 0,
+    )
+    await noAppsContext.close()
+    state.appsFail = false
 
     check('无未捕获异常', pageErrors.length === 0, pageErrors.join(' / ').slice(0, 160))
     await context.close()

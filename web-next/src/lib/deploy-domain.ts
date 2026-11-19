@@ -131,8 +131,20 @@ export function releaseStats(release: Release): ReleaseStats {
   return { success, failed, active, canceled, total: runs.length }
 }
 
-export function releaseAppLabel(release: Release): string {
-  return release.app_name || release.app_slug || release.app_id
+/** app_id → 应用名：列表页一次拉取应用列表后建表复用，避免每行发一次请求。 */
+export function buildAppNameMap(apps: readonly AppItem[]): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const app of apps) map.set(app.id, app.name)
+  return map
+}
+
+/**
+ * 发布单的应用名：优先 release 自带的 app_name/app_slug；
+ * 后端列表 / 详情只返回 app_id，此时用应用列表映射出的名字兜底；
+ * 映射不到（应用列表不可读或应用已删）才回退 app_id。
+ */
+export function releaseAppLabel(release: Release, appNames?: ReadonlyMap<string, string> | null): string {
+  return release.app_name || release.app_slug || appNames?.get(release.app_id) || release.app_id
 }
 
 /** 发布时长（秒）；未开始 / 未结束返回 null，由调用方显示占位符。 */
@@ -141,19 +153,25 @@ export function releaseDurationSeconds(release: Release): number | null {
   return Math.max(0, Math.round((release.finished_at - release.started_at) / 1000))
 }
 
-export function releaseSearchText(release: Release): string {
-  return [releaseAppLabel(release), release.version, release.id].join(' ').toLowerCase()
+export function releaseSearchText(release: Release, appNames?: ReadonlyMap<string, string> | null): string {
+  return [releaseAppLabel(release, appNames), release.version, release.id].join(' ').toLowerCase()
 }
 
 export function filterReleases(
   releases: readonly Release[],
-  filters: { keyword?: string; appId?: string; status?: string } = {},
+  filters: {
+    keyword?: string
+    appId?: string
+    status?: string
+    /** 关键词要按界面显示的应用名匹配，所以搜索也需要同一张 app_id → 名称表。 */
+    appNames?: ReadonlyMap<string, string> | null
+  } = {},
 ): Release[] {
   const needle = (filters.keyword ?? '').trim().toLowerCase()
   return releases.filter((release) => {
     if (filters.appId && release.app_id !== filters.appId) return false
     if (filters.status && release.status !== filters.status) return false
-    if (needle !== '' && !releaseSearchText(release).includes(needle)) return false
+    if (needle !== '' && !releaseSearchText(release, filters.appNames).includes(needle)) return false
     return true
   })
 }

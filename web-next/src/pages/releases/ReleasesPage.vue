@@ -9,6 +9,7 @@ import { useReleases } from '@/composables/useReleases'
 import { useI18n } from '@/i18n'
 import { api, type DeployTemplate, type Server } from '@/lib/api'
 import {
+  buildAppNameMap,
   filterReleases,
   releaseAppLabel,
   releaseStats,
@@ -34,6 +35,8 @@ const canWrite = computed(() => can('deploy.write'))
 const { releases, state, error, loaded, refreshing, refresh, create, writeBusy, writeError, clearWriteError } =
   useReleases({ enabled: () => canRead.value })
 const { apps } = useApps({ enabled: () => canRead.value })
+/** 列表接口只返回 app_id：复用应用下拉这一次请求建表，绝不按行再拉。 */
+const appNames = computed(() => buildAppNameMap(apps.value))
 
 const keyword = ref('')
 const statusFilter = ref('')
@@ -45,6 +48,7 @@ const visible = computed(() =>
     keyword: keyword.value,
     status: statusFilter.value,
     appId: appFilter.value,
+    appNames: appNames.value,
   }),
 )
 
@@ -71,7 +75,10 @@ async function submitRelease(payload: Parameters<typeof create>[0]): Promise<voi
   const created = await create(payload)
   if (!created) return
   dialogOpen.value = false
-  notice.value = t('apps.releaseForm.created', { app: releaseAppLabel(created), version: created.version })
+  notice.value = t('apps.releaseForm.created', {
+    app: releaseAppLabel(created, appNames.value),
+    version: created.version,
+  })
 }
 
 onMounted(() => {
@@ -208,7 +215,7 @@ function resetFilters(): void {
           <tr v-for="release in visible" :key="release.id" class="ls-deploy__row" :data-release-id="release.id">
             <td>
               <RouterLink class="ls-deploy__name" :to="`/apps/${encodeURIComponent(release.app_id)}`">
-                {{ releaseAppLabel(release) }}
+                {{ releaseAppLabel(release, appNames) }}
               </RouterLink>
             </td>
             <td class="ls-deploy__mono">v{{ release.version }}</td>

@@ -8,6 +8,7 @@ import { useCan } from '@/composables/useCan'
 import { useI18n } from '@/i18n'
 import { api, type Release, type ReleaseLogEntry } from '@/lib/api'
 import {
+  buildAppNameMap,
   releaseAppLabel,
   releaseDurationSeconds,
   releaseStats,
@@ -32,6 +33,8 @@ const canWrite = computed(() => can('deploy.write'))
 const releaseId = computed(() => String(route.params.id ?? ''))
 
 const release = ref<Release | null>(null)
+/** 详情接口不返回 app_name/app_slug 时，用 api.apps() 建的表按 app_id 兜底查到的应用名。 */
+const resolvedAppNames = ref<Map<string, string> | null>(null)
 const state = ref<'loading' | 'ready' | 'error'>('loading')
 const error = ref<string | null>(null)
 const loaded = ref(false)
@@ -51,13 +54,35 @@ const openServer = ref<string | null>(null)
 
 const stats = computed(() => (release.value ? releaseStats(release.value) : null))
 const duration = computed(() => (release.value ? releaseDurationSeconds(release.value) : null))
+/**
+ * 标题里的应用名：优先详情自带的 app_name/app_slug；真后端只给 app_id，
+ * 因此拿不到名字时按 app_id 查应用列表；仍查不到才回退显示 app_id。
+ * 与应用列表页共用 deploy-domain 的 releaseAppLabel，避免两套口径。
+ */
+const appLabel = computed(() => {
+  if (!release.value) return releaseId.value
+  return releaseAppLabel(release.value, resolvedAppNames.value)
+})
 const title = computed(() =>
-  release.value ? `${releaseAppLabel(release.value)} · v${release.value.version}` : releaseId.value,
+  release.value ? `${appLabel.value} · v${release.value.version}` : releaseId.value,
 )
 const runs = computed(() => {
   const list = release.value?.runs ?? []
   return list.slice().sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0))
 })
+
+async function resolveAppNames(target: Release): Promise<void> {
+  if (target.app_name || target.app_slug) return
+  try {
+    const apps = await api.apps()
+    // 期间切换到别的发布就丢弃这次结果，避免串号。
+    if (release.value?.app_id !== target.app_id) return
+    resolvedAppNames.value = buildAppNameMap(apps)
+  } catch {
+    // 应用列表不可读（如仅 deploy.read）不影响详情展示，标题回退到 app_id。
+    if (release.value?.app_id === target.app_id) resolvedAppNames.value = null
+  }
+}
 
 async function load(keep = false): Promise<void> {
   if (!canRead.value || !releaseId.value) return
@@ -66,7 +91,10 @@ async function load(keep = false): Promise<void> {
   error.value = null
   notFound.value = false
   try {
-    release.value = await api.release(releaseId.value)
+    const next = await api.release(releaseId.value)
+    release.value = next
+    resolvedAppNames.value = null
+    await resolveAppNames(next)
     state.value = 'ready'
     loaded.value = true
   } catch (caught) {
@@ -82,6 +110,7 @@ async function load(keep = false): Promise<void> {
 onMounted(() => void load())
 watch(releaseId, () => {
   release.value = null
+  resolvedAppNames.value = null
   logsByServer.value = {}
   void load()
 })
@@ -283,7 +312,7 @@ function runDuration(started: number | null, finished: number | null): string {
       :open="confirming === 'retry'"
       :title="t('releaseDetail.retryTitle')"
       :description="t('releaseDetail.retryDescription')"
-      :details="release && stats ? [releaseAppLabel(release), `v${release.version}`, String(stats.failed)] : []"
+      :details="release && stats ? [appLabel, `v${release.version}`, String(stats.failed)] : []"
       :confirm-label="t('releaseDetail.retry')"
       tone="default"
       :busy="actionBusy"
@@ -296,7 +325,7 @@ function runDuration(started: number | null, finished: number | null): string {
       :open="confirming === 'cancel'"
       :title="t('release.abortConfirmTitle')"
       :description="release && stats ? t('release.abortConfirmBody', { count: stats.active }) : ''"
-      :details="release ? [releaseAppLabel(release), `v${release.version}`] : []"
+      :details="release ? [appLabel, `v${release.version}`] : []"
       :confirm-label="t('release.abort')"
       :busy="actionBusy"
       :error="actionError"
@@ -308,7 +337,7 @@ function runDuration(started: number | null, finished: number | null): string {
       v-if="release"
       :open="rollbackOpen"
       :app-id="release.app_id"
-      :app-name="releaseAppLabel(release)"
+      :app-name="appLabel"
       :busy="actionBusy"
       :error="actionError"
       @submit="(target) => runAction('rollback', target)"
