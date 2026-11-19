@@ -102,6 +102,7 @@ LeadStack-领栈/
 | `job.log` | `{run_id, seq, stream:"stdout\|stderr", chunk}` |
 | `job.done` | `{run_id, exit_code, error?}` |
 | `term.data` | `{session_id, b64}` |
+| `error` | `{session_id?, code?, message}`：终端拒绝/启动失败等结构化错误；发送方紧接着仍发一条 `term.data` 纯文本兜底，兼容未识别 `error` 的旧控制端 |
 
 指标命名（点分层级，固定集合，基础 只做前 5 个）：`cpu.pct`、`mem.used_pct`、`mem.used_bytes`、`load.1`、`disk.used_pct`、`net.rx_bytes`、`net.tx_bytes`、`proc.count`。
 

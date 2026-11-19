@@ -265,10 +265,12 @@ func TestTerminalOpenDataClose(t *testing.T) {
 	}
 }
 
-// TestTerminalBusy 验证同一时刻只允许一个终端会话，第二个请求收到 busy 提示。
+// TestTerminalBusy 验证同一时刻只允许一个终端会话：第二个请求必须收到
+// 结构化 error 帧（type=error + message），并保留 term.data 纯文本兜底。
 func TestTerminalBusy(t *testing.T) {
 	var result terminalResult
-	busyCh := make(chan struct{}, 1)
+	errFrameCh := make(chan protocol.ErrorFrame, 1)
+	textCh := make(chan struct{}, 1)
 	flowDone := make(chan struct{})
 
 	srv := newMockServer(t, func(conn *websocket.Conn, _ int) {
@@ -290,10 +292,39 @@ func TestTerminalBusy(t *testing.T) {
 		}); err != nil {
 			return
 		}
-		if readTermUntil(t, conn, &result, "已有终端会话", 8*time.Second) {
-			select {
-			case busyCh <- struct{}{}:
-			default:
+		// 拒绝时两帧都必须到位：结构化 error 帧在前，term.data 纯文本兜底在后。
+		deadline := time.Now().Add(8 * time.Second)
+		var gotErr, gotText bool
+		for !gotErr || !gotText {
+			remain := time.Until(deadline)
+			if remain <= 0 {
+				return
+			}
+			env, ok := readEnvelope(conn, remain)
+			if !ok {
+				return
+			}
+			switch env.Type {
+			case protocol.TypeError:
+				var frame protocol.ErrorFrame
+				if err := json.Unmarshal(env.Payload, &frame); err != nil {
+					continue
+				}
+				gotErr = true
+				select {
+				case errFrameCh <- frame:
+				default:
+				}
+			case protocol.TypeTermData:
+				sid, text := decodeTermText(t, env.Payload)
+				if sid == "sess-2" && strings.Contains(text, "已有终端会话") {
+					gotText = true
+					result.append(text)
+					select {
+					case textCh <- struct{}{}:
+					default:
+					}
+				}
 			}
 		}
 		_ = writeEnvelope(conn, protocol.TypeTermClose, protocol.TermClose{SessionID: "sess-1"})
@@ -307,10 +338,22 @@ func TestTerminalBusy(t *testing.T) {
 	runErr := make(chan error, 1)
 	go func() { runErr <- a.Run(ctx) }()
 
+	var frame protocol.ErrorFrame
 	select {
-	case <-busyCh:
+	case frame = <-errFrameCh:
 	case <-time.After(15 * time.Second):
-		t.Fatalf("第二个 term.open 未收到 busy 提示，已收到输出：%q", result.String())
+		t.Fatalf("第二个 term.open 未收到结构化 error 帧，已收到输出：%q", result.String())
+	}
+	if frame.SessionID != "sess-2" {
+		t.Errorf("error 帧 session_id = %q，期望 sess-2", frame.SessionID)
+	}
+	if !strings.Contains(frame.Message, "已有终端会话") {
+		t.Errorf("error 帧 message = %q，未说明拒绝原因", frame.Message)
+	}
+	select {
+	case <-textCh:
+	case <-time.After(8 * time.Second):
+		t.Fatalf("未收到 term.data 纯文本兜底，旧控制端将看不到拒绝原因，已收到输出：%q", result.String())
 	}
 	cancel()
 	select {
@@ -321,6 +364,76 @@ func TestTerminalBusy(t *testing.T) {
 	select {
 	case <-flowDone:
 	default:
+	}
+}
+
+// TestTerminalOpenCloseRepeat5 验证连续 5 轮「打开 → 输入 → 关闭」都能成功：
+// 任何一轮残留旧会话都会让下一轮 term.open 被 busy 拒绝，标记命令读不到。
+func TestTerminalOpenCloseRepeat5(t *testing.T) {
+	var result terminalResult
+	roundErr := make(chan error, 1)
+
+	srv := newMockServer(t, func(conn *websocket.Conn, _ int) {
+		env, ok := readEnvelope(conn, 5*time.Second)
+		if !ok || env.Type != protocol.TypeHello {
+			roundErr <- fmt.Errorf("首帧不是 hello")
+			return
+		}
+		if err := sendHelloAck(conn, 20, 15); err != nil {
+			roundErr <- err
+			return
+		}
+		for i := 0; i < 5; i++ {
+			sessionID := fmt.Sprintf("term-rep-%d", i)
+			marker := fmt.Sprintf("M5_TERM_REPEAT_%d", i)
+			if err := writeEnvelope(conn, protocol.TypeTermOpen, protocol.TermOpen{
+				SessionID: sessionID, Cols: 100, Rows: 30, Shell: "/bin/sh",
+			}); err != nil {
+				roundErr <- err
+				return
+			}
+			time.Sleep(250 * time.Millisecond)
+			input := fmt.Sprintf("echo %s\n", marker)
+			if err := writeEnvelope(conn, protocol.TypeTermData, protocol.TermData{
+				SessionID: sessionID,
+				B64:       base64.StdEncoding.EncodeToString([]byte(input)),
+			}); err != nil {
+				roundErr <- err
+				return
+			}
+			if !readTermUntil(t, conn, &result, marker, 8*time.Second) {
+				roundErr <- fmt.Errorf("第 %d 轮未读到标记 %s（可能被 busy 拒绝）", i+1, marker)
+				return
+			}
+			if err := writeEnvelope(conn, protocol.TypeTermClose, protocol.TermClose{SessionID: sessionID}); err != nil {
+				roundErr <- err
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		close(roundErr)
+	})
+
+	a := New(Config{Server: srv.URL, Token: "test-token", Version: "test", Logger: testLogger()})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- a.Run(ctx) }()
+
+	select {
+	case err, ok := <-roundErr:
+		if ok && err != nil {
+			t.Fatalf("连续打开-关闭失败: %v", err)
+		}
+	case <-time.After(90 * time.Second):
+		cancel()
+		t.Fatalf("连续 5 轮打开-关闭超时，已收到输出：%q", result.String())
+	}
+	cancel()
+	select {
+	case <-runErr:
+	case <-time.After(10 * time.Second):
+		t.Fatal("agent.Run 未在取消后退出")
 	}
 }
 

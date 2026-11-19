@@ -5,8 +5,8 @@
 //
 // 实现约定（与协议方向保持一致）：
 //   - 控制端 → agent：term.open / term.data（用户输入）/ term.resize / term.close
-//   - agent → 控制端：term.data（PTY 输出，base64）；会话结束/错误提示也通过
-//     term.data 发送一段人类可读文本，不额外发明反向的 term.close 帧。
+//   - agent → 控制端：term.data（PTY 输出，base64）。会话拒绝/错误先发一帧
+//     type=error 的结构化提示，再发一条 term.data 纯文本兜底（兼容旧控制端）。
 package agent
 
 import (
@@ -36,6 +36,8 @@ const (
 	terminalInputQueue = 32
 	// 单次从 PTY 读取的最大字节数。
 	terminalReadChunk = 4096
+	// termBusyNotice 是「已有会话在运行」时给控制端的提示文本。
+	termBusyNotice = "错误：已有终端会话在运行，请先关闭当前会话。"
 )
 
 var (
@@ -126,7 +128,7 @@ func (m *terminalManager) HandleOpen(ctx context.Context, w *wsConn, spec protoc
 		m.mu.Unlock()
 		m.log.Warn("已有终端会话，拒绝新的 term.open",
 			"session_id", spec.SessionID, "active_session_id", active.id)
-		notifyTerminalNotice(w, spec.SessionID, "错误：已有终端会话在运行，请先关闭当前会话。")
+		notifyTerminalError(w, spec.SessionID, termBusyNotice)
 		return
 	}
 	m.mu.Unlock()
@@ -137,9 +139,9 @@ func (m *terminalManager) HandleOpen(ctx context.Context, w *wsConn, spec protoc
 	if err != nil {
 		m.log.Warn("启动终端 shell 失败", "shell", shell, "err", err)
 		if errors.Is(err, errTerminalUnsupported) {
-			notifyTerminalNotice(w, spec.SessionID, "错误：当前平台不支持交互式终端。")
+			notifyTerminalError(w, spec.SessionID, "错误：当前平台不支持交互式终端。")
 		} else {
-			notifyTerminalNotice(w, spec.SessionID, fmt.Sprintf("错误：启动 shell 失败：%v", err))
+			notifyTerminalError(w, spec.SessionID, fmt.Sprintf("错误：启动 shell 失败：%v", err))
 		}
 		return
 	}
@@ -346,6 +348,21 @@ func (m *terminalManager) idleLoop(ctx context.Context, w *wsConn, s *terminalSe
 			return
 		}
 	}
+}
+
+// notifyTerminalError 先发一帧 type=error 的结构化错误，再发一条 term.data
+// 纯文本兜底。顺序不能颠倒：旧控制端忽略未知 type，仍能靠纯文本看到原因；
+// 新控制端优先用结构化帧展示，不再需要解析人类可读文本。
+func notifyTerminalError(w *wsConn, sessionID, message string) {
+	if w == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = w.send(ctx, newEnvelope(protocol.TypeError, protocol.ErrorFrame{
+		SessionID: sessionID, Message: message,
+	}))
+	notifyTerminalNotice(w, sessionID, message)
 }
 
 // notifyTerminalNotice 通过 term.data 发送一段人类可读提示文本。

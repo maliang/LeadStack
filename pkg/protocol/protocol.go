@@ -19,6 +19,9 @@ const (
 	TypeJobLog    = "job.log"
 	TypeJobDone   = "job.done"
 	TypeTermData  = "term.data"
+	// TypeError 是 agent → 控制端的结构化错误提示。旧控制端按未知类型忽略即可
+	// （契约要求未识别 type 不得断开连接），因此发送方仍附带一条 term.data 纯文本兜底。
+	TypeError = "error"
 
 	// 控制端 -> agent
 	TypeHelloAck   = "hello_ack"
@@ -210,6 +213,16 @@ type TermClose struct {
 type TermData struct {
 	SessionID string `json:"session_id"`
 	B64       string `json:"b64"`
+}
+
+// ErrorFrame 是 TypeError 帧的载荷。
+//
+// 终端相关拒绝（例如「已有终端会话在运行」）先发本帧，让控制端能结构化展示原因，
+// 随后仍发一条 term.data 纯文本提示，兼容尚未识别 error 帧的旧控制端。
+type ErrorFrame struct {
+	SessionID string `json:"session_id,omitempty"`
+	Code      string `json:"code,omitempty"`
+	Message   string `json:"message"`
 }
 
 // TypeAgentUpgrade 是控制端 → agent 的升级指令（契约第 44 节）。

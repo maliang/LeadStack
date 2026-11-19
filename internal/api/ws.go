@@ -319,6 +319,16 @@ func (a *API) dispatchAgentFrame(ctx context.Context, ac *agentConn, tok *store.
 			}
 		}
 		a.routeAgentTermData(data.SessionID, data.B64)
+	case protocol.TypeError:
+		// 结构化错误（终端拒绝/启动失败等）：转成可读提示推给浏览器并关闭该会话。
+		var frame protocol.ErrorFrame
+		if len(env.Payload) > 0 {
+			if uerr := json.Unmarshal(env.Payload, &frame); uerr != nil {
+				a.logger.Debug("解析 error 帧失败", "err", uerr)
+				break
+			}
+		}
+		a.routeAgentTermError(frame.SessionID, frame.Code, frame.Message)
 	default:
 		a.logger.Debug("忽略未识别的消息类型", "type", env.Type, "server_id", ac.getServerID())
 	}

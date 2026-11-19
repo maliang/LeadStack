@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,9 @@ const (
 	terminalDefaultCols = 120
 	terminalDefaultRows = 32
 	terminalMaxDim      = 1000
+	// terminalDrainTimeout 是浏览器断开后等待读协程收尾的上限。
+	// 超过后 handler 必须返回，不能为了等一个卡死的 PTY 读把 HTTP 协程永久挂住。
+	terminalDrainTimeout = 2 * time.Second
 )
 
 // 终端控制帧（首帧 JSON 元信息）。
@@ -167,9 +171,18 @@ func (a *API) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// 会话关闭只执行一次：break/退出路径与 defer 都会调用，避免重复 Close。
+	var (
+		closeOnce sync.Once
+		closeErr  error
+	)
+	closeSession := func() error {
+		closeOnce.Do(func() { closeErr = session.Close() })
+		return closeErr
+	}
 	defer func() {
-		if cerr := session.Close(); cerr != nil {
-			a.logger.Debug("关闭终端会话失败", "err", cerr)
+		if cerr := closeSession(); cerr != nil {
+			a.logger.Debug("关闭终端会话失败", "session_id", sessionID, "err", cerr)
 		}
 	}()
 
@@ -187,16 +200,14 @@ func (a *API) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer close(done)
 		buf := make([]byte, 8192)
-		for {
-			n, rerr := session.Read(buf)
-			if n > 0 {
-				if werr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
-					return
-				}
-			}
-			if rerr != nil {
-				return
-			}
+		if perr := pumpSessionToBrowser(session, conn, buf); perr != nil {
+			a.logger.Debug("终端读协程结束", "session_id", sessionID, "err", perr)
+		}
+		// 会话先结束（shell 退出/对端关闭）或写浏览器失败：主动关闭会话并断开 WebSocket，
+		// 否则主循环会一直阻塞在 conn.ReadMessage 上，handler 协程同样泄漏。
+		_ = closeSession()
+		if cerr := conn.Close(); cerr != nil {
+			a.logger.Debug("关闭终端 WebSocket 失败", "err", cerr)
 		}
 	}()
 
@@ -233,7 +244,18 @@ func (a *API) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 			// 未知控制帧忽略（向前兼容）。
 		}
 	}
-	<-done
+	// 浏览器断开（ReadMessage 出错）或写会话失败：必须在等待 done 之前关闭会话。
+	// session.Read 阻塞在会话上，只有 Close 才能让它返回；以前这里直接 <-done，
+	// 而 session.Close() 只挂在 defer 里，两边互相等待，agent 会话永远不释放。
+	if cerr := closeSession(); cerr != nil {
+		a.logger.Debug("关闭终端会话失败", "session_id", sessionID, "err", cerr)
+	}
+	select {
+	case <-done:
+	case <-time.After(terminalDrainTimeout):
+		a.logger.Warn("终端读协程未在超时内退出",
+			"server_id", serverID, "session_id", sessionID)
+	}
 }
 
 // openTerminalSession 按服务器模式打开终端会话。
@@ -254,6 +276,8 @@ func (a *API) openTerminalSession(ctx context.Context, serverID, sessionID strin
 		return nil, errors.New("该服务器的 agent 未在线")
 	}
 	session := newAgentTermSession(conn, sessionID)
+	// 会话关闭时清掉索引，避免 agentTerms 里残留已结束会话（转发写入无人消费的缓冲）。
+	session.onClose = func() { a.agentTerms.Delete(sessionID) }
 	if err := session.open(cols, rows); err != nil {
 		return nil, err
 	}
@@ -279,13 +303,87 @@ func (a *API) routeAgentTermData(sessionID, b64 string) {
 	session.push(raw)
 }
 
+// terminalErrorFrame 是控制端写给浏览器的结构化错误（TextMessage JSON）。
+// 字段与 pkg/protocol.ErrorFrame 对齐；前端按 data/message 任一取文案，
+// 因此同时兼容 {type:"error",data:…} 的旧拒绝路径。
+type terminalErrorFrame struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+	Code    string `json:"code"`
+}
+
+// routeAgentTermError 把 agent 上报的结构化错误帧以 TextMessage JSON 直接转给浏览器
+// （{"type":"error","message":…,"code":…}），随后关闭会话让浏览器侧 WebSocket 收尾。
+// 数据帧仍走 BinaryMessage 不变：浏览器据此区分「终端输出」与「结构化拒绝」，
+// 不会再把拒绝原因当成 ANSI 文本写进 xterm。
+func (a *API) routeAgentTermError(sessionID, code, message string) {
+	value, ok := a.agentTerms.Load(sessionID)
+	if !ok {
+		return
+	}
+	session, ok := value.(*agentTermSession)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "终端会话出错"
+	}
+	encoded, err := json.Marshal(terminalErrorFrame{Type: "error", Message: message, Code: code})
+	if err != nil {
+		// 全是字符串，实际不会失败；兜底也用 TextMessage JSON，绝不降级成二进制纯文本。
+		a.logger.Warn("序列化终端错误帧失败", "session_id", sessionID, "err", err)
+		encoded = []byte(`{"type":"error","message":"终端会话出错","code":"internal_error"}`)
+	}
+	session.pushText(encoded)
+	if cerr := session.Close(); cerr != nil {
+		a.logger.Debug("收到终端错误帧后关闭会话失败", "session_id", sessionID, "err", cerr)
+	}
+}
+
+// termFrame 是一块待写给浏览器的终端帧；msgType 区分二进制输出与结构化文本。
+type termFrame struct {
+	msgType int
+	data    []byte
+}
+
+// terminalFrameReader 由能区分帧类型的会话实现（agent 终端的 error 帧走 TextMessage）。
+type terminalFrameReader interface {
+	ReadFrame(p []byte) (msgType int, n int, err error)
+}
+
+// pumpSessionToBrowser 把会话输出写给浏览器：会话实现 terminalFrameReader 时按其
+// 指定类型写（TextMessage 用于结构化错误帧），否则一律 BinaryMessage，数据通路不变。
+func pumpSessionToBrowser(session term.Session, conn *websocket.Conn, buf []byte) error {
+	for {
+		msgType := websocket.BinaryMessage
+		var n int
+		var rerr error
+		if fr, ok := session.(terminalFrameReader); ok {
+			msgType, n, rerr = fr.ReadFrame(buf)
+		} else {
+			n, rerr = session.Read(buf)
+		}
+		if n > 0 {
+			if werr := conn.WriteMessage(msgType, buf[:n]); werr != nil {
+				return werr
+			}
+		}
+		if rerr != nil {
+			return rerr
+		}
+	}
+}
+
 // agentTermSession 是 agent 模式的终端会话（经控制端 WS 转发）。
 type agentTermSession struct {
 	conn      *agentConn
 	sessionID string
 
+	// onClose 在会话真正关闭时回调一次（由 API 注入，用于清理索引）。
+	onClose func()
+
 	mu     sync.Mutex
-	chunks chan []byte
+	chunks chan termFrame
 	closed bool
 	done   chan struct{}
 	once   sync.Once
@@ -295,7 +393,7 @@ type agentTermSession struct {
 func newAgentTermSession(conn *agentConn, sessionID string) *agentTermSession {
 	return &agentTermSession{
 		conn: conn, sessionID: sessionID,
-		chunks: make(chan []byte, 64), done: make(chan struct{}),
+		chunks: make(chan termFrame, 64), done: make(chan struct{}),
 	}
 }
 
@@ -312,21 +410,59 @@ func (s *agentTermSession) open(cols, rows int) error {
 
 // push 把 agent 输出塞进读缓冲（非阻塞，满了丢弃旧数据以免拖垮连接）。
 func (s *agentTermSession) push(data []byte) {
+	s.pushFrame(termFrame{msgType: websocket.BinaryMessage, data: data})
+}
+
+// pushText 把结构化文本（error 帧 JSON）塞进读缓冲：读协程将以 TextMessage 写给浏览器。
+func (s *agentTermSession) pushText(data []byte) {
+	s.pushFrame(termFrame{msgType: websocket.TextMessage, data: data})
+}
+
+// pushFrame 非阻塞入队；缓冲满时丢弃一块，保证控制端不被终端输出拖死。
+func (s *agentTermSession) pushFrame(frame termFrame) {
 	select {
-	case s.chunks <- data:
+	case s.chunks <- frame:
 	default:
-		// 缓冲满：丢弃一块，保证控制端不被终端输出拖死。
+	}
+}
+
+// nextFrame 取下一块待写数据：先看已排队的帧，再等关闭信号。
+// 关闭后仍先清空队列，避免 push 之后紧接着 Close 时错误帧被 done 抢先丢掉。
+func (s *agentTermSession) nextFrame() (termFrame, error) {
+	select {
+	case frame := <-s.chunks:
+		return frame, nil
+	default:
+	}
+	select {
+	case frame := <-s.chunks:
+		return frame, nil
+	case <-s.done:
+		select {
+		case frame := <-s.chunks:
+			return frame, nil
+		default:
+			return termFrame{}, errors.New("终端会话已关闭")
+		}
 	}
 }
 
 // Read 实现 term.Session。
 func (s *agentTermSession) Read(p []byte) (int, error) {
-	select {
-	case data := <-s.chunks:
-		return copy(p, data), nil
-	case <-s.done:
-		return 0, errors.New("终端会话已关闭")
+	frame, err := s.nextFrame()
+	if err != nil {
+		return 0, err
 	}
+	return copy(p, frame.data), nil
+}
+
+// ReadFrame 实现 terminalFrameReader：同时返回该帧应使用的 WebSocket 消息类型。
+func (s *agentTermSession) ReadFrame(p []byte) (int, int, error) {
+	frame, err := s.nextFrame()
+	if err != nil {
+		return 0, 0, err
+	}
+	return frame.msgType, copy(p, frame.data), nil
 }
 
 // Write 实现 term.Session：发送 term.data。
@@ -364,6 +500,9 @@ func (s *agentTermSession) Close() error {
 		s.closed = true
 		s.mu.Unlock()
 		close(s.done)
+		if s.onClose != nil {
+			s.onClose()
+		}
 		payload, merr := json.Marshal(protocol.TermClose{SessionID: s.sessionID})
 		if merr != nil {
 			err = merr
