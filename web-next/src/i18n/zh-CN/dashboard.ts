@@ -1,0 +1,68 @@
+/**
+ * 总览域：首页 Dashboard 的标题、KPI、需要关注、检测/告警概览与最近发布（zh-CN）。
+ * 键保持扁平点号路径，与 zh-CN/index.ts 展开合并后的 t('…') 查询一致；新增键请在 zh-CN / en-US 同名文件同步添加。
+ */
+const dashboard: Record<string, string> = {
+  'dashboard.title': '总览',
+  'dashboard.version': '版本 {version}',
+  'dashboard.refresh': '刷新',
+  'dashboard.retry': '重试',
+  'dashboard.loading': '正在加载',
+  'dashboard.valueEmpty': '—',
+  'dashboard.partialTitle': '部分数据未能刷新',
+  'dashboard.footnote': '数据每 10 秒自动刷新；页面切到后台时暂停。',
+
+  'dashboard.kpi.title': '关键指标',
+  'dashboard.kpi.total': '服务器总数',
+  'dashboard.kpi.online': '在线',
+  'dashboard.kpi.offline': '离线 / 未知',
+  'dashboard.kpi.offlineHint': '需要关注的机器',
+  'dashboard.kpi.uptime': '已运行 {uptime}',
+  'dashboard.kpi.onlineRate': '在线率 {rate}',
+  'dashboard.kpi.loading': '正在加载服务器概况…',
+  'dashboard.kpi.loadFailed': '服务器概况加载失败',
+  'dashboard.kpi.noServers': '还没有接入服务器：先添加一台目标机，总览才有数据可看。',
+
+  'dashboard.attention.title': '需要关注',
+  'dashboard.attention.subtitle': '状态不是「在线」的服务器，按最近更新时间排列',
+  'dashboard.attention.loadFailed': '服务器列表加载失败',
+  'dashboard.attention.staleTitle': '服务器列表未能刷新，显示的是上次结果',
+  'dashboard.attention.noServers': '还没有接入服务器。',
+  'dashboard.attention.allOnline': '全部服务器都在线，暂无需要关注的机器。',
+  'dashboard.attention.more': '还有 {count} 台未显示',
+
+  'dashboard.checks.title': '检测概览',
+  'dashboard.checks.subtitle': '全部检测项的最近一次结果',
+  'dashboard.checks.viewAll': '查看检测',
+  'dashboard.checks.total': '检测项',
+  'dashboard.checks.up': '正常',
+  'dashboard.checks.down': '故障',
+  'dashboard.checks.unknown': '未知',
+  'dashboard.checks.empty': '还没有检测项，去「检测」页添加第一个检测。',
+  'dashboard.checks.staleTitle': '检测概览刷新失败，显示的是上次结果',
+  'dashboard.checks.loadFailed': '检测概览加载失败',
+
+  'dashboard.alerts.title': '告警概览',
+  'dashboard.alerts.subtitle': '当前告警与最近 24 小时的恢复情况',
+  'dashboard.alerts.viewAll': '查看告警',
+  'dashboard.alerts.firing': '触发中',
+  'dashboard.alerts.acked': '已认领',
+  'dashboard.alerts.resolved24h': '24h 已恢复',
+  'dashboard.alerts.severity': '严重/警告/提示',
+  'dashboard.alerts.empty': '当前没有告警记录。',
+  'dashboard.alerts.staleTitle': '告警概览刷新失败，显示的是上次结果',
+  'dashboard.alerts.loadFailed': '告警概览加载失败',
+
+  'dashboard.releases.title': '最近发布',
+  'dashboard.releases.subtitle': '最近 5 次发布及其执行结果',
+  'dashboard.releases.viewAll': '查看发布',
+  'dashboard.releases.unnamed': '未命名应用',
+  'dashboard.releases.runs': '成功 {success} · 失败 {failed} · 进行中 {active}',
+  'dashboard.releases.empty': '还没有发布记录。',
+  'dashboard.releases.scopedEmpty': '你当前可见的范围内还没有发布记录。',
+  'dashboard.releases.noPermission': '当前账号没有发布的查看权限。',
+  'dashboard.releases.staleTitle': '最近发布刷新失败，显示的是上次结果',
+  'dashboard.releases.loadFailed': '最近发布加载失败',
+}
+
+export default dashboard

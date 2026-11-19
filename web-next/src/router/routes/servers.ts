@@ -10,7 +10,7 @@ export const serverRoutes: RouteRecordRaw[] = [
   {
     path: '/',
     name: 'home',
-    component: () => import('@/views/HomeView.vue'),
+    component: () => import('@/pages/dashboard/DashboardPage.vue'),
     meta: { title: '总览', permission: 'server.read' },
   },
   {

@@ -5,6 +5,7 @@ import system from './system'
 import tools from './tools'
 import alerts from './alerts'
 import checks from './checks'
+import dashboard from './dashboard'
 import legacy from './legacy'
 import ops from './ops'
 
@@ -20,6 +21,7 @@ const enUS: Record<string, string> = {
   ...tools,
   ...alerts,
   ...checks,
+  ...dashboard,
   ...legacy,
   ...ops,
 }
