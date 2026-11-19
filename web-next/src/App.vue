@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, defineComponent } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
-import { SConfigProvider } from '@vean/ui'
+import { SConfigProvider, useTheme } from '@vean/ui'
 import type { ConfigProviderThemeOptions } from '@vean/ui'
 
 import AppShell from '@/components/AppShell.vue'
 import { BRAND_PRESET } from '@/theme/brand'
+import { setLanguage, useI18n } from '@/i18n'
+import {
+  appearanceDensity,
+  DEFAULT_APPEARANCE,
+  isAppearanceDensity,
+  readStoredMode,
+  setDensity,
+} from '@/lib/appearance'
 
 /**
  * 品牌主题（唯一来源：@/theme/brand）。
@@ -25,10 +33,55 @@ const theme: ConfigProviderThemeOptions = {
   radius: '0.625rem',
   size: 'md',
 }
+
+/**
+ * 默认主题为「跟随系统」。
+ * @vean/ui 0.51.5 在没有持久化 envelope 时把 mode 兜底成 'light'，所以这里在 provider
+ * 内部挂一个 bridge：仅当用户从未选过主题（envelope 无 mode）时写入 auto。一旦持久化过，
+ * 后续刷新以 envelope 为准，不再覆盖用户的选择。主题本身的读写由 provider 的 context
+ * （mode / effectiveMode）驱动，SThemeModeSelect 直接 v-model 到同一个 mode。
+ */
+const AppearanceDefaultMode = defineComponent({
+  name: 'AppearanceDefaultMode',
+  setup() {
+    const { mode } = useTheme()
+    if (readStoredMode() === null) mode.value = DEFAULT_APPEARANCE.mode
+    return () => null
+  },
+})
+
+const { language } = useI18n()
+
+/** Vean 组件的内置文案（SThemeModeSelect 的自动/浅色/深色）跟随界面语言。 */
+const providerLocale = computed(() => (language.value === 'en-US' ? 'en' : 'zh-CN'))
+
+/**
+ * 语言与密度塞进 provider 的同一个持久化 envelope（persist-theme）。
+ * provider 的 writer 在 watch getter 里调用本函数，响应式依赖会被追踪，且与主题共用
+ * 同一个 debounce writer，不会出现双写冲突（已读 @vean/ui 0.51.5 源码确认）。
+ */
+function getExtraTheme(): Record<string, unknown> {
+  return { language: language.value, density: appearanceDensity.value }
+}
+
+/** envelope 回填：首次挂载与其它标签页写入时都会回调。 */
+function onExtraThemeChange(extra: Record<string, unknown>): void {
+  if (!extra) return
+  const nextLanguage = extra.language
+  if (nextLanguage === 'zh-CN' || nextLanguage === 'en-US') setLanguage(nextLanguage)
+  if (isAppearanceDensity(extra.density)) setDensity(extra.density)
+}
 </script>
 
 <template>
-  <SConfigProvider :theme="theme">
+  <SConfigProvider
+    :theme="theme"
+    :locale="providerLocale"
+    :get-extra-theme="getExtraTheme"
+    :on-extra-theme-change="onExtraThemeChange"
+    persist-theme
+  >
+    <AppearanceDefaultMode />
     <RouterView v-slot="{ Component }">
       <component :is="Component" v-if="blankLayout" />
       <AppShell v-else>

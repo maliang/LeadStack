@@ -7,6 +7,54 @@
     <meta name="theme-color" content="#f8fafc" />
     <meta name="description" content="LeadStack 领栈 · 多服务器部署与检测控制台" />
     <title>LeadStack 领栈 · 控制台</title>
+    <!--
+      首屏防闪：在样式与入口脚本之前同步读取持久化外观。
+      键名 `__VEAN_THEME` 与 @vean/ui 0.51.5 的 THEME_STORAGE_KEY 一致（见 src/lib/appearance.ts）；
+      envelope 里的 style 是该 provider 写出的 `#vean-theme` 快照，提前注入可避免变量缺失闪白，
+      provider 挂载后会复用同一个 style 元素并覆盖为最新值。
+    -->
+    <script>
+      ;(function () {
+        var root = document.documentElement
+        var mode = 'auto'
+        var density = 'standard'
+        var style = ''
+        var language = ''
+        try {
+          language = window.localStorage.getItem('leadstack.lang') || ''
+          var raw = window.localStorage.getItem('__VEAN_THEME')
+          if (raw) {
+            var saved = JSON.parse(raw)
+            if (saved && (saved.mode === 'auto' || saved.mode === 'light' || saved.mode === 'dark')) {
+              mode = saved.mode
+            }
+            if (saved && saved.extra && (saved.extra.density === 'compact' || saved.extra.density === 'standard')) {
+              density = saved.extra.density
+            }
+            if (saved && typeof saved.style === 'string') style = saved.style
+          }
+        } catch (error) {
+          /* localStorage 被禁用时退回默认外观 */
+        }
+        var prefersDark =
+          window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+        var dark = mode === 'dark' || (mode === 'auto' && prefersDark)
+        if (dark) root.classList.add('dark')
+        root.style.colorScheme = dark ? 'dark' : 'light'
+        root.setAttribute('data-density', density)
+        if (language === 'zh-CN' || language === 'en-US') {
+          root.setAttribute('lang', language === 'en-US' ? 'en' : 'zh-CN')
+        }
+        var themeColor = document.querySelector('meta[name="theme-color"]')
+        if (themeColor) themeColor.setAttribute('content', dark ? '#0b1220' : '#f8fafc')
+        if (style) {
+          var tag = document.createElement('style')
+          tag.id = 'vean-theme'
+          tag.textContent = style
+          document.head.appendChild(tag)
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

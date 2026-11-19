@@ -1,19 +1,43 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import { SThemeModeSelect } from '@vean/ui'
 
 import AppIcon from '@/components/AppIcon.vue'
 import { useAuth } from '@/composables/useAuth'
 import { useCan } from '@/composables/useCan'
-import { useI18n } from '@/i18n'
+import { SUPPORTED_LANGUAGES, setLanguage, useI18n, type Language } from '@/i18n'
 import { api, type NetworkConfig, type NetworkUpdatePayload, type SystemInfo } from '@/lib/api'
+import { appearanceDensity, setDensity, type AppearanceDensity } from '@/lib/appearance'
 import { errorMessage } from '@/lib/errors'
 import { parsePort, validateListenAddress, validatePublicUrl } from '@/lib/network'
 import UpgradeCard from '@/components/system/UpgradeCard.vue'
 
-const { t } = useI18n()
+const { t, language } = useI18n()
 const { can } = useCan()
 const { user, scope } = useAuth()
+
+/** 读取 language 建立渲染依赖：切换语言后整页（含新卡片标签）重新渲染。 */
+const htmlLang = computed(() => (language.value === 'en-US' ? 'en' : 'zh-CN'))
+
+const languageModel = computed<Language>({
+  get: () => language.value,
+  set: (value) => setLanguage(value),
+})
+
+/** 密度选项文案随语言切换，读取 language 建立依赖。 */
+const densityOptions = computed<{ value: AppearanceDensity; label: string }[]>(() => {
+  void language.value
+  return [
+    { value: 'standard', label: t('appearance.density.standard') },
+    { value: 'compact', label: t('appearance.density.compact') },
+  ]
+})
+
+const densityModel = computed<AppearanceDensity>({
+  get: () => appearanceDensity.value,
+  set: (value) => setDensity(value),
+})
 
 const canManage = computed(() => can('system.manage'))
 const canNetwork = computed(() => canManage.value && scope.value.mode === 'all')
@@ -168,7 +192,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="ls-adminpage ls-settingspage">
+  <section class="ls-adminpage ls-settingspage" :lang="htmlLang">
     <header class="ls-adminpage__head">
       <div class="ls-adminpage__heading">
         <h1 class="ls-adminpage__title">{{ t('nav.settings') }}</h1>
@@ -392,6 +416,66 @@ onMounted(() => {
       <div v-else id="settings-network-no-permission" class="ls-notice ls-settingspage__wide">
         <p class="ls-notice__title">{{ t('ops.settings.networkNeedsPermission') }}</p>
       </div>
+
+      <section class="ls-card ls-settingspage__wide">
+        <header class="ls-card__head">
+          <h2 class="ls-card__title">{{ t('appearance.title') }}</h2>
+          <p class="ls-card__note">{{ t('appearance.description') }}</p>
+        </header>
+        <div class="ls-appearance">
+          <div class="ls-appearance__row">
+            <div class="ls-appearance__copy">
+              <span id="settings-appearance-theme-label" class="ls-appearance__label">
+                {{ t('appearance.theme') }}
+              </span>
+              <span class="ls-appearance__hint">{{ t('appearance.themeHint') }}</span>
+            </div>
+            <div class="ls-appearance__control">
+              <SThemeModeSelect
+                :show-icon="false"
+                aria-labelledby="settings-appearance-theme-label"
+              />
+            </div>
+          </div>
+
+          <div class="ls-appearance__row">
+            <label class="ls-appearance__copy" for="settings-appearance-language">
+              <span class="ls-appearance__label">{{ t('appearance.language') }}</span>
+              <span class="ls-appearance__hint">{{ t('appearance.languageHint') }}</span>
+            </label>
+            <div class="ls-appearance__control">
+              <select
+                id="settings-appearance-language"
+                v-model="languageModel"
+                class="ls-input ls-appearance__select"
+              >
+                <option v-for="item in SUPPORTED_LANGUAGES" :key="item.value" :value="item.value">
+                  {{ item.label }}
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div class="ls-appearance__row">
+            <label class="ls-appearance__copy" for="settings-appearance-density">
+              <span class="ls-appearance__label">{{ t('appearance.density') }}</span>
+              <span class="ls-appearance__hint">{{ t('appearance.densityHint') }}</span>
+            </label>
+            <div class="ls-appearance__control">
+              <select
+                id="settings-appearance-density"
+                v-model="densityModel"
+                class="ls-input ls-appearance__select"
+              >
+                <option v-for="item in densityOptions" :key="item.value" :value="item.value">
+                  {{ item.label }}
+                </option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <p class="ls-card__note">{{ t('appearance.persistHint') }}</p>
+      </section>
 
       <UpgradeCard v-if="canManage" />
 

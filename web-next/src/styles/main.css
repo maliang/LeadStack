@@ -25,6 +25,7 @@
   --ls-success-soft: var(--ls-brand-50);
   --ls-warning: #b45309;
   --ls-warning-soft: #fffbeb;
+  --ls-warning-border: #fde68a;
   --ls-danger: #b91c1c;
   --ls-danger-soft: #fef2f2;
   --ls-danger-border: #fecaca;
@@ -84,6 +85,62 @@
   --ls-hit-size: 2rem;
   --ls-focus-ring: 0 0 0 2px var(--ls-surface), 0 0 0 4px var(--ls-brand-500);
   --ls-duration: 160ms;
+}
+
+/*
+ * 深色主题。
+ * 前 20 个 token + color-scheme 逐字取自 scripts/capture-screenshots.mjs:631-655
+ * 已截图的深色值，不要重新调色；新增的 --ls-brand-* / 阴影 / 警告描边只是把
+ * 浅色语义反向映射到深色（50/100 作深底，900 作其上浅字），保证沿用旧变量的
+ * 组件（登录页光晕、nav active、badge）在深色下仍然可读。
+ * 选择器与 @vean/ui 0.51.5 的 darkClassName('class') === 'dark' 对齐。
+ */
+html.dark {
+  color-scheme: dark;
+  --ls-bg: #0b1220;
+  --ls-surface: #111827;
+  --ls-surface-muted: #1a2333;
+  --ls-border: #253041;
+  --ls-border-strong: #3a4759;
+  --ls-text: #e6edf7;
+  --ls-text-muted: #a7b4c6;
+  --ls-text-subtle: #8896aa;
+  --ls-mask: rgb(2 6 23 / 0.62);
+  --ls-success: #4ade80;
+  --ls-success-soft: #052e16;
+  --ls-warning: #fbbf24;
+  --ls-warning-soft: #3b2a08;
+  --ls-warning-border: #5c4210;
+  --ls-danger: #f87171;
+  --ls-danger-soft: #3b1113;
+  --ls-danger-border: #5c1f1f;
+  --ls-primary: #4ade80;
+  --ls-primary-fill: #22c55e;
+  --ls-primary-contrast: #052e16;
+  --ls-primary-soft: #0f2a1c;
+
+  /* 品牌色阶在深色下反转：50/100 为绿底，700/900 为绿字，500/600 仍作标记渐变 */
+  --ls-brand-50: #0f2a1c;
+  --ls-brand-100: #1b4a2e;
+  --ls-brand-700: #4ade80;
+  --ls-brand-900: #bbf7d0;
+
+  /* 深色下阴影要更重才看得出层级 */
+  --ls-shadow-sm: 0 1px 2px rgb(0 0 0 / 0.5);
+  --ls-shadow-lg: 0 12px 32px rgb(0 0 0 / 0.6);
+}
+
+/*
+ * 紧凑密度：只收紧间距 token（行高与字号不动），由 html[data-density] 驱动。
+ * 首屏内联脚本会先按持久化值写好属性，这里不需要额外的 JS 兜底。
+ */
+html[data-density='compact'] {
+  --ls-space-1: 0.1875rem;
+  --ls-space-2: 0.375rem;
+  --ls-space-3: 0.5rem;
+  --ls-space-4: 0.75rem;
+  --ls-space-5: 0.9375rem;
+  --ls-space-6: 1.125rem;
 }
 
 * {
@@ -4909,7 +4966,7 @@ body.ls-scroll-locked {
 }
 
 .ls-badge--warning {
-  border-color: #fde68a;
+  border-color: var(--ls-warning-border);
   background: var(--ls-warning-soft);
   color: var(--ls-warning);
 }
@@ -5484,6 +5541,69 @@ body.ls-scroll-locked {
 .ls-groupspage__members {
   min-width: 2.75rem;
   font-variant-numeric: tabular-nums;
+}
+
+/* ── 设置页：外观（主题模式 / 界面语言 / 界面密度） ── */
+
+.ls-appearance {
+  display: grid;
+  gap: var(--ls-space-4);
+  min-width: 0;
+}
+
+.ls-appearance__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--ls-space-3);
+  align-items: center;
+  min-width: 0;
+}
+
+.ls-appearance__copy {
+  display: grid;
+  gap: var(--ls-space-1);
+  min-width: 0;
+}
+
+.ls-appearance__label {
+  color: var(--ls-text);
+  font:
+    500 var(--ls-text-sm) / 1.4 var(--ls-font-sans);
+}
+
+.ls-appearance__hint {
+  color: var(--ls-text-subtle);
+  font:
+    400 var(--ls-text-xs) / 1.5 var(--ls-font-sans);
+  overflow-wrap: anywhere;
+}
+
+/* 控件列定宽，避免三个控件宽度各不相同；窄宽时整行退成一列 */
+.ls-appearance__control {
+  width: 10rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ls-appearance__control > * {
+  width: 100%;
+}
+
+.ls-appearance__select {
+  max-width: 10rem;
+}
+
+@media (max-width: 480px) {
+  .ls-appearance__row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .ls-appearance__control,
+  .ls-appearance__select {
+    width: 100%;
+    max-width: none;
+  }
 }
 
 @media (max-width: 760px) {

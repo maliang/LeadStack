@@ -1,0 +1,147 @@
+/**
+ * 外观偏好（主题模式 / 语言 / 界面密度）的唯一契约。
+ *
+ * 持久化分工（已在 @vean/ui 0.51.5 源码与运行时确认）：
+ * - 主题模式由 `SConfigProvider` 的 `persist-theme` 写进 `__VEAN_THEME` envelope
+ *   （键名来自 @vean/theme/storage 的 `THEME_STORAGE_KEY`），跨标签由 provider
+ *   自带的 storage 监听同步；
+ * - 语言、密度走同一个 envelope 的 `extra` 字段（`getExtraTheme` /
+ *   `onExtraThemeChange`）。provider 的 writer 在 watch getter 里调用
+ *   `getExtraTheme`，因此这里的响应式依赖会被追踪；它与 `persist-theme` 共用同一个
+ *   debounce writer，不存在双写冲突，所以不需要 `leadstack.appearance` 兜底。
+ * - 语言另有 i18n 的 `leadstack.lang` 作为首屏同步来源（`setLanguage` 自己写），
+ *   envelope 里的 `language` 只用于跨标签回填；密度没有第二份存储，首屏由
+ *   `index.html` 的内联脚本读 envelope 的 `extra.density` 提前落到 `<html>`。
+ */
+
+import { ref } from 'vue'
+
+export type AppearanceMode = 'auto' | 'light' | 'dark'
+export type AppearanceDensity = 'compact' | 'standard'
+/** `mode` 解析后的实际外观：`auto` 由系统 `prefers-color-scheme` 决定。 */
+export type EffectiveMode = 'light' | 'dark'
+
+/** @vean/theme 的持久化键，首屏内联脚本与 provider 必须共用。 */
+export const THEME_STORAGE_KEY = '__VEAN_THEME'
+/** provider 注入主题变量的 style 元素 id，首屏可用 envelope.style 预注入。 */
+export const THEME_STYLE_ID = 'vean-theme'
+/** 密度落到根元素上的属性名：`html[data-density]`。 */
+export const DENSITY_ATTR = 'data-density'
+
+export const DEFAULT_APPEARANCE: { mode: AppearanceMode; density: AppearanceDensity } = {
+  mode: 'auto',
+  density: 'standard',
+}
+
+const MODES: readonly AppearanceMode[] = ['auto', 'light', 'dark']
+const DENSITIES: readonly AppearanceDensity[] = ['standard', 'compact']
+
+export function isAppearanceMode(value: unknown): value is AppearanceMode {
+  return typeof value === 'string' && MODES.some((mode) => mode === value)
+}
+
+export function isAppearanceDensity(value: unknown): value is AppearanceDensity {
+  return typeof value === 'string' && DENSITIES.some((density) => density === value)
+}
+
+/** 纯函数：按 mode 与系统偏好推导实际外观。 */
+export function resolveEffectiveMode(mode: AppearanceMode, prefersDark: boolean): EffectiveMode {
+  if (mode === 'auto') return prefersDark ? 'dark' : 'light'
+  return mode
+}
+
+/** 纯函数：envelope 里与外观相关的快照（无法解析的字段一律给 null，交由默认值兜底）。 */
+export interface PersistedAppearance {
+  mode: AppearanceMode | null
+  density: AppearanceDensity | null
+  /** buildThemeCss 生成的 `<style id="vean-theme">` 文本，用于首屏防闪；不需要时忽略。 */
+  style: string | null
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null
+}
+
+/** 纯函数：解析 `__VEAN_THEME` envelope；畸形 JSON 或结构不符时返回 null。 */
+export function parseThemeEnvelope(raw: string | null): PersistedAppearance | null {
+  if (!raw) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  const envelope = asRecord(parsed)
+  if (!envelope) return null
+  const extra = asRecord(envelope.extra)
+  const style = typeof envelope.style === 'string' ? envelope.style : null
+  return {
+    mode: isAppearanceMode(envelope.mode) ? envelope.mode : null,
+    density: extra && isAppearanceDensity(extra.density) ? extra.density : null,
+    style,
+  }
+}
+
+/** 纯函数：`leadstack.appearance` 兜底格式（当前实现不使用，保留给降级路径与测试）。 */
+export interface StoredAppearance {
+  language: string | null
+  density: AppearanceDensity
+}
+
+export function serializeAppearance(value: StoredAppearance): string {
+  return JSON.stringify({ v: 1, language: value.language, density: value.density })
+}
+
+export function parseAppearance(raw: string | null): StoredAppearance | null {
+  if (!raw) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  const record = asRecord(parsed)
+  if (!record) return null
+  return {
+    language: typeof record.language === 'string' ? record.language : null,
+    density: isAppearanceDensity(record.density) ? record.density : DEFAULT_APPEARANCE.density,
+  }
+}
+
+function readEnvelope(): PersistedAppearance | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return parseThemeEnvelope(window.localStorage.getItem(THEME_STORAGE_KEY))
+  } catch {
+    return null
+  }
+}
+
+/** 首屏已持久化的主题模式；null 表示用户从未选过（交给 DEFAULT_APPEARANCE.mode）。 */
+export function readStoredMode(): AppearanceMode | null {
+  return readEnvelope()?.mode ?? null
+}
+
+/** 首屏已持久化的密度；null 表示从未选过。 */
+export function readStoredDensity(): AppearanceDensity | null {
+  return readEnvelope()?.density ?? null
+}
+
+/** 把密度写到根元素上（幂等，可在 SSR 外任意调用）。 */
+export function applyDensity(value: AppearanceDensity, root?: HTMLElement): void {
+  const doc = typeof document === 'undefined' ? null : document
+  const element = root ?? doc?.documentElement
+  if (!element) return
+  element.setAttribute(DENSITY_ATTR, value)
+}
+
+/** 全局密度状态：设置页与首屏脚本共用，App 挂载时把持久化值灌进来。 */
+export const appearanceDensity = ref<AppearanceDensity>(
+  readStoredDensity() ?? DEFAULT_APPEARANCE.density,
+)
+
+export function setDensity(value: AppearanceDensity): void {
+  const next = isAppearanceDensity(value) ? value : DEFAULT_APPEARANCE.density
+  appearanceDensity.value = next
+  applyDensity(next)
+}
