@@ -45,14 +45,29 @@ jget() { printf '%s' "$1" | jq -r "$2" 2>/dev/null; }
 sget() { local v; v="$(jget "$1" "$2")"; [ "$v" = "null" ] && v=""; printf '%s' "$v"; }
 login() { api POST /api/v1/auth/login "{\"username\":\"$1\",\"password\":\"$2\"}" | jq -r '.data.token // empty' 2>/dev/null; }
 # 前端产物断言：make build 会把 web/dist 拷进 internal/webui/dist，缺特征串即视为契约回归。
-dist_has() { # <label> <needle...>
-  local label="$1"; shift
-  local js missing="" needle
-  js="$(ls -t internal/webui/dist/assets/index-*.js 2>/dev/null | head -1)"
-  if [ -z "$js" ]; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
-  for needle in "$@"; do grep -qF -- "$needle" "$js" || missing="${missing}[${needle}] "; done
+src_has() { # <label> <文件> <needle...>
+  local label="$1" file="$2"; shift 2
+  local missing="" needle
+  if [ ! -f "$file" ]; then fail "${label}：源文件缺失（$file）"; return; fi
+  for needle in "$@"; do grep -qF -- "$needle" "$file" || missing="${missing}[${needle}] "; done
   if [ -z "$missing" ]; then
-    pass "${label}（${js##*/} 命中 $# 个特征串）"
+    pass "${label}（${file##*/} 命中 $# 个特征串）"
+  else
+    fail "${label}：${file##*/} 缺少 ${missing}"
+  fi
+}
+
+dist_has() { # <label> <needle...>
+  # 前端按路由代码分割：页面级文案落在各自 chunk 里，只扫入口包会误判成缺失。
+  local label="$1"; shift
+  local dir="internal/webui/dist/assets" missing="" needle hits
+  if ! ls "$dir"/index-*.js >/dev/null 2>&1; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
+  for needle in "$@"; do
+    hits="$(grep -rlF -- "$needle" "$dir" 2>/dev/null | wc -l | tr -d ' ')"
+    [ "${hits:-0}" -ge 1 ] || missing="${missing}[${needle}] "
+  done
+  if [ -z "$missing" ]; then
+    pass "${label}（assets 全部 JS 命中 $# 个特征串）"
   else
     fail "${label}：产物缺少 ${missing}"
   fi
@@ -533,7 +548,13 @@ else
 fi
 # 前端错误 toast 契约：错误必须常驻（不自动消失）、可关闭、可复制、可无障碍播报，并附请求编号。
 dist_has "错误 toast 常驻/可关闭/可复制（A27）" \
-  '!==`error`&&window.setTimeout' 'toast.close' 'toast.copy' 'navigator.clipboard'
+  'toast.close' 'toast.copy' 'navigator.clipboard'
+# 「错误不自动消失」查源码而不是压缩产物：旧断言写 '!==`error`&&window.setTimeout'，
+# 那是旧 React 产物压缩后「判断 + 定时器」恰好相邻的拼接串，换实现/换压缩器必然失配。
+src_has "错误提示常驻实现（A27）" 'web-next/src/lib/toast.ts' \
+  "sticky: input.sticky ?? tone === 'error'" 'TOAST_AUTO_DISMISS_MS' 'setTimeout'
+src_has "错误提示渲染层（A27）" 'web-next/src/components/AppToaster.vue' \
+  'role="alert"' 'aria-live' 'assertive'
 dist_has "错误 toast 无障碍播报与请求编号（A27）" \
   'role:`alert`' 'aria-live' 'assertive' 'errors.requestId' '请求编号 {id}'
 

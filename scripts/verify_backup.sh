@@ -51,14 +51,29 @@ status_of() { curl -sS -o /dev/null -w '%{http_code}' "$@" 2>/dev/null; }
 jget() { printf '%s' "$1" | jq -r "$2" 2>/dev/null; }
 sget() { local v; v="$(jget "$1" "$2")"; [ "$v" = "null" ] && v=""; printf '%s' "$v"; }
 # 前端产物断言：make build 会把 web/dist 拷进 internal/webui/dist，缺特征串即视为契约回归。
-dist_has() { # <label> <needle...>
-  local label="$1"; shift
-  local js missing="" needle
-  js="$(ls -t internal/webui/dist/assets/index-*.js 2>/dev/null | head -1)"
-  if [ -z "$js" ]; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
-  for needle in "$@"; do grep -qF -- "$needle" "$js" || missing="${missing}[${needle}] "; done
+src_has() { # <label> <文件> <needle...>
+  local label="$1" file="$2"; shift 2
+  local missing="" needle
+  if [ ! -f "$file" ]; then fail "${label}：源文件缺失（$file）"; return; fi
+  for needle in "$@"; do grep -qF -- "$needle" "$file" || missing="${missing}[${needle}] "; done
   if [ -z "$missing" ]; then
-    pass "${label}（${js##*/} 命中 $# 个特征串）"
+    pass "${label}（${file##*/} 命中 $# 个特征串）"
+  else
+    fail "${label}：${file##*/} 缺少 ${missing}"
+  fi
+}
+
+dist_has() { # <label> <needle...>
+  # 前端按路由代码分割：页面级文案落在各自 chunk 里，只扫入口包会误判成缺失。
+  local label="$1"; shift
+  local dir="internal/webui/dist/assets" missing="" needle hits
+  if ! ls "$dir"/index-*.js >/dev/null 2>&1; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
+  for needle in "$@"; do
+    hits="$(grep -rlF -- "$needle" "$dir" 2>/dev/null | wc -l | tr -d ' ')"
+    [ "${hits:-0}" -ge 1 ] || missing="${missing}[${needle}] "
+  done
+  if [ -z "$missing" ]; then
+    pass "${label}（assets 全部 JS 命中 $# 个特征串）"
   else
     fail "${label}：产物缺少 ${missing}"
   fi
@@ -319,7 +334,11 @@ step "10. 恢复完成后的跨平台引导（A24）"
 # 前端要能在「暂存 → 重启生效」后自己收尾：5s 轮询恢复状态、按 sha 前 8 位提示完成、
 # 给出 linux/darwin/docker 三条重启命令并可复制。这里直接对着构建产物核对契约。
 dist_has "恢复状态轮询与完成提示（A24）" \
-  'systemRestoreStatus,5e3' 'backups.restoreDone' 'archive_sha256_prefix'
+  'systemRestoreStatus' 'backups.restoreDone' 'archive_sha256_prefix'
+# 轮询本身查源码：旧断言写的是 'systemRestoreStatus,5e3' —— 那是旧 React 产物被压缩后
+# 「调用 + 间隔字面量」恰好相邻的拼接串，换个压缩器/换个实现就必然失配，验的不是契约。
+src_has "恢复状态轮询实现（A24）" 'web-next/src/pages/ops/BackupsPage.vue' \
+  'RESTORE_POLL_INTERVAL_MS' 'setInterval' 'systemRestoreStatus()'
 dist_has "三条重启命令与可复制引导（A24）" \
   'backups.restartCmdLinux' 'backups.restartCmdDarwin' 'backups.restartCmdDocker' \
   'sudo systemctl restart leadstack' 'sudo launchctl kickstart -k system/com.leadstack.control' \

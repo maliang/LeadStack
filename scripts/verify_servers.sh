@@ -46,15 +46,31 @@ status_of() { curl -sS -o /dev/null -w '%{http_code}' "$@" 2>/dev/null; }
 jget() { printf '%s' "$1" | jq -r "$2 // empty" 2>/dev/null; }
 # 前端产物断言：make build 会把 web/dist 拷进 internal/webui/dist，缺特征串即视为契约回归。
 dist_has() { # <label> <needle...>
+  # 前端已按路由做代码分割：页面级文案/调用落在各自的 chunk 里，不再全在 index-*.js。
+  # 因此这里扫 assets 目录下所有 JS，否则「页面 chunk 里有、入口里没有」会被误判成产物缺失。
   local label="$1"; shift
-  local js missing="" needle
-  js="$(ls -t internal/webui/dist/assets/index-*.js 2>/dev/null | head -1)"
-  if [ -z "$js" ]; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
-  for needle in "$@"; do grep -qF -- "$needle" "$js" || missing="${missing}[${needle}] "; done
+  local dir="internal/webui/dist/assets" missing="" needle hits
+  if ! ls "$dir"/index-*.js >/dev/null 2>&1; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
+  for needle in "$@"; do
+    hits="$(grep -rlF -- "$needle" "$dir" 2>/dev/null | wc -l | tr -d ' ')"
+    [ "${hits:-0}" -ge 1 ] || missing="${missing}[${needle}] "
+  done
   if [ -z "$missing" ]; then
-    pass "${label}（${js##*/} 命中 $# 个特征串）"
+    pass "${label}（assets 全部 JS 命中 $# 个特征串）"
   else
     fail "${label}：产物缺少 ${missing}"
+  fi
+}
+
+src_has() { # <label> <文件> <needle...>
+  local label="$1" file="$2"; shift 2
+  local missing="" needle
+  if [ ! -f "$file" ]; then fail "${label}：源文件缺失（$file）"; return; fi
+  for needle in "$@"; do grep -qF -- "$needle" "$file" || missing="${missing}[${needle}] "; done
+  if [ -z "$missing" ]; then
+    pass "${label}（${file##*/} 命中 $# 个特征串）"
+  else
+    fail "${label}：${file##*/} 缺少 ${missing}"
   fi
 }
 
@@ -276,7 +292,12 @@ step "13. Agent 升级入口（A30）"
 # 无 agent.upgrade 权限时按钮禁用并给出只读说明（title 即说明文本）。
 dist_has "升级 Agent 入口与无权限说明（A30）" \
   'server.agentUpgrade' 'server.agentUpgradeSubmit' 'server.agentUpgradeNoPerm' \
-  'agent_assets' 'refreshUpdateCheck().then('
+  'agent_assets'
+# 「发起升级」的真实调用点查源码而不是压缩产物：旧版这里查的是
+# 'refreshUpdateCheck().then(' —— 那是旧 React 页在升级成功后刷新版本信息，
+# 新版由设置页的升级卡负责，服务器详情只发起 agent 升级；继续在压缩产物里找
+# 这种链式写法既脆弱（压缩会改写）也不再有对应实现。
+src_has "Agent 升级调用点（A30）" 'web-next/src/pages/ServerDetailPage.vue' 'api.agentUpgrade('
 
 # ---------------------------------------------------------------- 14. 服务器登录信息
 step "14. 服务器登录信息回显（GET /servers/{id}/access）"
@@ -620,13 +641,13 @@ PANEL_AUDIT_LEAK="$(printf '%s' "$PANEL_AUDIT" | jq -r --arg id "$PANEL_SRV_ID" 
 
 # ---------------------------------------------------------------- 17. 登录脚本示例三处一致
 step "17. 登录脚本示例：三处示例一致 + CRLF/颜色码实测"
-# 内置示例（ServerDetailPage.tsx 的 LOGIN_SCRIPT_SAMPLES）与 README.md、docs/ARCHITECTURE.md
+# 内置示例（web-next/src/lib/login-samples.ts 的 LOGIN_SCRIPT_SAMPLES）与 README.md、docs/ARCHITECTURE.md
 # 里的示例必须是同一份脚本：用户从文档复制到的与点按钮填入的，行为不能有差别。
 # 比对前只做两种归一（都会显式说明，避免把真差异洗掉）：
 #   1) 去掉每行尾部空白（编辑器自动 trim 不该判定为内容漂移）；
 #   2) TSX 模板字面量里的 \\ 还原成 \（JS 字符串转义，用户实际填入的是单个反斜杠）。
 SAMPLE_DIR="$DATA_DIR/sample17"; mkdir -p "$SAMPLE_DIR"
-SAMPLE_README="$SAMPLE_DIR/readme.sh"; SAMPLE_DOCS="$SAMPLE_DIR/docs.sh"; SAMPLE_TSX="$SAMPLE_DIR/tsx.sh"
+SAMPLE_README="$SAMPLE_DIR/readme.sh"; SAMPLE_DOCS="$SAMPLE_DIR/docs.sh"; SAMPLE_TSX="$SAMPLE_DIR/ts.sh"
 
 extract_md_sample() { # <md 文件> <输出文件>：取含「宝塔面板 v14 起可用」注释的 ```bash 围栏内原文
   local md="$1" out="$2" ln start end
@@ -640,7 +661,7 @@ extract_md_sample() { # <md 文件> <输出文件>：取含「宝塔面板 v14 �
   sed -n "$((start + 1)),$((end - 1))p" "$md" | sed -E 's/[[:space:]]+$//' > "$out"
 }
 
-extract_tsx_sample() { # <tsx 文件> <输出文件>：取 key:'baota' 那项的模板字面量原文
+extract_tsx_sample() { # <ts 文件> <输出文件>：取 key:'baota' 那项的模板字面量原文
   local tsx="$1" out="$2" key_ln script_ln end_ln
   : > "$out"
   key_ln="$(grep -n "key: 'baota'" "$tsx" | head -1 | cut -d: -f1)"
@@ -657,7 +678,7 @@ extract_tsx_sample() { # <tsx 文件> <输出文件>：取 key:'baota' 那项的
 
 extract_md_sample README.md "$SAMPLE_README"
 extract_md_sample docs/ARCHITECTURE.md "$SAMPLE_DOCS"
-extract_tsx_sample web/src/pages/ServerDetailPage.tsx "$SAMPLE_TSX"
+extract_tsx_sample web-next/src/lib/login-samples.ts "$SAMPLE_TSX"
 
 SAMPLE_LINES_README="$(wc -l < "$SAMPLE_README" 2>/dev/null | tr -d ' ')"
 SAMPLE_LINES_DOCS="$(wc -l < "$SAMPLE_DOCS" 2>/dev/null | tr -d ' ')"
@@ -668,7 +689,7 @@ if [ "${SAMPLE_LINES_README:-0}" -ge 10 ] 2>/dev/null \
   && [ "${SAMPLE_LINES_DOCS:-0}" -ge 10 ] 2>/dev/null \
   && [ "${SAMPLE_LINES:-0}" -ge 10 ] 2>/dev/null \
   && cmp -s "$SAMPLE_README" "$SAMPLE_DOCS" && cmp -s "$SAMPLE_DOCS" "$SAMPLE_TSX"; then
-  pass "三处示例一致（README ${SAMPLE_LINES_README} 行 / ARCHITECTURE ${SAMPLE_LINES_DOCS} 行 / ServerDetailPage.tsx ${SAMPLE_LINES} 行，逐字节相同）"
+  pass "三处示例一致（README ${SAMPLE_LINES_README} 行 / ARCHITECTURE ${SAMPLE_LINES_DOCS} 行 / login-samples.ts ${SAMPLE_LINES} 行，逐字节相同）"
 else
   SAMPLE_DIFF="$(diff -u "$SAMPLE_README" "$SAMPLE_DOCS" | sed -n '3,8p'; diff -u "$SAMPLE_DOCS" "$SAMPLE_TSX" | sed -n '3,8p')"
   fail "三处示例不一致（行数 README=${SAMPLE_LINES_README:-0} / docs=${SAMPLE_LINES_DOCS:-0} / tsx=${SAMPLE_LINES:-0}）：$(printf '%s' "$SAMPLE_DIFF" | tr '\n' '|')"
@@ -688,7 +709,7 @@ ctrl_bytes_of() { printf '%s' "$1" | od -An -v -tx1 | tr -s ' ' '\n' | grep -xE 
 vis_of() { local v="$1"; v="${v//$'\033'/\\x1b}"; v="${v//$'\r'/\\x0d}"; printf '%s' "$v"; }
 tail_hex_of() { printf '%s' "$1" | tail -c 4 | od -An -v -tx1 | tr -s ' ' '\n' | tr -d '\n'; }
 
-for pair in "README.md|$SAMPLE_README" "docs/ARCHITECTURE.md|$SAMPLE_DOCS" "ServerDetailPage.tsx|$SAMPLE_TSX"; do
+for pair in "README.md|$SAMPLE_README" "docs/ARCHITECTURE.md|$SAMPLE_DOCS" "login-samples.ts|$SAMPLE_TSX"; do
   sample_label="${pair%%|*}"; sample_file="${pair#*|}"
   sample_out="$(PATH="$FAKE_BIN:$PATH" bash "$sample_file" 2>/dev/null)"
   sample_urlv="$(printf '%s' "$sample_out" | jq -r '.url // empty' 2>/dev/null)"

@@ -48,13 +48,16 @@ code() {
 sget() { local v; v="$(printf '%s' "$1" | jq -r "$2" 2>/dev/null)"; [ "$v" = "null" ] && v=""; printf '%s' "$v"; }
 # 前端产物断言：make build 会把 web/dist 拷进 internal/webui/dist，缺特征串即视为契约回归。
 dist_has() { # <label> <needle...>
+  # 前端按路由代码分割：页面级文案落在各自 chunk 里，只扫入口包会误判成缺失。
   local label="$1"; shift
-  local js missing="" needle
-  js="$(ls -t internal/webui/dist/assets/index-*.js 2>/dev/null | head -1)"
-  if [ -z "$js" ]; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
-  for needle in "$@"; do grep -qF -- "$needle" "$js" || missing="${missing}[${needle}] "; done
+  local dir="internal/webui/dist/assets" missing="" needle hits
+  if ! ls "$dir"/index-*.js >/dev/null 2>&1; then fail "${label}：未找到前端产物（请先 make build）"; return; fi
+  for needle in "$@"; do
+    hits="$(grep -rlF -- "$needle" "$dir" 2>/dev/null | wc -l | tr -d ' ')"
+    [ "${hits:-0}" -ge 1 ] || missing="${missing}[${needle}] "
+  done
   if [ -z "$missing" ]; then
-    pass "${label}（${js##*/} 命中 $# 个特征串）"
+    pass "${label}（assets 全部 JS 命中 $# 个特征串）"
   else
     fail "${label}：产物缺少 ${missing}"
   fi
