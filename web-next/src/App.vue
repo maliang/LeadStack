@@ -5,6 +5,7 @@ import { SConfigProvider, useTheme } from '@vean/ui'
 import type { ConfigProviderThemeOptions } from '@vean/ui'
 
 import AppShell from '@/components/AppShell.vue'
+import AppToaster from '@/components/AppToaster.vue'
 import { BRAND_PRESET } from '@/theme/brand'
 import { setLanguage, useI18n } from '@/i18n'
 import { applyDocumentTitle } from '@/router'
@@ -95,5 +96,7 @@ function onExtraThemeChange(extra: Record<string, unknown>): void {
         <component :is="Component" />
       </AppShell>
     </RouterView>
+    <!-- 全局提示：错误常驻、可关闭可复制（A27）；数据在 lib/toast.ts -->
+    <AppToaster />
   </SConfigProvider>
 </template>

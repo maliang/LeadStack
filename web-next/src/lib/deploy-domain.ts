@@ -16,7 +16,9 @@ export interface AppFormValues {
   description: string
   deployMode: string
   healthcheckPath: string
+  healthcheckPort: string
   restartCmd: string
+  envJson: string
 }
 
 export type AppFormErrors = Partial<Record<keyof AppFormValues, string>>
@@ -29,7 +31,9 @@ export function emptyAppForm(): AppFormValues {
     description: '',
     deployMode: 'release',
     healthcheckPath: '',
+    healthcheckPort: '',
     restartCmd: '',
+    envJson: '',
   }
 }
 
@@ -41,7 +45,9 @@ export function appFormFromItem(app: AppItem): AppFormValues {
     description: app.description ?? '',
     deployMode: app.deploy_mode || 'release',
     healthcheckPath: app.healthcheck_path ?? '',
+    healthcheckPort: app.healthcheck_port === null ? '' : String(app.healthcheck_port),
     restartCmd: app.restart_cmd ?? '',
+    envJson: app.env_json ?? '',
   }
 }
 
@@ -68,8 +74,22 @@ export function appPayloadFromForm(values: AppFormValues): CreateAppPayload {
     description: values.description.trim() || undefined,
     deploy_mode: mode,
     healthcheck_path: values.healthcheckPath.trim() || null,
+    healthcheck_port: parseHealthcheckPort(values.healthcheckPort),
     restart_cmd: values.restartCmd.trim() || null,
+    env_json: values.envJson.trim() || null,
   }
+}
+
+/**
+ * 健康检查端口：空 → null（不设端口）；0 → 0（后端语义是「清除端口」）；
+ * 非数字或越界 → 交给后端 400，这里不静默改值。
+ */
+export function parseHealthcheckPort(raw: string): number | null {
+  const text = raw.trim()
+  if (text === '') return null
+  const value = Number(text)
+  if (!Number.isInteger(value)) return null
+  return value
 }
 
 /** 应用搜索文本：名称 / 标识 / 根目录 / 描述，任一命中即可。 */

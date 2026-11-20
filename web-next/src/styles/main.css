@@ -7541,3 +7541,37 @@ body.ls-scroll-locked {
     max-height: 28rem;
   }
 }
+
+/* 全局提示容器（A27）：固定在右下角，错误常驻并可复制请求编号。
+   层级高于模态遮罩，保证「失败提示」不会藏在弹窗后面。 */
+.ls-toaster {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(28rem, calc(100vw - 2rem));
+  pointer-events: none;
+}
+
+.ls-toaster > * {
+  pointer-events: auto;
+}
+
+.ls-toaster__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 480px) {
+  .ls-toaster {
+    right: 0.5rem;
+    left: 0.5rem;
+    bottom: 0.5rem;
+    width: auto;
+  }
+}

@@ -109,6 +109,33 @@ const modeOptions = [
           </option>
         </select>
       </label>
+      <label class="ls-field" for="app-form-restart">
+        <span class="ls-field__label">{{ t('apps.form.restartCmd') }}</span>
+        <input id="app-form-restart" v-model="form.restartCmd" class="ls-input" type="text" autocomplete="off" />
+        <span class="ls-field__hint">{{ t('apps.form.restartCmdHint') }}</span>
+      </label>
+      <div class="ls-field__row">
+        <label class="ls-field" for="app-healthcheck">
+          <span class="ls-field__label">{{ t('apps.form.healthcheckPath') }}</span>
+          <input id="app-healthcheck" v-model="form.healthcheckPath" class="ls-input" type="text" placeholder="/healthz" autocomplete="off" />
+          <span class="ls-field__hint">{{ t('apps.healthcheckPathHint') }}</span>
+        </label>
+        <label class="ls-field" for="app-healthcheck-port">
+          <span class="ls-field__label">{{ t('apps.form.healthcheckPort') }}</span>
+          <input id="app-healthcheck-port" v-model="form.healthcheckPort" class="ls-input" type="number" min="0" max="65535" inputmode="numeric" autocomplete="off" />
+          <span class="ls-field__hint">{{ t('apps.form.healthcheckPortHint') }}</span>
+        </label>
+      </div>
+      <label class="ls-field" for="app-form-env">
+        <span class="ls-field__label">{{ t('apps.form.envJson') }}</span>
+        <textarea id="app-form-env" v-model="form.envJson" class="ls-textarea" rows="3" spellcheck="false" />
+        <span class="ls-field__hint">{{ t('apps.envKeysOnly') }}</span>
+      </label>
+      <p v-if="app && app.redacted" class="ls-field__hint" data-app-env-keys>
+        {{ t('apps.envKeysOnly') }}
+        <template v-if="app.env_keys.length > 0">：{{ app.env_keys.join('、') }}</template>
+        <template v-if="app.env_keys_truncated">（已截断）</template>
+      </p>
       <label class="ls-field" for="app-form-description">
         <span class="ls-field__label">{{ t('apps.form.note') }}</span>
         <textarea id="app-form-description" v-model="form.description" class="ls-textarea" rows="2" />

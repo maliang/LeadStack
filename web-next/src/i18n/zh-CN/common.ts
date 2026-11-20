@@ -120,6 +120,7 @@ const common: Record<string, string> = {
   'shell.title.notFound': '页面不存在',
   'toast.copy': '复制',
   'toast.close': '关闭',
+  'errors.serverError': '服务端错误',
   'errors.requestId': '请求编号 {id}',
 }
 

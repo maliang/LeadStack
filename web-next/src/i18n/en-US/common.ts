@@ -120,6 +120,7 @@ const common: Record<string, string> = {
   'shell.title.notFound': 'Page not found',
   'toast.copy': 'Copy',
   'toast.close': 'Close',
+  'errors.serverError': 'Server error',
   'errors.requestId': 'Request ID {id}',
 }
 

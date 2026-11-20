@@ -1,4 +1,5 @@
 import { t } from '../i18n'
+import { pushToast } from './toast'
 /**
  * 控制端 REST 客户端。
  *
@@ -164,6 +165,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       toRecord(envelope?.error?.details),
       pickRequestId(envelope, response),
     )
+    // 5xx 是服务端自身故障：页面内联提示容易被后续操作清掉，且用户需要请求编号去查日志，
+    // 所以统一再弹一个常驻提示（4xx 属于表单/权限问题，交给各页内联展示，避免重复打扰）。
+    if (response.status >= 500) {
+      pushToast({ tone: 'error', title: t('errors.serverError'), message: apiError.message, requestId: apiError.requestId })
+    }
     if (response.status === 401 && auth) {
       clearToken()
       unauthorizedHandler?.()
@@ -846,6 +852,12 @@ export interface AppItem {
   keep_paths: string | null
   /** 健康检查端口（0 表示清除） */
   healthcheck_port: number | null
+  /** 环境变量键名：受限角色读不到值，后端只回键名 */
+  env_keys: string[]
+  /** 键名列表是否被截断（后端 env_keys_truncated） */
+  env_keys_truncated: boolean
+  /** 敏感字段已被后端收敛（当前角色无权限读值） */
+  redacted: boolean
   /** 后端可能聚合出的统计；缺失时前端用 releases 列表本地折算 */
   release_count: number
   server_count: number
@@ -2060,6 +2072,11 @@ export function normalizeApp(input: unknown): AppItem {
     env_json: typeof raw.env_json === 'string' ? raw.env_json : null,
     keep_paths: toText(raw.keep_paths),
     healthcheck_port: toNumber(raw.healthcheck_port),
+    env_keys: Array.isArray(raw.env_keys)
+      ? raw.env_keys.filter((key): key is string => typeof key === 'string')
+      : [],
+    env_keys_truncated: raw.env_keys_truncated === true,
+    redacted: raw.redacted === true,
     release_count: toNumber(raw.release_count ?? raw.releases_count) ?? 0,
     server_count: toNumber(raw.server_count ?? raw.target_count) ?? 0,
     last_release: lastRelease,
