@@ -6,7 +6,7 @@
  * shell / 标题 / skip link 这些「用户天天看见但没人截图」的位置；m1 把外壳文案收进
  * t()、m5 修了「切语言后标签题不跟变」，本脚本就是防止这两件事回潮的护栏。
  *
- * 覆盖（共 17 项，全部用 page 真实渲染结果断言，不读源码）：
+ * 覆盖（共 22 项，全部用 page 真实渲染结果断言，不读源码）：
  *   ① 登录后切 en-US：document.title 不含任何 CJK（/[一-鿿]/，失败时把实际 title 打出来）；
  *   ② 逐页导航 #/servers #/apps #/releases #/users #/settings：每页 title 不含 CJK 且以「· LeadStack」结尾；
  *   ③ 侧栏品牌副标题（.ls-brand__tagline，即 useShellCopy 的 appTagline）en-US 下不含 CJK；
@@ -14,7 +14,12 @@
  *   ⑤ 不导航、只切语言：在 #/settings 外观卡把中文切成 English，≤2s 内 title 变英文，
  *      且 location.hash / 导航条目录入数均未变化（证明靠 watch(language) 而不是导航间接触发）；
  *   ⑥ 切回 zh-CN 后 title 恢复成切换前那一串中文（防「一刀切成英文」的过度修复）；
- *   ⑦ page.on('pageerror') 收集异常，0 条。
+ *   ⑦ page.on('pageerror') 收集异常，0 条；
+ *   ⑧ #/about 与 #/forbidden 的面包屑落在各自译文（中文「关于」/「无权访问」、英文 About/Forbidden），
+ *      不再回落到「总览/Overview」；中英文标签题分别为「关于 · LeadStack 领栈」/
+ *      「无权限 · LeadStack 领栈」与「About · LeadStack」/「No permission · LeadStack」。
+ *   ⑨ en-US 词典 chunk 加载失败（route.abort）时不写 localStorage、界面与 <html lang> 保持 zh-CN，
+ *      外观卡出现失败提示且下拉框回滚（S3 回归）。
  *
  * 说明：品牌名「LeadStack 领栈」在侧栏是商标、不翻译；标签题里英文界面只保留
  * 拉丁商标「LeadStack」（见 src/router/index.ts 的 brandSuffix），
@@ -186,6 +191,24 @@ async function navigateAndReadTitle(page, hash, expectedTitle) {
   return await page.title()
 }
 
+/** 独立页面包屑断言：hash 路由跳转后等 .ls-crumbs 落到该页译文，再读面包屑与标签题。 */
+async function navigateAndReadCrumb(page, hash, expectedCrumb) {
+  await page.evaluate((target) => {
+    window.location.hash = target
+  }, hash)
+  try {
+    await page.waitForFunction(
+      (expected) => ((document.querySelector('.ls-crumbs')?.textContent ?? '').trim()) === expected,
+      expectedCrumb,
+      { timeout: 5000, polling: 50 },
+    )
+  } catch {
+    /* 超时也继续读实际面包屑，让 check 输出真实值而不是直接抛错 */
+  }
+  const crumb = (await page.locator('.ls-crumbs').first().textContent()) || ''
+  return { crumb: crumb.trim(), title: await page.title() }
+}
+
 async function main() {
   const checks = makeChecker()
   const pageErrors = []
@@ -326,8 +349,96 @@ async function main() {
       `title=${JSON.stringify(backTitle)} 期望=${JSON.stringify(zhTitle)}`,
     )
 
+    /* ---------- ⑧：/about 与 /forbidden 的面包屑不再回落「总览」 ---------- */
+    for (const [hash, crumbText, fullTitle] of [
+      ['#/about', '关于', '关于 · LeadStack 领栈'],
+      ['#/forbidden', '无权访问', '无权限 · LeadStack 领栈'],
+    ]) {
+      const { crumb, title } = await navigateAndReadCrumb(page, hash, crumbText)
+      checks.check(
+        `${hash} 面包屑为「${crumbText}」且不含「总览」、标签题为「${fullTitle}」`,
+        crumb === crumbText && !crumb.includes('总览') && title === fullTitle,
+        `crumb=${JSON.stringify(crumb)} title=${JSON.stringify(title)}`,
+      )
+    }
+
+    /* ---------- ⑧-en：切到 en-US 后 /about 与 /forbidden 落在各自英文面包屑 ---------- */
+    // 中文面包屑只证「键接上了」；英文面包屑才能锁住「独立文案没有被首页/总览顶替」。
+    await page.evaluate(() => {
+      window.location.hash = '#/settings'
+    })
+    await page.waitForSelector('#settings-appearance-language', { timeout: 15000 })
+    await page.selectOption('#settings-appearance-language', 'en-US')
+    let enSwitched = true
+    try {
+      await page.waitForFunction(() => !/[一-鿿]/.test(document.title), null, { timeout: 2000, polling: 50 })
+    } catch {
+      enSwitched = false
+    }
+    for (const [hash, crumbText, fullTitle] of [
+      ['#/about', 'About', 'About · LeadStack'],
+      ['#/forbidden', 'Forbidden', 'No permission · LeadStack'],
+    ]) {
+      const { crumb, title } = await navigateAndReadCrumb(page, hash, crumbText)
+      checks.check(
+        `en ${hash} 面包屑为「${crumbText}」且不含「总览/Overview」、标签题为「${fullTitle}」`,
+        enSwitched &&
+          crumb === crumbText &&
+          !crumb.includes('总览') &&
+          !crumb.includes('Overview') &&
+          title === fullTitle,
+        `crumb=${JSON.stringify(crumb)} title=${JSON.stringify(title)} switched=${enSwitched}`,
+      )
+    }
+
     /* ---------- ⑦：全程无未捕获异常 ---------- */
     checks.check('全程 pageerror 0 条', pageErrors.length === 0, pageErrors.slice(0, 3).join(' / ') || '无')
+
+    /* ---------- ⑨：词典 chunk 加载失败时不落盘、保持原语言（S3 回归） ---------- */
+    // 断网时若仍把 en-US 写进 localStorage，下次冷启动会反复重试失败的 chunk；
+    // 这里故意 abort 掉 en-US 的独立 chunk，验证失败时存储与界面都留在 zh-CN。
+    const failContext = await browser.newContext()
+    try {
+      await failContext.addInitScript(
+        ([key, value]) => {
+          try {
+            window.localStorage.setItem(key, value)
+          } catch {
+            /* ignore */
+          }
+        },
+        [LANGUAGE_KEY, 'zh-CN'],
+      )
+      await installMockApi(failContext)
+      await failContext.route(/\/assets\/en-US-[^/]+\.js(?:\?.*)?$/, (route) => route.abort())
+      const failPage = await failContext.newPage()
+      await login(failPage, base)
+      await failPage.goto(`${base}/#/settings`, { waitUntil: 'domcontentloaded' })
+      await failPage.waitForSelector('#settings-appearance-language', { timeout: 15000 })
+      await failPage.selectOption('#settings-appearance-language', 'en-US')
+
+      let noticeShown = true
+      try {
+        await failPage.waitForSelector('#settings-language-error', { timeout: 5000 })
+      } catch {
+        noticeShown = false
+      }
+      const failedStored = await failPage.evaluate((key) => window.localStorage.getItem(key), LANGUAGE_KEY)
+      const failedSelected = await failPage.$eval('#settings-appearance-language', (el) => el.value)
+      const failedHtmlLang = await failPage.evaluate(() => document.documentElement.getAttribute('lang'))
+      const failedTitle = await failPage.title()
+      checks.check(
+        '词典 chunk 加载失败不落盘：存储仍 zh-CN、下拉框回滚、失败提示可见',
+        noticeShown &&
+          failedStored === 'zh-CN' &&
+          failedSelected === 'zh-CN' &&
+          failedHtmlLang === 'zh-CN' &&
+          CJK_RE.test(failedTitle),
+        `notice=${noticeShown} stored=${JSON.stringify(failedStored)} selected=${JSON.stringify(failedSelected)} htmlLang=${JSON.stringify(failedHtmlLang)} title=${JSON.stringify(failedTitle)}`,
+      )
+    } finally {
+      await failContext.close()
+    }
 
     const residue = checks.results.filter((item) => !item.ok)
     console.log(

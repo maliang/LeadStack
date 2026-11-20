@@ -145,6 +145,8 @@ const SIMPLE_CRUMBS: Record<string, Crumb> = {
   '/audit': { labelKey: 'nav.audit' },
   '/backups': { labelKey: 'nav.backups' },
   '/settings': { labelKey: 'nav.settings' },
+  '/about': { labelKey: 'crumb.about' },
+  '/forbidden': { labelKey: 'crumb.forbidden' },
 }
 
 /** 根据当前路径生成面包屑；详情页补一级。 */
