@@ -112,6 +112,11 @@ const loginError = ref<string | null>(null)
 const loginResult = ref<ServerLoginResult | null>(null)
 const loginNotice = ref<string | null>(null)
 
+/* 登录脚本（server.write）：保存 PATCH 由本页 owner 发，tab 只提交草稿 ---- */
+const scriptSaving = ref(false)
+const scriptError = ref<string | null>(null)
+const scriptNotice = ref<string | null>(null)
+
 /* 面板入口 --------------------------------------------------------- */
 const panelBusy = ref(false)
 const panelError = ref<string | null>(null)
@@ -254,6 +259,33 @@ async function runLogin(): Promise<void> {
 
 function reopenUrl(): void {
   if (loginResult.value) openUrl(loginResult.value.url)
+}
+
+/**
+ * 保存/清除登录脚本。
+ *
+ * payload 只有 `{ login_script }` 一个键（空串 = 清除，契约见 api.ts UpdateServerPayload）；
+ * 不能顺手带 notes / custom_fields，否则会把别的 tab 的档案例写成空。
+ * 成功后把 PATCH 返回的 Server 合并回页面状态，配置态与「一键登录」可用性同步刷新。
+ */
+async function saveLoginScript(payload: { login_script: string }): Promise<void> {
+  if (scriptSaving.value) return
+  scriptSaving.value = true
+  scriptError.value = null
+  scriptNotice.value = null
+  try {
+    const updated = await api.updateServer(serverId.value, { login_script: payload.login_script })
+    // 契约只保证 notes / custom_fields 不回显；login_script 若为空而本次提交非空，按提交值合并，避免刚保存就显示成未配置。
+    server.value =
+      updated.login_script === '' && payload.login_script !== ''
+        ? { ...updated, login_script: payload.login_script }
+        : updated
+    scriptNotice.value = t('server.login.scriptSaved')
+  } catch (error) {
+    scriptError.value = errorMessage(error, t('server.login.scriptSaveFailed'))
+  } finally {
+    scriptSaving.value = false
+  }
 }
 
 /* 面板入口：地址只在点击时向后端索取并直接打开，绝不写进文案 --------- */
@@ -455,6 +487,9 @@ watch(serverId, () => {
   loginResult.value = null
   loginError.value = null
   loginNotice.value = null
+  scriptSaving.value = false
+  scriptError.value = null
+  scriptNotice.value = null
   panelError.value = null
   metricsRequest += 1
   metrics.value = null
@@ -638,8 +673,13 @@ onMounted(() => {
           :error="loginError"
           :result="loginResult"
           :notice="loginNotice"
+          :can-write="canWrite"
+          :script-saving="scriptSaving"
+          :script-error="scriptError"
+          :script-notice="scriptNotice"
           @run="runLogin"
           @open-url="reopenUrl"
+          @save="saveLoginScript"
         />
         <ServerMetaTab
           v-else-if="tab === 'meta'"

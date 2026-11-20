@@ -13,6 +13,9 @@ import { homedir, platform } from 'node:os'
 import { dirname, extname, join, normalize, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+// 直接读源模块拿到「宝塔」示例原文：断言「从示例插入」必须与 login-samples.ts 逐字节一致，
+// 不能在冒烟里抄一份副本（抄的副本会和源文件一起漂移，红不了）。
+import { LOGIN_SCRIPT_SAMPLES } from '../src/lib/login-samples.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const WEB_ROOT = resolve(HERE, '..')
@@ -347,6 +350,7 @@ async function installMockApi(context, state) {
       state.server = {
         ...state.server,
         ...(typeof body.notes === 'string' ? { notes: body.notes } : {}),
+        ...(typeof body.login_script === 'string' ? { login_script: body.login_script } : {}),
         ...(body.custom_fields && typeof body.custom_fields === 'object'
           ? { custom_fields: body.custom_fields }
           : {}),
@@ -653,6 +657,93 @@ async function run() {
     check('读回后草稿跟着更新', (await page.inputValue('#server-meta-notes')) === '改过的备注 2000 上限')
     const narrowMeta = await noHorizontalScroll()
     check('320px 档案页无横向滚动', narrowMeta.overflow <= 0, `溢出 ${narrowMeta.overflow}px`)
+
+    // 5b) 登录脚本编辑：行内 textarea + 示例插入 + 保存/清空/超限
+    console.log('')
+    log('登录脚本编辑', '行内编辑器：保存请求体逐键 / 示例逐字节 / 8192 超限 / 清空回未配置')
+    await page.click('#server-tab-login')
+    await page.waitForSelector('#login-script-editor', { timeout: 5000 })
+    await shot(page, '05b-login-script')
+    const editor = page.locator('#login-script-editor')
+    check(
+      '脚本编辑器回填当前脚本',
+      (await editor.inputValue()) === 'cd /www/wwwroot/alpha && bt 14',
+      await editor.inputValue(),
+    )
+    const baotaScript = LOGIN_SCRIPT_SAMPLES.find((item) => item.key === 'baota')?.script ?? ''
+    check('login-samples.ts 的宝塔示例非空', baotaScript.length > 0, `${baotaScript.length} 字符`)
+    await editor.fill('')
+    await page.click('#login-script-sample-baota')
+    const inserted = await editor.inputValue()
+    check(
+      '从示例插入后 textarea 逐字节等于 login-samples.ts 的宝塔示例',
+      inserted === baotaScript,
+      `长度 ${inserted.length} vs ${baotaScript.length}`,
+    )
+    const counter = page.locator('section[aria-label="登录脚本"] span').filter({ hasText: /\/ 8192/ }).first()
+    const baotaRunes = [...baotaScript].length
+    check(
+      '示例插入后计数器按码点计到宝塔脚本长度',
+      (await counter.count()) === 1 && (await counter.innerText()).trim() === `${baotaRunes} / 8192`,
+      (await counter.count()) === 1 ? (await counter.innerText()).trim() : '无计数器',
+    )
+
+    const explicitScript = '#!/usr/bin/env bash\nprintf \'{"terminal":"ssh -p 22 root@1.2.3.4"}\''
+    await editor.fill(explicitScript)
+    await page.click('#login-script-save')
+    await page.waitForTimeout(500)
+    const savedPatch = state.patchBodies[state.patchBodies.length - 1] || null
+    const savedKeys = savedPatch ? Object.keys(savedPatch).sort() : []
+    check(
+      '保存请求体恰为 {"login_script":"..."}（逐键比对）',
+      savedPatch !== null && savedKeys.length === 1 && savedKeys[0] === 'login_script',
+      savedKeys.join(','),
+    )
+    check(
+      '保存请求体的 login_script 与编辑器逐字节一致',
+      savedPatch !== null && savedPatch.login_script === explicitScript,
+      savedPatch ? `${String(savedPatch.login_script).length} 字符` : '无 PATCH',
+    )
+
+    const overlong = 'x'.repeat(8193)
+    await editor.evaluate((element, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      setter?.call(element, value)
+      element.dispatchEvent(new Event('input', { bubbles: true }))
+    }, overlong)
+    await page.waitForTimeout(200)
+    const afterOverflow = state.patchBodies.length
+    const saveDisabled = await page.locator('#login-script-save').isDisabled()
+    if (!saveDisabled) await page.click('#login-script-save')
+    await page.waitForTimeout(300)
+    check(
+      '超过 8192 字符时点保存 = 0 次 PATCH',
+      state.patchBodies.length === afterOverflow,
+      `${afterOverflow} → ${state.patchBodies.length}（保存按钮${saveDisabled ? '禁用' : '可点'}）`,
+    )
+    const scriptError = page.locator('#login-script-error')
+    check(
+      '超过 8192 字符出现字段级错误且文案含 8192',
+      (await scriptError.count()) === 1 && (await scriptError.innerText()).includes('8192'),
+      (await scriptError.count()) === 1 ? (await scriptError.innerText()).slice(0, 60) : '无错误节点',
+    )
+
+    await page.click('#login-script-clear')
+    await page.waitForSelector('#login-script-clear-confirm', { timeout: 3000 })
+    await page.click('#login-script-clear-confirm')
+    await page.waitForTimeout(500)
+    const clearedPatch = state.patchBodies[state.patchBodies.length - 1] || null
+    check(
+      '清空请求体恰为 {"login_script":""}',
+      clearedPatch !== null &&
+        Object.keys(clearedPatch).length === 1 &&
+        clearedPatch.login_script === '',
+      clearedPatch ? JSON.stringify(clearedPatch).slice(0, 60) : '无 PATCH',
+    )
+    await page.waitForSelector('section[aria-label="一键登录"]', { timeout: 5000 })
+    const loginCardText = await page.locator('section[aria-label="一键登录"]').innerText()
+    check('清空后页面回到「未配置」', loginCardText.includes('还没有配置登录脚本'), loginCardText.slice(0, 40))
+    check('清空后编辑器 value 为空串', (await editor.inputValue()) === '', JSON.stringify(await editor.inputValue()).slice(0, 60))
 
     // 6) 检测：只读展示本服务器命中的检测项，无执行按钮
     await page.click('#server-tab-checks')
@@ -1134,6 +1225,27 @@ async function run() {
         (await readonlyPage.locator('section[aria-label="测试连接"] button').count()) === 0,
       )
       check('只读用户看不到 agent 升级卡', (await readonlyPage.locator('section[aria-label="升级 Agent"]').count()) === 0)
+      await readonlyPage.click('#server-tab-login')
+      await readonlyPage.waitForSelector('section[aria-label="登录脚本"]', { timeout: 5000 })
+      check(
+        '只读用户看不到登录脚本保存按钮',
+        (await readonlyPage.locator('#login-script-save').count()) === 0,
+      )
+      check(
+        '只读用户看不到登录脚本清空按钮',
+        (await readonlyPage.locator('#login-script-clear').count()) === 0,
+      )
+      check(
+        '只读用户看不到登录脚本示例按钮',
+        (await readonlyPage.locator('#login-script-sample-baota').count()) === 0 &&
+          (await readonlyPage.locator('#login-script-sample-onepanel').count()) === 0,
+      )
+      check('只读用户登录脚本编辑器禁用', await readonlyPage.locator('#login-script-editor').isDisabled())
+      check(
+        '只读用户零 PATCH（登录脚本保存/清空按钮 count=0）',
+        readonlyState.patchBodies.length === 0,
+        `${readonlyState.patchBodies.length} 次`,
+      )
       check(
         '只读用户零写请求',
         readonlyState.hostCalls === 0 && readonlyState.connectionCalls === 0 && readonlyState.upgradeCalls === 0,
