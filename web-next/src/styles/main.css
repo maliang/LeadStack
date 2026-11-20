@@ -7304,3 +7304,240 @@ body.ls-scroll-locked {
     padding: 0 var(--ls-space-2);
   }
 }
+
+/* ---------- 应用模板页（/templates） ---------- */
+
+.ls-templates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-4);
+  min-width: 0;
+}
+
+.ls-templates__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ls-space-3);
+  min-width: 0;
+}
+
+.ls-templates__heading {
+  min-width: 0;
+}
+
+.ls-templates__title {
+  margin: 0;
+  color: var(--ls-text);
+  font:
+    600 var(--ls-text-xl) / 1.3 var(--ls-font-sans);
+  overflow-wrap: anywhere;
+}
+
+.ls-templates__subtitle {
+  margin: var(--ls-space-1) 0 0;
+  color: var(--ls-text-muted);
+  font:
+    400 var(--ls-text-sm) / 1.6 var(--ls-font-sans);
+  overflow-wrap: anywhere;
+}
+
+.ls-templates__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-2);
+}
+
+.ls-templates__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-templates__search {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.ls-templates__count {
+  margin: 0 0 0 auto;
+  color: var(--ls-text-subtle);
+  font:
+    400 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+.ls-templates__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-templates__skeleton-row {
+  height: 2.75rem;
+}
+
+/* 列表固定最大高度内滚：条目再多也不把整页撑长 */
+.ls-templates__scroll {
+  min-width: 0;
+  max-height: 34rem;
+  overflow: auto;
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-lg);
+  background: var(--ls-surface);
+  box-shadow: var(--ls-shadow-sm);
+  -webkit-overflow-scrolling: touch;
+}
+
+.ls-templates__table {
+  width: 100%;
+  min-width: 32rem;
+  border-collapse: collapse;
+  font:
+    400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+}
+
+.ls-templates__table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--ls-space-2) var(--ls-space-3);
+  border-bottom: 1px solid var(--ls-border);
+  background: var(--ls-surface-muted);
+  color: var(--ls-text-subtle);
+  font:
+    500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ls-templates__table td {
+  padding: var(--ls-space-3);
+  border-bottom: 1px solid var(--ls-border);
+  color: var(--ls-text);
+  vertical-align: top;
+}
+
+.ls-templates__row:last-child td {
+  border-bottom: 0;
+}
+
+.ls-templates__row:hover td {
+  background: var(--ls-surface-muted);
+}
+
+.ls-templates__name {
+  display: block;
+  max-width: 20rem;
+  color: var(--ls-text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ls-templates__preview {
+  display: block;
+  max-width: 20rem;
+  margin-top: 2px;
+  color: var(--ls-text-subtle);
+  font:
+    400 var(--ls-text-2xs) / 1.5 var(--ls-font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ls-templates__kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--ls-space-2);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-sm);
+  background: var(--ls-surface-muted);
+  color: var(--ls-text-muted);
+  font:
+    500 var(--ls-text-xs) / 1.5 var(--ls-font-mono);
+  white-space: nowrap;
+}
+
+.ls-templates__time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ls-templates__actions-col {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ls-templates__row-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--ls-space-1);
+}
+
+.ls-templates__readonly {
+  color: var(--ls-text-subtle);
+  font-size: var(--ls-text-xs);
+}
+
+.ls-templates__form {
+  min-width: 0;
+}
+
+/* 模板正文：等宽字体 + 最小 12rem，保证多行 YAML / unit 可读 */
+.ls-templates__code {
+  min-height: 12rem;
+  font-family: var(--ls-font-mono);
+  font-size: var(--ls-text-xs);
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+}
+
+.ls-templates__delete {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-templates__delete-list {
+  margin: 0;
+  padding-left: var(--ls-space-4);
+  color: var(--ls-text-muted);
+  font:
+    400 var(--ls-text-sm) / 1.6 var(--ls-font-sans);
+}
+
+.ls-templates__delete-list li {
+  overflow-wrap: anywhere;
+}
+
+/* 窄宽（320px）基准：标题与操作换行，表格靠横向滚动，不裁切内容 */
+@media (max-width: 480px) {
+  .ls-templates__actions {
+    width: 100%;
+  }
+
+  .ls-templates__count {
+    margin-left: 0;
+  }
+
+  .ls-templates__name,
+  .ls-templates__preview {
+    max-width: 12rem;
+  }
+
+  .ls-templates__scroll {
+    max-height: 28rem;
+  }
+}

@@ -31,4 +31,10 @@ export const deployRoutes: RouteRecordRaw[] = [
     component: () => import('@/pages/releases/ReleaseDetailPage.vue'),
     meta: { titleKey: 'crumb.releaseDetail', permission: 'deploy.read' },
   },
+  {
+    path: '/templates',
+    name: 'templates',
+    component: () => import('@/pages/templates/TemplatesPage.vue'),
+    meta: { titleKey: 'nav.templates', permission: 'deploy.read' },
+  },
 ]

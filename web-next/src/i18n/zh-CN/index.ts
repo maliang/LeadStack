@@ -10,6 +10,7 @@ import dashboard from './dashboard'
 import legacy from './legacy'
 import ops from './ops'
 import upgrade from './upgrade'
+import templates from './templates'
 
 /**
  * zh-CN 词典入口：领域文件展开合并为与改造前完全一致的扁平键表，
@@ -28,6 +29,7 @@ const zhCN: Record<string, string> = {
   ...legacy,
   ...ops,
   ...upgrade,
+  ...templates,
 }
 
 export default zhCN

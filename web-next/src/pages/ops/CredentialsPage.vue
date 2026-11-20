@@ -13,6 +13,10 @@ type CredentialKind = 'password' | 'key'
 
 const { t } = useI18n()
 const { can } = useCan()
+// 纵深防御：/credentials 的路由 meta.permission='server.write'（src/router/routes/system.ts:13）
+// 已把无权限用户拦到 /forbidden，本页根本不会挂载，所以这层 canWrite 无法在页面级验证
+// （冒烟只能断言路由守卫级：/forbidden + 测试按钮 0 + POST 0 次）。保留它是为了将来放开
+// 路由门时仍不渲染写入口；若路由策略变化，需补按钮级断言。
 const canWrite = computed(() => can('server.write'))
 
 const state = ref<'loading' | 'ready' | 'error'>('loading')
@@ -38,12 +42,33 @@ const form = ref({
 const deleteTarget = ref<Credential | null>(null)
 const deleting = ref(false)
 
+type CredentialTestResult = { ok: boolean; message: string }
+// 按行记录「测试中」，行与行互不阻塞：点别行不会出现「点了没反应」。
+const testingIds = ref<Set<string>>(new Set())
+const testResults = ref<Record<string, CredentialTestResult>>({})
+
+function isTesting(id: string): boolean {
+  return testingIds.value.has(id)
+}
+
+function setTesting(id: string, busy: boolean): void {
+  const next = new Set(testingIds.value)
+  if (busy) next.add(id)
+  else next.delete(id)
+  testingIds.value = next
+}
+
+function testTone(result: CredentialTestResult): string {
+  return result.ok ? 'ls-tone--success' : 'ls-tone--danger'
+}
+
 const countLabel = computed(() => t('ops.credentials.count', { count: credentials.value.length }))
 
 function kindLabel(kind: string): string {
   if (kind === 'password') return t('ops.credentials.kind.password')
   if (kind === 'key') return t('ops.credentials.kind.key')
   // baota 凭证由服务器接入流程创建，这里只读展示，不提供新建入口。
+  if (kind === 'baota') return t('ops.credentials.kind.baota')
   return kind
 }
 
@@ -147,6 +172,53 @@ async function submitDelete(): Promise<void> {
     actionError.value = errorMessage(caught, t('ops.credentials.deleteFailed'))
   } finally {
     deleting.value = false
+  }
+}
+
+function setTestResult(id: string, result: CredentialTestResult): void {
+  const next = { ...testResults.value }
+  next[id] = result
+  testResults.value = next
+}
+
+function clearTestResult(id: string): void {
+  if (!(id in testResults.value)) return
+  const next = { ...testResults.value }
+  delete next[id]
+  testResults.value = next
+}
+
+/**
+ * POST /credentials/{id}/test —— 后端用 permServerWrite 保护，
+ * 无 server.write 时这里直接返回，保证零请求且结果区不出现。
+ */
+async function runTest(credential: Credential): Promise<void> {
+  // 后端 POST /credentials/{id}/test 只支持宝塔面板凭据：SSH 凭据直接 400，
+  // 所以这里也会在真正发请求前拦下，避免给用户一个必然失败的入口。
+  if (credential.kind !== 'baota') return
+  if (!canWrite.value || isTesting(credential.id)) return
+  setTesting(credential.id, true)
+  clearTestResult(credential.id)
+  try {
+    const result = await api.testCredential(credential.id)
+    const ok = result.ok
+    setTestResult(credential.id, {
+      ok,
+      // ok=false 时不包装：后端 message 原样展示，只有完全为空才给占位说明。
+      message: ok
+        ? result.message
+          ? t('ops.credentials.test.okWithMessage', { message: result.message })
+          : t('ops.credentials.test.ok')
+        : result.message || t('ops.credentials.test.emptyMessage'),
+    })
+  } catch (caught) {
+    // 4xx/5xx 走这里：展示服务端返回的错误文案，不静默。
+    setTestResult(credential.id, {
+      ok: false,
+      message: errorMessage(caught, t('ops.credentials.test.requestFailed')),
+    })
+  } finally {
+    setTesting(credential.id, false)
   }
 }
 
@@ -273,6 +345,21 @@ onMounted(() => {
               </td>
               <td :data-label="t('common.actions')" class="ls-adminpage__cell-actions">
                 <button
+                  v-if="canWrite && credential.kind === 'baota'"
+                  class="ls-btn ls-btn--small ls-credentialspage__test"
+                  type="button"
+                  :disabled="deleting || isTesting(credential.id)"
+                  :aria-busy="isTesting(credential.id)"
+                  @click="runTest(credential)"
+                >
+                  <span v-if="isTesting(credential.id)" class="ls-spinner" aria-hidden="true" />
+                  {{
+                    isTesting(credential.id)
+                      ? t('ops.credentials.test.testing')
+                      : t('ops.credentials.test.action')
+                  }}
+                </button>
+                <button
                   class="ls-btn ls-btn--small ls-adminpage__danger ls-credentialspage__delete"
                   type="button"
                   :disabled="deleting"
@@ -280,6 +367,24 @@ onMounted(() => {
                 >
                   {{ t('common.delete') }}
                 </button>
+                <p
+                  v-if="canWrite && credential.kind !== 'baota'"
+                  class="ls-adminpage__hint"
+                  data-credential-test-hint
+                >
+                  {{ t('ops.credentials.test.baotaOnlyHint') }}
+                </p>
+                <p
+                  v-if="canWrite && testResults[credential.id]"
+                  class="ls-adminpage__hint ls-credentialspage__test-result"
+                  role="status"
+                  aria-live="polite"
+                  :data-credential-test="testResults[credential.id].ok ? 'ok' : 'fail'"
+                >
+                  <span :class="testTone(testResults[credential.id])">
+                    {{ testResults[credential.id].message }}
+                  </span>
+                </p>
               </td>
             </tr>
           </tbody>
