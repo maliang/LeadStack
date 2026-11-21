@@ -6,7 +6,7 @@
  * shell / 标题 / skip link 这些「用户天天看见但没人截图」的位置；m1 把外壳文案收进
  * t()、m5 修了「切语言后标签题不跟变」，本脚本就是防止这两件事回潮的护栏。
  *
- * 覆盖（共 22 项，全部用 page 真实渲染结果断言，不读源码）：
+ * 覆盖（共 26 项，全部用 page 真实渲染结果断言，不读源码）：
  *   ① 登录后切 en-US：document.title 不含任何 CJK（/[一-鿿]/，失败时把实际 title 打出来）；
  *   ② 逐页导航 #/servers #/apps #/releases #/users #/settings：每页 title 不含 CJK 且以「· LeadStack」结尾；
  *   ③ 侧栏品牌副标题（.ls-brand__tagline，即 useShellCopy 的 appTagline）en-US 下不含 CJK；
@@ -16,10 +16,12 @@
  *   ⑥ 切回 zh-CN 后 title 恢复成切换前那一串中文（防「一刀切成英文」的过度修复）；
  *   ⑦ page.on('pageerror') 收集异常，0 条；
  *   ⑧ #/about 与 #/forbidden 的面包屑落在各自译文（中文「关于」/「无权访问」、英文 About/Forbidden），
- *      不再回落到「总览/Overview」；中英文标签题分别为「关于 · LeadStack 领栈」/
- *      「无权限 · LeadStack 领栈」与「About · LeadStack」/「No permission · LeadStack」。
+ *      不再回落到「总览/Overview」；标题与面包屑同源，中英文标签题分别为
+ *      「关于 · LeadStack 领栈」/「无权访问 · LeadStack 领栈」与「About · LeadStack」/「Forbidden · LeadStack」。
  *   ⑨ en-US 词典 chunk 加载失败（route.abort）时不写 localStorage、界面与 <html lang> 保持 zh-CN，
  *      外观卡出现失败提示且下拉框回滚（S3 回归）。
+ *   ⑩ 慢网冷启动（S2 回归）：存储 en-US 且把 assets/en-US-*.js 延迟 3s，导航后 1.5s 内 #app 必须
+ *      已有可见骨架、骨架内 0 中英文文案、pageerror 0；词典到达并挂载后骨架消失、容器不重复。
  *
  * 说明：品牌名「LeadStack 领栈」在侧栏是商标、不翻译；标签题里英文界面只保留
  * 拉丁商标「LeadStack」（见 src/router/index.ts 的 brandSuffix），
@@ -352,7 +354,7 @@ async function main() {
     /* ---------- ⑧：/about 与 /forbidden 的面包屑不再回落「总览」 ---------- */
     for (const [hash, crumbText, fullTitle] of [
       ['#/about', '关于', '关于 · LeadStack 领栈'],
-      ['#/forbidden', '无权访问', '无权限 · LeadStack 领栈'],
+      ['#/forbidden', '无权访问', '无权访问 · LeadStack 领栈'],
     ]) {
       const { crumb, title } = await navigateAndReadCrumb(page, hash, crumbText)
       checks.check(
@@ -377,7 +379,7 @@ async function main() {
     }
     for (const [hash, crumbText, fullTitle] of [
       ['#/about', 'About', 'About · LeadStack'],
-      ['#/forbidden', 'Forbidden', 'No permission · LeadStack'],
+      ['#/forbidden', 'Forbidden', 'Forbidden · LeadStack'],
     ]) {
       const { crumb, title } = await navigateAndReadCrumb(page, hash, crumbText)
       checks.check(
@@ -438,6 +440,104 @@ async function main() {
       )
     } finally {
       await failContext.close()
+    }
+
+    /* ---------- ⑩：慢网冷启动骨架（S2 回归） ---------- */
+    // 复刻白屏现场：存储 en-US（上面 ⑧-en 已把主 context 切到 en-US）+ 词典 chunk 慢 3s。
+    // 旧实现里 bootstrap() 先 await 词典再 mount，#app 会空窗 3s+；骨架静态写在 index.html 的
+    // #app 内部，与 JS / 词典无关，所以导航后立刻就该有可见占位。
+    const slowState = await context.storageState()
+    const slowContext = await browser.newContext({ storageState: slowState })
+    try {
+      await installMockApi(slowContext)
+      await slowContext.route(/\/assets\/en-US-[^/]+\.js(?:\?.*)?$/, async (route) => {
+        await new Promise((done) => setTimeout(done, 3000))
+        await route.continue()
+      })
+      const slowPage = await slowContext.newPage()
+      const slowErrors = []
+      slowPage.on('pageerror', (error) => slowErrors.push(error.message))
+
+      const navStartedAt = Date.now()
+      await slowPage.goto(`${base}/#/servers`, { waitUntil: 'domcontentloaded' })
+      let skeletonVisibleAt = -1
+      try {
+        await slowPage.waitForFunction(
+          () => {
+            const node = document.querySelector('#app .ls-boot-skeleton')
+            if (!node) return false
+            const box = node.getBoundingClientRect()
+            const style = window.getComputedStyle(node)
+            return (
+              box.width > 0 &&
+              box.height > 0 &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              Number(style.opacity) > 0
+            )
+          },
+          null,
+          { timeout: 1500, polling: 25 },
+        )
+        skeletonVisibleAt = Date.now() - navStartedAt
+      } catch {
+        skeletonVisibleAt = -1
+      }
+      checks.check(
+        '慢网冷启动（en-US 词典延迟 3s）：导航后 1.5s 内 #app 有可见骨架',
+        skeletonVisibleAt >= 0 && skeletonVisibleAt <= 1500,
+        skeletonVisibleAt >= 0 ? `骨架可见耗时=${skeletonVisibleAt}ms` : '≤1.5s 内仍未见可见骨架（白屏）',
+      )
+
+      // 骨架必须与语言无关：出现中英文文案就会在词典到达后二次闪烁。
+      const skeletonMarkup = await slowPage.evaluate(() => {
+        const node = document.querySelector('#app .ls-boot-skeleton')
+        if (!node) return null
+        const text = (node.textContent || '').trim()
+        return { text, blocks: node.querySelectorAll('.ls-boot-skeleton__bar').length }
+      })
+      checks.check(
+        '骨架只含纯几何块：0 中英文文案（zh/en 共用，不二次闪烁）',
+        skeletonMarkup !== null &&
+          skeletonMarkup.text === '' &&
+          !/[A-Za-z一-鿿]/.test(skeletonMarkup.text) &&
+          skeletonMarkup.blocks > 0,
+        skeletonMarkup
+          ? `text=${JSON.stringify(skeletonMarkup.text)} 色块=${skeletonMarkup.blocks}`
+          : '骨架未找到',
+      )
+      checks.check('慢网冷启动期间 pageerror 0 条', slowErrors.length === 0, slowErrors.slice(0, 3).join(' / ') || '无')
+
+      let skeletonGone = true
+      try {
+        await slowPage.waitForFunction(() => document.querySelectorAll('.ls-boot-skeleton').length === 0, null, {
+          timeout: 15000,
+          polling: 50,
+        })
+      } catch {
+        skeletonGone = false
+      }
+      let shellSettled = true
+      try {
+        await slowPage.waitForFunction(() => document.querySelectorAll('.ls-shell').length === 1, null, {
+          timeout: 15000,
+          polling: 50,
+        })
+      } catch {
+        shellSettled = false
+      }
+      const slowResidue = await slowPage.evaluate(() => ({
+        apps: document.querySelectorAll('#app').length,
+        skeletons: document.querySelectorAll('.ls-boot-skeleton').length,
+        shells: document.querySelectorAll('.ls-shell').length,
+      }))
+      checks.check(
+        '词典到达并挂载后骨架消失、容器不重复（#app 唯一、无骨架残留、外壳只有一个）',
+        skeletonGone && shellSettled && slowResidue.apps === 1 && slowResidue.skeletons === 0 && slowResidue.shells === 1,
+        `#app=${slowResidue.apps} 骨架=${slowResidue.skeletons} .ls-shell=${slowResidue.shells}`,
+      )
+    } finally {
+      await slowContext.close()
     }
 
     const residue = checks.results.filter((item) => !item.ok)

@@ -117,7 +117,7 @@ const common: Record<string, string> = {
   'shell.navEmptyTitle': '没有可访问的导航',
   'shell.navEmptyHint': '当前账号缺少模块权限，请联系管理员分配角色。',
   'shell.title.login': '登录',
-  'shell.title.forbidden': '无权限',
+  'shell.title.forbidden': '无权访问',
   'shell.title.about': '关于',
   'shell.title.notFound': '页面不存在',
   'toast.copy': '复制',

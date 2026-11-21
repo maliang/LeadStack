@@ -55,9 +55,76 @@
         }
       })()
     </script>
+    <!--
+      冷启动骨架样式（S2 慢网白屏）：只服务首帧占位，不属于组件样式表，主样式仍只在 src/styles/main.css。
+      放在 index.html 内联的原因：慢网下样式包本身也可能迟到，骨架必须与 HTML 同批上屏（零 JS、零额外请求）。
+      颜色只引用 --ls-* token 并带首帧兜底值；320px 窄宽靠 flex-wrap 折行，不产生横向溢出或裁切。
+    -->
+    <style>
+      .ls-boot-skeleton {
+        display: flex;
+        flex-wrap: wrap;
+        align-content: flex-start;
+        gap: 0.75rem;
+        min-height: 100vh;
+        padding: 0.75rem;
+        background: var(--ls-bg, #f8fafc);
+      }
+      .ls-boot-skeleton__rail {
+        display: block;
+        flex: 0 0 10rem;
+        align-self: stretch;
+        min-height: 14rem;
+        border: 1px solid var(--ls-border, #e2e8f0);
+        border-radius: 0.625rem;
+        background: var(--ls-surface, #ffffff);
+      }
+      .ls-boot-skeleton__main {
+        display: flex;
+        flex: 1 1 14rem;
+        flex-direction: column;
+        gap: 0.75rem;
+        min-width: 0;
+      }
+      .ls-boot-skeleton__bar {
+        display: block;
+        border-radius: 0.5rem;
+        background: var(--ls-border, #e2e8f0);
+      }
+      .ls-boot-skeleton__bar--head {
+        height: 3.5rem;
+      }
+      .ls-boot-skeleton__bar--panel {
+        height: 7rem;
+      }
+      .ls-boot-skeleton__bar--row {
+        height: 1.25rem;
+      }
+      .ls-boot-skeleton__bar--row-short {
+        width: 60%;
+        height: 1.25rem;
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <!--
+      S2：bootstrap() 要先 await 词典 chunk 才 mount，慢网下 #app 会空窗数秒（q3 实测 3.55s）。
+      这里把骨架静态写进 #app：首字节到达即可上屏，zh / en 都复用同一块，不新增 i18n 键。
+      Vue 的 runtime-dom 在 app.mount() 开头会执行 container.innerHTML = ''，挂载后骨架自然消失，不会残留。
+      文案约束：骨架内不得出现任何中英文文案（只放 aria-hidden 的纯几何块），否则切换语言会二次闪烁。
+    -->
+    <div id="app">
+      <div class="ls-boot-skeleton" aria-hidden="true">
+        <span class="ls-boot-skeleton__rail"></span>
+        <div class="ls-boot-skeleton__main">
+          <span class="ls-boot-skeleton__bar ls-boot-skeleton__bar--head"></span>
+          <span class="ls-boot-skeleton__bar ls-boot-skeleton__bar--panel"></span>
+          <span class="ls-boot-skeleton__bar ls-boot-skeleton__bar--row"></span>
+          <span class="ls-boot-skeleton__bar ls-boot-skeleton__bar--row"></span>
+          <span class="ls-boot-skeleton__bar ls-boot-skeleton__bar--row-short"></span>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

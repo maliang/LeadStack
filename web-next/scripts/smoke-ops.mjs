@@ -657,6 +657,9 @@ const PAGE_ROOT = {
   '/groups': '.ls-groupspage',
 }
 
+// 六页里设置页是表单页（要文本内容），其余五页是列表页（要真渲染出行）。
+const ROWLESS_PAGES = new Set(['/settings'])
+
 async function gotoPage(page, base, hash, waitFor) {
   await page.goto(`${base}/#${hash}`, { waitUntil: 'domcontentloaded' })
   if (!waitFor) return
@@ -689,6 +692,47 @@ async function readHeading(page, expected) {
     )
     .catch(() => {})
   return (await page.locator('.ls-adminpage__title').first().innerText()).trim()
+}
+
+/**
+ * 公开的换页三件套：goto hash → 等标题切到 expected → 校验目标页根类与内容。
+ * 只等选择器会读到上一页（`.ls-adminpage__title` 每页都有）；只量 scrollWidth
+ * 会在旧页/空壳上假绿（y9 建议③）。标题、根类、行数/内容三者都成立才 ready。
+ */
+async function gotoReadyPage(page, base, hash, expected) {
+  await gotoPage(page, base, hash, { title: expected })
+  const heading = await readHeading(page, expected)
+  const selector = PAGE_ROOT[hash] ?? `.ls-${hash.replace(/^\//, '')}page`
+  await page
+    .waitForFunction(
+      (want) => {
+        const root = document.querySelector(want)
+        if (!root) return false
+        const rows = root.querySelectorAll('[class*="__row"]').length
+        return rows > 0 || (root.innerText || '').trim().length > 0
+      },
+      selector,
+      { timeout: 15000 },
+    )
+    .catch(() => {})
+  const state = await page.evaluate((want) => {
+    const root = document.querySelector(want)
+    if (!root) return { rootReady: false, rowCount: 0, contentLength: 0 }
+    return {
+      rootReady: true,
+      rowCount: root.querySelectorAll('[class*="__row"]').length,
+      contentLength: (root.innerText || '').trim().length,
+    }
+  }, selector)
+  const contentReady = ROWLESS_PAGES.has(hash) ? state.contentLength > 0 : state.rowCount > 0
+  return {
+    hash,
+    heading,
+    rootReady: state.rootReady,
+    rowCount: state.rowCount,
+    contentLength: state.contentLength,
+    ready: heading === expected && state.rootReady && contentReady,
+  }
 }
 
 function bodyText(page) {
@@ -1541,43 +1585,34 @@ async function run() {
 
     /* ============ ⑨ 320px 窄宽 + 异常 ============ */
     await page.setViewportSize({ width: 320, height: 800 })
-    const overflow = {}
     const narrowPages = []
     for (const hash of Object.keys(TITLES)) {
-      // 只等选择器会在懒加载 chunk 未到时读到旧页（`.ls-adminpage__title` 每页都有），
-      // 必须等标题文本切到目标页，再测 scrollWidth，避免假绿。
-      await gotoPage(page, base, hash, { title: TITLES[hash] })
-      const heading = await readHeading(page, TITLES[hash])
-      // 目标页根类（分组/备份再加行数）就绪才量宽度，否则量到的可能是上一页的 DOM。
-      const rootReady = await page
-        .waitForFunction(
-          (selector) => {
-            const root = document.querySelector(selector)
-            if (!root) return false
-            if (selector === '.ls-groupspage') return root.querySelectorAll('.ls-groupspage__row').length > 0
-            if (selector === '.ls-backupspage') return root.querySelectorAll('.ls-backupspage__row').length > 0
-            return true
-          },
-          PAGE_ROOT[hash],
-          { timeout: 15000 },
-        )
-        .then(() => true)
-        .catch(() => false)
-      narrowPages.push({ hash, heading, rootReady })
+      // 标题匹配、根类存在、行数/内容非空三件套都成立才量宽度；否则量到的可能是旧页或空壳。
+      const pageState = await gotoReadyPage(page, base, hash, TITLES[hash])
       await page.waitForTimeout(250)
-      overflow[hash] = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - window.innerWidth,
+      )
+      narrowPages.push({ ...pageState, overflow })
     }
-    const narrowWrong = narrowPages.filter((entry) => entry.heading !== TITLES[entry.hash] || !entry.rootReady)
+    const narrowUnready = narrowPages.filter((entry) => !entry.ready)
+    const narrowOverflowing = narrowPages.filter((entry) => entry.ready && entry.overflow > 0)
     check(
-      '320px 循环均停留在目标页（标题匹配且根类存在，groups 行数 >0）',
-      narrowWrong.length === 0,
-      JSON.stringify(narrowWrong),
+      '320px 循环均停留在目标页（标题匹配、根类存在、行数/内容非空）',
+      narrowUnready.length === 0,
+      narrowUnready
+        .map((entry) => `${entry.hash} heading=${JSON.stringify(entry.heading)} root=${entry.rootReady} rows=${entry.rowCount}`)
+        .join(' / '),
     )
-    const overflowing = Object.entries(overflow).filter(([, value]) => value > 0)
     check(
-      '六页在 320px 下均无横向滚动',
-      overflowing.length === 0,
-      overflowing.map(([hash, value]) => `${hash} 溢出 ${value}px`).join(' / '),
+      '六页在 320px 下均无横向滚动（未就绪页不算通过）',
+      narrowUnready.length === 0 && narrowOverflowing.length === 0,
+      [
+        narrowUnready.length > 0 ? `未就绪 ${narrowUnready.map((entry) => entry.hash).join(' / ')}` : '',
+        narrowOverflowing.map((entry) => `${entry.hash} 溢出 ${entry.overflow}px`).join(' / '),
+      ]
+        .filter(Boolean)
+        .join('；'),
     )
 
     const hits = await page.evaluate(() => {
@@ -1591,33 +1626,22 @@ async function run() {
     })
     check('320px 下分组页按钮可见且命中区 ≥24px', hits.every((hit) => hit.ok), JSON.stringify(hits.filter((hit) => !hit.ok)))
 
-    // 备份页单独复核：必须真的渲染出行（否则 scrollWidth 测的是空壳），再量横向溢出。
-    await gotoPage(page, base, '/backups', { title: TITLES['/backups'] })
-    const backupRows320 = await page
-      .waitForFunction(
-        () =>
-          document.querySelector('.ls-backupspage') !== null &&
-          document.querySelectorAll('.ls-backupspage .ls-backupspage__row').length > 0,
-        null,
-        { timeout: 15000 },
-      )
-      .then(() => page.locator('.ls-backupspage__row').count())
-      .catch(() => 0)
+    // 备份页单独复核：标题/根类/行数三件套就绪后再量横向溢出，避免空壳假绿。
+    const backup320 = await gotoReadyPage(page, base, '/backups', TITLES['/backups'])
     const backupOverflow320 = await page.evaluate(
       () => document.documentElement.scrollWidth - window.innerWidth,
     )
     check(
-      '320px 备份页已渲染（行数 >0）且无横向滚动',
-      backupRows320 > 0 && backupOverflow320 <= 0,
-      `rows=${backupRows320} overflow=${backupOverflow320}`,
+      '320px 备份页已渲染（标题/根类/行数就绪）且无横向滚动',
+      backup320.ready && backup320.rowCount > 0 && backupOverflow320 <= 0,
+      `heading=${JSON.stringify(backup320.heading)} root=${backup320.rootReady} rows=${backup320.rowCount} overflow=${backupOverflow320}`,
     )
 
     check('全程 pageerror 0（无未捕获异常）', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '))
 
     if (SHOTS) {
       await page.setViewportSize({ width: 320, height: 900 })
-      await gotoPage(page, base, '/tokens')
-      await readHeading(page, TITLES['/tokens'])
+      await gotoReadyPage(page, base, '/tokens', TITLES['/tokens'])
       await page.screenshot({ path: resolve(SHOTS, '01-tokens-320.png'), fullPage: true }).catch(() => {})
     }
   } catch (error) {

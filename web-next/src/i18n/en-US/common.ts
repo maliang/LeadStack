@@ -117,7 +117,7 @@ const common: Record<string, string> = {
   'shell.navEmptyTitle': 'No accessible navigation',
   'shell.navEmptyHint': 'This account lacks module permissions. Ask an administrator to assign a role.',
   'shell.title.login': 'Sign in',
-  'shell.title.forbidden': 'No permission',
+  'shell.title.forbidden': 'Forbidden',
   'shell.title.about': 'About',
   'shell.title.notFound': 'Page not found',
   'toast.copy': 'Copy',
