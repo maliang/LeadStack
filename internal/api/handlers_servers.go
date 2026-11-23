@@ -391,6 +391,17 @@ var (
 	errPanelURLMissing     = errors.New("服务器绑定的宝塔面板凭证缺少面板地址")
 )
 
+// isPanelCertificateError 判断是否为面板自签/未知 CA 的 TLS 校验失败。
+func isPanelCertificateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "x509:") ||
+		strings.Contains(msg, "certificate signed by unknown authority") ||
+		strings.Contains(msg, "certificate is not trusted")
+}
+
 // handleServerPanelLogin 处理 POST /api/v1/servers/{id}/panel-login。
 //
 // 用面板 API 生成一次性 tmp_token 登录地址（有效期 120 秒），前端立即打开；
@@ -423,14 +434,34 @@ func (a *API) handleServerPanelLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	loginURL, err := client.LoginURL(r.Context())
+	insecureFallback := false
+	if err != nil && !secret.InsecureSkipVerify && isPanelCertificateError(err) {
+		// 宝塔默认使用自签证书。登录只是生成一次性 URL，不应因为控制端没有
+		// 安装面板 CA 就直接失败；这里做一次「仅本次登录」的跳过校验重试。
+		// 不写回凭据，避免静默降低后续部署/探测通道的安全性。
+		fallback, ferr := baota.New(baota.Config{
+			BaseURL:            secret.PanelURL,
+			APIKey:             secret.APIKey,
+			InsecureSkipVerify: true,
+		})
+		if ferr == nil {
+			if retryURL, retryErr := fallback.LoginURL(r.Context()); retryErr == nil {
+				loginURL, insecureFallback = retryURL, true
+				err = nil
+				a.logger.Warn("宝塔面板证书校验失败，已为本次登录跳过校验", "server_id", id)
+			}
+		}
+	}
 	if err != nil {
 		a.logger.Warn("宝塔面板临时登录失败", "server_id", id, "error", err)
 		writeError(w, http.StatusBadGateway, codeInternal, "宝塔面板登录失败: "+err.Error())
 		return
 	}
 	a.auditManual(r, "server.panel_login", "server", id,
-		fmt.Sprintf(`{"credential_id":%q}`, cred.ID))
-	writeData(w, http.StatusOK, map[string]any{"url": loginURL, "expires_in": 120})
+		fmt.Sprintf(`{"credential_id":%q,"insecure_fallback":%t}`, cred.ID, insecureFallback))
+	writeData(w, http.StatusOK, map[string]any{
+		"url": loginURL, "expires_in": 120, "insecure_skip_verify": insecureFallback,
+	})
 }
 
 // handleCreateServer 处理 POST /api/v1/servers。

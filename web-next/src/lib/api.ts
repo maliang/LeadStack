@@ -3103,7 +3103,11 @@ export const api = {
   },
 
   /** POST /servers/{id}/panel-login —— 生成一次性宝塔登录地址（120 秒内有效） */
-  serverPanelLogin(id: string): Promise<{ url: string; expires_in: number }> {
+  serverPanelLogin(id: string): Promise<{
+    url: string
+    expires_in: number
+    insecure_skip_verify?: boolean
+  }> {
     return request(`/servers/${encodeURIComponent(id)}/panel-login`, { method: 'POST' })
   },
 
