@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { useI18n } from '@/i18n'
-import type { Server, ServerLoginResult } from '@/lib/api'
+import type { Credential, Server, ServerLoginResult } from '@/lib/api'
+import { api } from '@/lib/api'
 import { writeClipboard } from '@/lib/clipboard'
 import { LOGIN_SCRIPT_SAMPLES } from '@/lib/login-samples'
 import {
@@ -47,7 +47,100 @@ const emit = defineEmits<{
   (event: 'open-url'): void
   (event: 'save', payload: { login_script: string }): void
   (event: 'open-panel'): void
+  (event: 'panel-saved'): void
 }>()
+
+const panelUrl = ref('')
+const panelKey = ref('')
+const panelInsecure = ref(false)
+const panelSaving = ref(false)
+const panelFormError = ref<string | null>(null)
+const panelNotice = ref<string | null>(null)
+const panelCredential = ref<Credential | null>(null)
+
+async function loadPanelCredential(): Promise<void> {
+  panelNotice.value = null
+  panelFormError.value = null
+  panelCredential.value = null
+  panelUrl.value = ''
+  panelKey.value = ''
+  panelInsecure.value = false
+  if (!props.server.panel_credential_id) return
+  try {
+    const list = await api.credentials()
+    const found = list.find((item) => item.id === props.server.panel_credential_id) ?? null
+    panelCredential.value = found
+    if (found) {
+      panelUrl.value = found.panel_url ?? ''
+      panelInsecure.value = found.insecure_skip_verify
+    }
+  } catch (err) {
+    panelFormError.value = err instanceof Error ? err.message : String(err)
+  }
+}
+
+async function savePanel(): Promise<void> {
+  panelFormError.value = null
+  panelNotice.value = null
+  if (panelUrl.value.trim() === '') {
+    panelFormError.value = t('server.login.panelUrlRequired')
+    return
+  }
+  if (!props.panelBound && panelKey.value.trim() === '') {
+    panelFormError.value = t('server.login.panelKeyRequired')
+    return
+  }
+  panelSaving.value = true
+  try {
+    let id = panelCredential.value?.id ?? ''
+    if (id) {
+      await api.updateCredential(id, {
+        panel_url: panelUrl.value.trim(),
+        insecure_skip_verify: panelInsecure.value,
+        ...(panelKey.value.trim() !== '' ? { api_key: panelKey.value.trim() } : {}),
+      })
+    } else {
+      const created = await api.createCredential({
+        name: `${props.server.name}-baota`,
+        kind: 'baota',
+        panel_url: panelUrl.value.trim(),
+        api_key: panelKey.value.trim(),
+        insecure_skip_verify: panelInsecure.value,
+      })
+      id = created.id
+      await api.updateServer(props.server.id, { panel_credential_id: id })
+    }
+    panelKey.value = ''
+    panelNotice.value = t('server.login.panelSaved')
+    await loadPanelCredential()
+    emit('panel-saved')
+  } catch (err) {
+    panelFormError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    panelSaving.value = false
+  }
+}
+
+async function unbindPanel(): Promise<void> {
+  panelSaving.value = true
+  panelFormError.value = null
+  try {
+    await api.updateServer(props.server.id, { panel_credential_id: '' })
+    panelNotice.value = t('server.login.panelUnboundDone')
+    await loadPanelCredential()
+    emit('panel-saved')
+  } catch (err) {
+    panelFormError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    panelSaving.value = false
+  }
+}
+
+watch(
+  () => [props.server.id, props.server.panel_credential_id],
+  () => void loadPanelCredential(),
+  { immediate: true },
+)
 
 const { t } = useI18n()
 
@@ -217,10 +310,31 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </header>
-      <p v-if="!panelBound" class="ls-field__hint">
-        {{ t('server.login.panelUnbound') }}
-        <RouterLink to="/credentials">{{ t('server.login.panelOpenCredentials') }}</RouterLink>
-      </p>
+      <p v-if="!panelBound && !canWrite" class="ls-field__hint">{{ t('server.login.panelUnbound') }}</p>
+      <div v-if="canWrite" class="ls-form__row">
+        <label class="ls-field" for="server-panel-url">
+          <span class="ls-field__label">{{ t('server.login.panelUrl') }}</span>
+          <input id="server-panel-url" v-model="panelUrl" class="ls-input" type="url" placeholder="https://1.2.3.4:8888" autocomplete="off" />
+        </label>
+        <label class="ls-field" for="server-panel-key">
+          <span class="ls-field__label">{{ t('server.login.panelKey') }}</span>
+          <input id="server-panel-key" v-model="panelKey" class="ls-input" type="password" autocomplete="new-password" :placeholder="panelBound ? t('server.form.secretKeepHint') : ''" />
+        </label>
+      </div>
+      <label v-if="canWrite" class="ls-check">
+        <input v-model="panelInsecure" type="checkbox" />
+        <span>{{ t('server.login.panelInsecure') }}</span>
+      </label>
+      <div v-if="canWrite" class="ls-card__actions">
+        <button id="server-panel-save" class="ls-btn ls-btn--primary ls-btn--small" type="button" :disabled="panelSaving" @click="savePanel">
+          {{ panelSaving ? t('common.saving') : t('common.save') }}
+        </button>
+        <button v-if="panelBound" id="server-panel-unbind" class="ls-btn ls-btn--danger ls-btn--small" type="button" :disabled="panelSaving" @click="unbindPanel">
+          {{ t('server.login.panelUnbind') }}
+        </button>
+      </div>
+      <p v-if="panelNotice" class="ls-field__hint" role="status">{{ panelNotice }}</p>
+      <p v-if="panelFormError" class="ls-field__error" role="alert">{{ panelFormError }}</p>
       <div v-if="panelError" class="ls-notice ls-notice--error" role="alert">
         <p class="ls-notice__text">{{ panelError }}</p>
       </div>

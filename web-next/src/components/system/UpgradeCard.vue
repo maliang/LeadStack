@@ -6,12 +6,16 @@ import { useCan } from '@/composables/useCan'
 import { useI18n } from '@/i18n'
 import { api, type UpdateInfo, type UpdateStatus } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
+import { renderReleaseNotes } from '@/lib/release-notes'
 import {
   formatBytes,
   formatDateTime,
   isTerminalPhase,
   phaseLabelKey,
+  phaseProgress,
+  phaseStepIndex,
   phaseTone,
+  UPGRADE_STEPS,
   resolveLostJobOutcome,
   validateUpdateFile,
 } from '@/lib/upgrade'
@@ -69,6 +73,7 @@ const upgradable = computed(() => info.value?.upgradable !== false)
 const serverUpgradeEnabled = computed(() => info.value?.upgrade_enabled !== false)
 const publishedText = computed(() => formatDateTime(info.value?.published_at) || t('upgrade.noRelease'))
 const notesText = computed(() => info.value?.notes?.trim() || null)
+const notesHtml = computed(() => (notesText.value ? renderReleaseNotes(notesText.value) : ''))
 /** 服务端 200 里的 info.error 优先（要求原样展示）；HTTP 抛错时用 errorMessage 的结果。 */
 const checkFailure = computed(() => info.value?.error?.trim() || requestError.value)
 const jobTerminal = computed(() => isTerminalPhase(job.value?.phase))
@@ -76,6 +81,9 @@ const jobBusy = computed(() => jobStarted.value && !jobTerminal.value)
 const uploadBlocked = computed(() => uploading.value || jobBusy.value)
 const phaseText = computed(() => t(phaseLabelKey(job.value?.phase)))
 const phaseModifier = computed(() => `ls-upgrade__phase--${phaseTone(job.value?.phase)}`)
+const progressPct = computed(() => phaseProgress(job.value?.phase))
+const stepIndex = computed(() => phaseStepIndex(job.value?.phase))
+const progressTone = computed(() => (job.value?.phase === 'failed' || job.value?.phase === 'stalled' ? 'danger' : job.value?.phase === 'rolled_back' ? 'warning' : 'normal'))
 const showStallWarning = computed(() => Boolean(job.value?.stalled) && !jobTerminal.value)
 const canApply = computed(() => hasUpdate.value && upgradable.value && serverUpgradeEnabled.value)
 const applyDisabled = computed(() => !canApply.value || jobBusy.value || applying.value)
@@ -349,7 +357,7 @@ onBeforeUnmount(() => {
             {{ t('upgrade.schemaChanged') }}
           </span>
         </h3>
-        <p v-if="notesText" id="upgrade-notes" class="ls-upgrade__notes">{{ notesText }}</p>
+        <div v-if="notesHtml" id="upgrade-notes" class="ls-upgrade__notes ls-markdown" v-html="notesHtml" />
         <p v-else id="upgrade-notes" class="ls-upgrade__hint">{{ t('upgrade.noNotes') }}</p>
       </section>
 
@@ -414,6 +422,32 @@ onBeforeUnmount(() => {
           <span id="upgrade-phase">{{ phaseText }}</span>
           <span v-if="elapsedText" id="upgrade-elapsed" class="ls-upgrade__elapsed">{{ elapsedText }}</span>
         </p>
+        <div
+          id="upgrade-progress"
+          class="ls-upgrade__bar"
+          role="progressbar"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="progressPct"
+          :aria-valuetext="`${progressPct}%`"
+        >
+          <div class="ls-upgrade__bar-fill" :class="`ls-upgrade__bar-fill--${progressTone}`" :style="{ width: `${progressPct}%` }" />
+        </div>
+        <ol class="ls-upgrade__steps" :aria-label="t('upgrade.steps')">
+          <li
+            v-for="(step, index) in UPGRADE_STEPS"
+            :key="step.phase"
+            class="ls-upgrade__step"
+            :class="{
+              'ls-upgrade__step--done': index < stepIndex || job?.phase === 'success',
+              'ls-upgrade__step--current': index === stepIndex && job?.phase !== 'success',
+              'ls-upgrade__step--failed': index === stepIndex && (job?.phase === 'failed' || job?.phase === 'stalled'),
+            }"
+          >
+            <span class="ls-upgrade__step-dot" aria-hidden="true" />
+            {{ t(step.labelKey) }}
+          </li>
+        </ol>
         <p v-if="job?.target_version" class="ls-upgrade__hint">
           {{ t('upgrade.target', { version: job.target_version }) }}
         </p>

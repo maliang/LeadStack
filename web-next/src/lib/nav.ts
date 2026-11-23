@@ -70,7 +70,6 @@ export const NAV_GROUPS: NavGroup[] = [
     key: 'system',
     labelKey: 'nav.group.system',
     items: [
-      { to: '/credentials', labelKey: 'nav.credentials', icon: 'key', permission: 'server.write' },
       { to: '/users', labelKey: 'nav.users', icon: 'users', permission: 'user.manage' },
       { to: '/tokens', labelKey: 'nav.tokens', icon: 'key-round', permission: 'token.manage' },
       { to: '/roles', labelKey: 'nav.roles', icon: 'shield-check', permission: 'role.manage' },
@@ -127,7 +126,6 @@ const SIMPLE_CRUMBS: Record<string, Crumb> = {
   '/apps': { labelKey: 'nav.apps' },
   '/releases': { labelKey: 'nav.releases' },
   '/templates': { labelKey: 'nav.templates' },
-  '/credentials': { labelKey: 'nav.credentials' },
   '/users': { labelKey: 'nav.users' },
   '/tokens': { labelKey: 'nav.tokens' },
   '/roles': { labelKey: 'nav.roles' },

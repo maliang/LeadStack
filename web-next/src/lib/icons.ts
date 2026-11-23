@@ -101,6 +101,10 @@ const ICON_PATHS = {
     { tag: 'circle', attrs: { cx: 12, cy: 12, r: 9 } },
     { tag: 'path', attrs: { d: 'M12 11v5M12 8h.01' } },
   ],
+  upgrade: [
+    { tag: 'circle', attrs: { cx: 12, cy: 12, r: 9 } },
+    { tag: 'path', attrs: { d: 'M12 16V8M8.5 11.5 12 8l3.5 3.5' } },
+  ],
   logout: [
     {
       tag: 'path',

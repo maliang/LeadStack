@@ -9,12 +9,12 @@
  * 不是正则数文件，避免「模块写了但没拼进 routes」这类假通过。
  *
  * 口径：
- * - 业务路由 = 菜单可达页 + 详情页 + /templates + /settings（23 条，与 src/lib/nav.ts 的 NAV_GROUPS 条目数一致）；
+ * - 业务路由 = 菜单可达页 + 详情页 + /templates + /settings（22 条，与 src/lib/nav.ts 的 NAV_GROUPS 条目数一致）；
  * - 独立页/兜底 = /login /forbidden /about /:pathMatch(.*)*（4 条）；
- * - 注册总数 27 条。
+ * - 注册总数 26 条。
  *
  * 用法：
- *   node scripts/check-route-count.mjs          # 断言业务路由 23 条
+ *   node scripts/check-route-count.mjs          # 断言业务路由 22 条
  *   node scripts/check-route-count.mjs 23       # 显式给预期业务路由数（验收命令用）
  *
  * 退出码：0 全部一致 / 1 任一断言失败。
@@ -28,8 +28,8 @@ const root = resolve(scriptDir, '..')
 const ROUTES_DIR = resolve(root, 'src/router/routes')
 const ROUTER_FILE = resolve(root, 'src/router/index.ts')
 
-/** 注册总数：27 条（23 业务 + 4 独立页/兜底）。 */
-const EXPECTED_TOTAL = 27
+/** 注册总数：26 条（22 业务 + 4 独立页/兜底）。 */
+const EXPECTED_TOTAL = 26
 /** 独立页与兜底：不挂菜单、不计入业务路由。 */
 const MISC_PATHS = new Set(['/login', '/forbidden', '/about', '/:pathMatch(.*)*'])
 
@@ -50,7 +50,6 @@ const BASELINE = [
   ['/releases', 'releases', 'nav.releases', 'deploy.read', null],
   ['/releases/:id', 'release-detail', 'crumb.releaseDetail', 'deploy.read', null],
   ['/templates', 'templates', 'nav.templates', 'deploy.read', null],
-  ['/credentials', 'credentials', 'nav.credentials', 'server.write', null],
   ['/users', 'users', 'nav.users', 'user.manage', null],
   ['/roles', 'roles', 'nav.roles', 'role.manage', null],
   ['/groups', 'groups', 'nav.groups', 'server.read', null],
@@ -70,7 +69,7 @@ function check(ok, message) {
 }
 
 const arg = process.argv[2]
-const expectedBusiness = arg === undefined ? 23 : Number(arg)
+const expectedBusiness = arg === undefined ? 22 : Number(arg)
 if (!Number.isInteger(expectedBusiness) || expectedBusiness <= 0) {
   console.error(`check:routes 参数错误：预期业务路由数必须是正整数，收到 ${JSON.stringify(arg)}`)
   process.exit(1)

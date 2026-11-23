@@ -2716,6 +2716,8 @@ export interface UpdateServerPayload {
   port?: number
   tags?: string[]
   group?: string | null
+  /** 服务器自己的 SSH 凭证（空串解绑） */
+  credential_id?: string | null
   /** 整包替换；缺省表示不改（契约第 55.4 节） */
   group_ids?: string[]
   panel_credential_id?: string | null
@@ -3187,6 +3189,16 @@ export const api = {
     return request<unknown>('/credentials', { method: 'POST', body: payload }).then(
       normalizeCredential,
     )
+  },
+
+  updateCredential(
+    id: string,
+    payload: Partial<Omit<CreateCredentialPayload, 'kind'>>,
+  ): Promise<Credential> {
+    return request<unknown>(`/credentials/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: payload,
+    }).then(normalizeCredential)
   },
 
   /** POST /credentials/{id}/test —— 仅宝塔凭据支持 */

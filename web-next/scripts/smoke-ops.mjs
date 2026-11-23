@@ -2,7 +2,7 @@
 /**
  * 系统杂项六页冒烟（hermetic：Playwright 无头 + 内存 mock API，不碰真后端）。
  *
- * 覆盖 /tokens /audit /backups /settings /credentials /groups：
+ * 覆盖 /tokens /audit /backups /settings /groups：
  *   ① 六页都能渲染且标题正确；
  *   ② 令牌签发后明文只出现一次，关闭弹窗与刷新页面后都读不到；吊销令牌发出 DELETE；
  *   ③ 审计页无任何编辑/删除按钮，筛选参数与 cursor 分页正确，详情可展开；
@@ -642,7 +642,6 @@ const TITLES = {
   '/audit': '审计日志',
   '/backups': '备份',
   '/settings': '设置',
-  '/credentials': '凭证管理',
   '/groups': '服务器分组',
 }
 
@@ -653,7 +652,6 @@ const PAGE_ROOT = {
   '/audit': '.ls-auditpage',
   '/backups': '.ls-backupspage',
   '/settings': '.ls-settingspage',
-  '/credentials': '.ls-credentialspage',
   '/groups': '.ls-groupspage',
 }
 
@@ -1202,16 +1200,19 @@ async function run() {
       await page.locator('#settings-active-listen').innerText(),
     )
 
-    await page.fill('#settings-old-password', 'old-pass')
-    await page.fill('#settings-new-password', 'another-pass')
-    await page.fill('#settings-confirm-password', 'mismatch-pass')
-    await page.click('#settings-password-submit')
-    await page.waitForSelector('#settings-password-error', { timeout: 5000 })
+    await page.click('#topbar-account')
+    await page.locator('.ls-topbar-account__menu .ls-topbar-account__item', { hasText: '修改密码' }).click()
+    await page.waitForSelector('#profile-old-password', { timeout: 5000 })
+    await page.fill('#profile-old-password', 'old-pass')
+    await page.fill('#profile-new-password', 'another-pass')
+    await page.fill('#profile-confirm-password', 'mismatch-pass')
+    await page.locator('.ls-modal__foot .ls-btn--primary').click()
+    await page.waitForSelector('#profile-password-error', { timeout: 5000 })
     check('两次新密码不一致时不发请求', state.passwordChanges.length === 0)
 
-    await page.fill('#settings-confirm-password', 'another-pass')
-    await page.click('#settings-password-submit')
-    await page.waitForSelector('#settings-password-notice', { timeout: 8000 })
+    await page.fill('#profile-confirm-password', 'another-pass')
+    await page.locator('.ls-modal__foot .ls-btn--primary').click()
+    await page.waitForSelector('#profile-password-notice', { timeout: 8000 })
     check(
       '密码一致时提交一次修改请求',
       state.passwordChanges.length === 1 && state.passwordChanges[0].new_password === 'another-pass',
@@ -1219,155 +1220,6 @@ async function run() {
     )
 
     /* ============ ⑥ 凭据 ============ */
-    await gotoPage(page, base, '/credentials', '.ls-credentialspage__row')
-    const credentialHtml = await page.content()
-    check('凭据列表渲染三行', (await page.locator('.ls-credentialspage__row').count()) === 3)
-    check(
-      '凭据列表不含明文密码/私钥',
-      !credentialHtml.includes(SEEDED_PASSWORD) && !credentialHtml.includes(SEEDED_KEY),
-    )
-    check(
-      '凭据行只显示类型与指纹',
-      (await page.locator('[data-credential-id="cred-1"]').innerText()).includes('密码') &&
-        (await page.locator('#credentials-count').innerText()).includes('3'),
-    )
-    // 类型列必须走 i18n 标签，不得把后端枚举值 baota 直接显示给用户。
-    const baotaKindText = await page.locator('[data-credential-id="cred-baota"] .ls-chip').innerText()
-    const allChipTexts = await page.locator('.ls-chip').allInnerTexts()
-    check(
-      '宝塔凭据类型列显示「宝塔面板」，整页 chip 不出现英文枚举值 baota',
-      baotaKindText === '宝塔面板' && allChipTexts.every((text) => !text.includes('baota')),
-      `baotaKind=${baotaKindText} chips=${allChipTexts.join(' | ')}`,
-    )
-
-    // 能力边界：后端 POST /credentials/{id}/test 只支持宝塔凭据，
-    // SSH 行（password/key）不渲染按钮、不发请求，只给一句到服务器详情页测试的提示。
-    const sshTestButtons =
-      (await page.locator('[data-credential-kind="password"] .ls-credentialspage__test').count()) +
-      (await page.locator('[data-credential-kind="key"] .ls-credentialspage__test').count())
-    check(
-      '只有宝塔凭据能测试：SSH 行测试按钮 count=0 且该接口请求数 0',
-      sshTestButtons === 0 && state.credentialTests.length === 0,
-      `sshButtons=${sshTestButtons} requests=${state.credentialTests.join(',')}`,
-    )
-    check(
-      '只有宝塔凭据能测试：宝塔行渲染 1 个测试按钮、SSH 行工具栏不出现该按钮',
-      (await page.locator('[data-credential-id="cred-baota"] .ls-credentialspage__test').count()) === 1 &&
-        (await page.locator('[data-credential-id="cred-1"] .ls-credentialspage__test').count()) === 0 &&
-        (await page.locator('[data-credential-id="cred-2"] .ls-credentialspage__test').count()) === 0,
-    )
-    const sshHintTexts = await page.locator('[data-credential-test-hint]').allInnerTexts()
-    check(
-      'SSH 行就地提示「SSH 凭据请到服务器详情页测试连通性」',
-      sshHintTexts.length === 2 &&
-        sshHintTexts.every((text) => text.includes('SSH 凭据请到服务器详情页测试连通性')) &&
-        (await page.locator('[data-credential-id="cred-baota"] [data-credential-test-hint]').count()) === 0,
-      sshHintTexts.join(' | '),
-    )
-
-    await page.click('#credentials-create-open')
-    await page.waitForSelector('#credentials-create-form', { timeout: 5000 })
-    await page.fill('#credentials-name', 'smoke-password')
-    await page.fill('#credentials-username', 'root')
-    await page.fill('#credentials-password', NEW_PASSWORD)
-    await page.click('#credentials-create-submit')
-    await page.waitForTimeout(500)
-    check(
-      '新建密码凭据的请求体含密码',
-      state.credentialCreates.length === 1 &&
-        state.credentialCreates[0].kind === 'password' &&
-        state.credentialCreates[0].password === NEW_PASSWORD,
-    )
-    check('新建成功后创建弹窗自动关闭', (await page.locator('#credentials-create-form').count()) === 0)
-    check('新建后弹窗关闭且明文未回显', !(await page.content()).includes(NEW_PASSWORD))
-    check('新建后列表出现新凭证', (await page.locator('[data-credential-id="cred-new"]').count()) === 1)
-
-    await page.click('#credentials-create-open')
-    await page.waitForSelector('#credentials-create-form', { timeout: 5000 })
-    await page.check('#credentials-kind-key')
-    await page.waitForSelector('#credentials-key', { timeout: 5000 })
-    await page.fill('#credentials-name', 'smoke-key')
-    await page.fill('#credentials-username', 'deploy')
-    await page.fill('#credentials-key', SEEDED_KEY)
-    await page.click('#credentials-create-submit')
-    await page.waitForTimeout(500)
-    check(
-      '新建私钥凭据的请求体含 private_key',
-      state.credentialCreates.length === 2 &&
-        state.credentialCreates[1].kind === 'key' &&
-        state.credentialCreates[1].private_key === SEEDED_KEY,
-    )
-    check('私钥提交后仍未回显到页面', !(await page.content()).includes(SEEDED_KEY))
-
-    await page.click('[data-credential-id="cred-2"] .ls-credentialspage__delete')
-    await page.waitForSelector('#credentials-delete-confirm', { timeout: 5000 })
-    await page.click('#credentials-delete-confirm')
-    await page.waitForSelector('[data-credential-id="cred-2"]', { state: 'detached', timeout: 8000 })
-    check('删除凭据发出 DELETE 且行消失', state.credentialDeletes.join(',') === 'cred-2', state.credentialDeletes.join(','))
-
-    // 凭据「测试」按钮（只有宝塔凭据才有）：POST /credentials/{id}/test 恰好 1 次；
-    // 成功/失败文案就地展示，成功后端 message 是「面板连接正常」。
-    state.credentialTestResult = { ok: true, message: '面板连接正常' }
-    state.credentialTests = []
-    await page.click('[data-credential-id="cred-baota"] .ls-credentialspage__test')
-    await page.waitForSelector('[data-credential-id="cred-baota"] [data-credential-test="ok"]', { timeout: 5000 })
-    check(
-      'testCredential 成功态：点击后只发 1 次 POST /credentials/{id}/test',
-      state.credentialTests.length === 1 && state.credentialTests[0] === 'cred-baota',
-      state.credentialTests.join(','),
-    )
-    check(
-      'testCredential 成功态：ok=true 时就地显示成功文案',
-      (await page.locator('[data-credential-id="cred-baota"] .ls-credentialspage__test-result').innerText()).includes(
-        '面板连接正常',
-      ),
-      await page.locator('[data-credential-id="cred-baota"] .ls-credentialspage__test-result').innerText(),
-    )
-
-    // 后端 ok=false 的真实形态：宝塔面板连不上，message 为「面板连接失败：<err>」（指向 127.0.0.1:1）。
-    state.credentialTestResult = {
-      ok: false,
-      message: '面板连接失败：dial tcp 127.0.0.1:1: connect: connection refused',
-    }
-    await page.click('[data-credential-id="cred-baota"] .ls-credentialspage__test')
-    await page.waitForSelector('[data-credential-id="cred-baota"] [data-credential-test="fail"]', { timeout: 5000 })
-    check(
-      'testCredential 失败态：第二次点击仍只新增 1 次请求（累计 2 次）',
-      state.credentialTests.length === 2 && state.credentialTests[1] === 'cred-baota',
-      state.credentialTests.join(','),
-    )
-    const failureText = await page
-      .locator('[data-credential-id="cred-baota"] .ls-credentialspage__test-result')
-      .innerText()
-    check(
-      'testCredential 失败态：界面逐字出现「面板连接失败：…」且指向 127.0.0.1:1',
-      failureText.trim() === '面板连接失败：dial tcp 127.0.0.1:1: connect: connection refused' &&
-        failureText.includes('面板连接失败：') &&
-        failureText.includes('127.0.0.1:1'),
-      failureText.trim(),
-    )
-
-    // mock 契约：password/key 凭据的 test 接口若真被调用，必须 400 + 真实后端文案
-    //（而不是 p3 的 {ok:true,message:'SSH 连接成功'}，真实后端永远不会产生该形态）。
-    const sshTestProbe = await page.evaluate(async () => {
-      const response = await fetch('/api/v1/credentials/cred-1/test', { method: 'POST' })
-      let payload = null
-      try {
-        payload = await response.json()
-      } catch {
-        payload = null
-      }
-      return { status: response.status, message: payload?.error?.message ?? '' }
-    })
-    check(
-      'mock 契约：SSH 凭据的 test 接口返回 400 + 「该凭证不是宝塔面板类型…」',
-      sshTestProbe.status === 400 &&
-        sshTestProbe.message === '该凭证不是宝塔面板类型；SSH 凭证请到服务器详情做「测试连通性」',
-      `${sshTestProbe.status} ${sshTestProbe.message}`,
-    )
-    // 探针请求不计入后续权限断言：缺 server.write 走路由守卫，要求该接口请求数 0。
-    state.credentialTests = []
-
     /* ============ ⑦ 分组 ============ */
     await gotoPage(page, base, '/groups', '.ls-groupspage__members')
     check('分组列表渲染两行', (await page.locator('.ls-groupspage__row').count()) === 2)
@@ -1458,40 +1310,6 @@ async function run() {
     await page.click('#groups-delete-confirm')
     await page.waitForSelector('[data-group-id="grp-new"]', { state: 'detached', timeout: 8000 })
     check('确认删除分组发出 DELETE 且行消失', state.groupDeletes.join(',') === 'grp-new', state.groupDeletes.join(','))
-
-    /* ============ ⑦.5 凭据测试按钮权限：路由守卫级（/forbidden + 0 请求） ============ */
-    // 本段断言的是路由守卫（/forbidden + 0 请求）：/credentials 的 meta.permission 为
-    // 'server.write'（src/router/routes/system.ts:13），缺权限时路由守卫先拦到 /forbidden，
-    // 凭据页根本不挂载，因此「测试按钮 0、POST 0 次」是路由守卫级结论，页面级 canWrite
-    // （CredentialsPage.vue 的 v-if）在当前路由策略下不可达，属纵深防御。
-    // 若将来放开路由门，此段必须升级为按钮级断言（直接挂载 /credentials 后再验 canWrite）。
-    state.permissions = ALL_PERMISSIONS.filter((permission) => permission !== 'server.write')
-    state.credentialTests = []
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.ls-groupspage', { timeout: 15000 })
-    await gotoPage(page, base, '/credentials')
-    await page.waitForSelector('.ls-forbidden__title', { timeout: 15000 })
-    const forbiddenText = (await page.locator('.ls-forbidden__title').innerText()).trim()
-    check(
-      '路由守卫级：缺 server.write 时 /credentials 被拦到无权限页',
-      forbiddenText.length > 0 && (await page.locator('.ls-credentialspage').count()) === 0,
-      forbiddenText,
-    )
-    check(
-      '路由守卫级：缺 server.write 时测试按钮与结果区 count 为 0',
-      (await page.locator('.ls-credentialspage__test').count()) === 0 &&
-        (await page.locator('[data-credential-test]').count()) === 0,
-    )
-    await page.waitForTimeout(300)
-    check(
-      '路由守卫级：缺 server.write 时 POST /credentials/{id}/test 请求数 0',
-      state.credentialTests.length === 0,
-      state.credentialTests.join(','),
-    )
-
-    // 回到可访问页面，供下一段（备份）的 reload 基于 /groups 重启，避免停在 /forbidden。
-    state.permissions = [...ALL_PERMISSIONS]
-    await gotoPage(page, base, '/groups', '.ls-groupspage')
 
     /* ============ ⑧ 备份权限收敛：缺 restore/write 不渲染且零请求 ============ */
     const LIMITED_PERMISSIONS = ALL_PERMISSIONS.filter(

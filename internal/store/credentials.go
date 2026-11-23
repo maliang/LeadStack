@@ -83,6 +83,30 @@ func (s *Store) GetCredential(ctx context.Context, id string) (*Credential, erro
 	return &c, nil
 }
 
+// UpdateCredential 更新凭证名称 / 用户名 / 密文 / 指纹。
+func (s *Store) UpdateCredential(ctx context.Context, c *Credential) error {
+	if c == nil || c.ID == "" {
+		return errors.New("更新凭证: 缺少 ID")
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE credentials SET name = ?, username = ?, secret_enc = ?, fingerprint = ? WHERE id = ?`,
+		c.Name, c.Username, c.SecretEnc, nullableStr(c.Fingerprint), c.ID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("凭证 %s 已存在: %w", c.Name, ErrConflict)
+		}
+		return fmt.Errorf("更新凭证 %s: %w", c.Name, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("更新凭证 %s 后读取影响行数: %w", c.Name, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("更新凭证 %s: %w", c.ID, ErrNotFound)
+	}
+	return nil
+}
+
 // CountServersUsingCredential 统计引用该凭证的服务器数量。
 func (s *Store) CountServersUsingCredential(ctx context.Context, id string) (int, error) {
 	var n int

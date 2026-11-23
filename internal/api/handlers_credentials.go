@@ -158,6 +158,139 @@ func (a *API) handleCreateCredential(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusCreated, a.enrichCredentialPayload(store.CredentialSummary{Credential: *item, ServerCount: 0}))
 }
 
+// updateCredentialRequest 是 PATCH /credentials/{id} 请求体；nil 表示不改。
+type updateCredentialRequest struct {
+	Name               *string `json:"name"`
+	Username           *string `json:"username"`
+	Password           *string `json:"password"`
+	PrivateKey         *string `json:"private_key"`
+	Passphrase         *string `json:"passphrase"`
+	PanelURL           *string `json:"panel_url"`
+	APIKey             *string `json:"api_key"`
+	InsecureSkipVerify *bool   `json:"insecure_skip_verify"`
+}
+
+// handleUpdateCredential 处理 PATCH /api/v1/credentials/{id}。
+//
+// 语义：字段省略=不改；密码/私钥/API Key 传空串=清空该秘密。类型由提交的字段决定：
+// private_key 非 nil → key；password 非 nil → password；panel_url/api_key → 仍为 baota。
+func (a *API) handleUpdateCredential(w http.ResponseWriter, r *http.Request) {
+	if a.cipher == nil {
+		writeError(w, http.StatusServiceUnavailable, codeInternal, "凭证加密未启用（缺少主密钥）")
+		return
+	}
+	id := chi.URLParam(r, "credentialID")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "缺少凭证 ID")
+		return
+	}
+	var req updateCredentialRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
+		return
+	}
+	if req.Name == nil && req.Username == nil && req.Password == nil && req.PrivateKey == nil &&
+		req.Passphrase == nil && req.PanelURL == nil && req.APIKey == nil && req.InsecureSkipVerify == nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument,
+			"至少需要提供 name/username/password/private_key/passphrase/panel_url/api_key/insecure_skip_verify 之一")
+		return
+	}
+	current, err := a.st.GetCredential(r.Context(), id)
+	if err != nil {
+		a.writeStoreError(w, r, err)
+		return
+	}
+	plain, err := a.cipher.Decrypt(current.SecretEnc)
+	if err != nil {
+		a.internalError(w, r, fmt.Errorf("解密凭证失败: %w", err))
+		return
+	}
+	secret, err := credential.Unmarshal(plain)
+	if err != nil {
+		a.internalError(w, r, fmt.Errorf("解析凭证失败: %w", err))
+		return
+	}
+
+	name := current.Name
+	if req.Name != nil {
+		name = strings.TrimSpace(*req.Name)
+		if err := validateText("name", name, maxCredentialNameRunes, true); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+	}
+	switch current.Kind {
+	case string(credential.KindBaota):
+		if req.PanelURL != nil {
+			secret.PanelURL = strings.TrimSpace(*req.PanelURL)
+		}
+		if req.APIKey != nil {
+			secret.APIKey = strings.TrimSpace(*req.APIKey)
+		}
+		if req.InsecureSkipVerify != nil {
+			secret.InsecureSkipVerify = *req.InsecureSkipVerify
+		}
+	default:
+		username := current.Username
+		if req.Username != nil {
+			username = strings.TrimSpace(*req.Username)
+		} else if secret.Username != "" {
+			username = secret.Username
+		}
+		if err := validateText("username", username, maxCredentialUserRunes, true); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		secret.Username = username
+		if req.PrivateKey != nil {
+			secret.Kind = credential.KindKey
+			secret.PrivateKey = []byte(*req.PrivateKey)
+			secret.Password = ""
+		} else if req.Password != nil {
+			secret.Kind = credential.KindPassword
+			secret.Password = *req.Password
+			secret.PrivateKey = nil
+		}
+		if req.Passphrase != nil {
+			secret.Passphrase = *req.Passphrase
+		}
+	}
+
+	if err := credential.Validate(secret); err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "凭证内容不合法: "+err.Error())
+		return
+	}
+	var fingerprint *string
+	if secret.Kind == credential.KindKey {
+		fp, err := credential.Fingerprint(secret.PrivateKey)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, "私钥指纹计算失败: "+err.Error())
+			return
+		}
+		fingerprint = &fp
+	}
+	encoded, err := credential.Marshal(secret)
+	if err != nil {
+		a.internalError(w, r, fmt.Errorf("序列化凭证: %w", err))
+		return
+	}
+	encrypted, err := a.cipher.Encrypt(encoded)
+	if err != nil {
+		a.internalError(w, r, fmt.Errorf("加密凭证: %w", err))
+		return
+	}
+	updated := &store.Credential{
+		ID: current.ID, Name: name, Kind: string(secret.Kind), Username: secret.Username,
+		SecretEnc: encrypted, Fingerprint: fingerprint, CreatedAt: current.CreatedAt,
+	}
+	if err := a.st.UpdateCredential(r.Context(), updated); err != nil {
+		a.writeStoreError(w, r, err)
+		return
+	}
+	a.logger.Info("更新凭证", "credential_id", updated.ID, "name", updated.Name, "kind", updated.Kind)
+	writeData(w, http.StatusOK, a.enrichCredentialPayload(store.CredentialSummary{Credential: *updated}))
+}
+
 // handleDeleteCredential 处理 DELETE /api/v1/credentials/{id}。
 //
 // 仍被服务器引用时返回 409 conflict（HTTP 层由 writeStoreError 映射）。

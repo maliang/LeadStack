@@ -17,7 +17,7 @@ import UpgradeCard from '@/components/system/UpgradeCard.vue'
 const { t, language } = useI18n()
 const { mode: themeMode } = useTheme()
 const { can } = useCan()
-const { user, scope } = useAuth()
+const { scope } = useAuth()
 
 /** 读取 language 建立渲染依赖：切换语言后整页（含新卡片标签）重新渲染。 */
 const htmlLang = computed(() => (language.value === 'en-US' ? 'en' : 'zh-CN'))
@@ -71,10 +71,6 @@ const themeModeModel = computed({
 const canManage = computed(() => can('system.manage'))
 const canNetwork = computed(() => canManage.value && scope.value.mode === 'all')
 
-const info = ref<SystemInfo | null>(null)
-const infoError = ref<string | null>(null)
-const infoLoading = ref(false)
-
 const network = ref<NetworkConfig | null>(null)
 const networkError = ref<string | null>(null)
 const networkState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -84,32 +80,9 @@ const networkFieldError = ref<string | null>(null)
 
 const form = ref({ listen: '', publicUrl: '', sshPort: '22' })
 
-const passwordForm = ref({ old: '', next: '', confirm: '' })
-const passwordBusy = ref(false)
-const passwordError = ref<string | null>(null)
-const passwordNotice = ref<string | null>(null)
-
-/**
- * 角色名优先用后端给的 role_name（自定义角色没有 role.<key> 文案，
- * 直接拼 key 会把 `role.auditor` 这样的内部标识显示到界面上）。
- * 内置角色没有 role_name 时才查词表，查不到再退回 key。
- */
-const roleLabel = computed(() => {
-  const current = user.value
-  if (!current) return t('common.na')
-  if (current.role_name) return current.role_name
-  const key = `role.${current.role}`
-  const translated = t(key)
-  return translated === key ? current.role : translated
-})
-
-function syncForm(data: NetworkConfig): void {
-  form.value = {
-    listen: data.listen ?? data.active_listen,
-    publicUrl: data.public_url ?? '',
-    sshPort: String(data.default_ssh_port),
-  }
-}
+const info = ref<SystemInfo | null>(null)
+const infoError = ref<string | null>(null)
+const infoLoading = ref(false)
 
 async function loadInfo(): Promise<void> {
   infoLoading.value = true
@@ -122,6 +95,15 @@ async function loadInfo(): Promise<void> {
     infoLoading.value = false
   }
 }
+
+function syncForm(data: NetworkConfig): void {
+  form.value = {
+    listen: data.listen ?? data.active_listen,
+    publicUrl: data.public_url ?? '',
+    sshPort: String(data.default_ssh_port),
+  }
+}
+
 
 async function loadNetwork(): Promise<void> {
   if (!canNetwork.value) return
@@ -200,31 +182,6 @@ async function saveNetwork(): Promise<void> {
   }
 }
 
-async function changePassword(): Promise<void> {
-  passwordError.value = null
-  passwordNotice.value = null
-  if (!passwordForm.value.old || passwordForm.value.next.length < 6) {
-    passwordError.value = t('users.errorPassword')
-    return
-  }
-  if (passwordForm.value.next !== passwordForm.value.confirm) {
-    passwordError.value = t('settings.passwordMismatch')
-    return
-  }
-  passwordBusy.value = true
-  try {
-    await api.changeMyPassword({
-      old_password: passwordForm.value.old,
-      new_password: passwordForm.value.next,
-    })
-    passwordForm.value = { old: '', next: '', confirm: '' }
-    passwordNotice.value = t('users.ownPasswordChanged')
-  } catch (caught) {
-    passwordError.value = errorMessage(caught, t('common.error'))
-  } finally {
-    passwordBusy.value = false
-  }
-}
 
 onMounted(() => {
   void loadInfo()
@@ -242,101 +199,20 @@ onMounted(() => {
     </header>
 
     <div class="ls-settingspage__grid">
-      <section class="ls-card">
+      <section class="ls-card ls-settingspage__wide">
         <header class="ls-card__head">
-          <h2 class="ls-card__title">{{ t('settings.account') }}</h2>
-          <p class="ls-card__note">{{ t('ops.settings.accountHint') }}</p>
+          <div class="ls-card__heading">
+            <h2 class="ls-card__title">{{ t('settings.version') }}</h2>
+            <p class="ls-card__note">{{ t('ops.settings.accountHint') }}</p>
+          </div>
         </header>
-        <dl class="ls-settingspage__dl">
-          <dt>{{ t('users.username') }}</dt>
-          <dd>{{ user?.username ?? t('common.na') }}</dd>
-          <dt>{{ t('users.role') }}</dt>
-          <dd>{{ roleLabel }}</dd>
-          <dt>{{ t('settings.version') }}</dt>
-          <dd id="settings-version">
-            <span v-if="infoLoading" class="ls-spinner" aria-hidden="true" />
-            <template v-else-if="info">{{ info.version }}</template>
-            <template v-else>{{ infoError ?? t('ops.settings.versionUnavailable') }}</template>
-          </dd>
-        </dl>
-        <div v-if="infoError" class="ls-notice ls-notice--error" role="alert">
-          <p class="ls-notice__text">{{ infoError }}</p>
-          <button id="settings-info-retry" class="ls-notice__action" type="button" @click="loadInfo()">
+        <p id="settings-version" class="ls-settingspage__active">
+          <span v-if="infoLoading" class="ls-spinner" aria-hidden="true" />
+          <code v-else-if="info">{{ info.version }}</code>
+          <span v-else>{{ infoError ?? t('ops.settings.versionUnavailable') }}</span>
+          <button v-if="infoError" id="settings-info-retry" class="ls-btn ls-btn--small" type="button" @click="loadInfo">
             {{ t('common.retry') }}
           </button>
-        </div>
-        <div class="ls-settingspage__links">
-          <RouterLink v-if="can('user.manage')" class="ls-btn ls-btn--small" to="/users">
-            {{ t('settings.manageUsers') }}
-          </RouterLink>
-          <RouterLink v-if="can('server.write')" class="ls-btn ls-btn--small" to="/credentials">
-            {{ t('nav.credentials') }}
-          </RouterLink>
-        </div>
-      </section>
-
-      <section class="ls-card">
-        <header class="ls-card__head">
-          <h2 class="ls-card__title">{{ t('users.changePassword') }}</h2>
-          <p class="ls-card__note">{{ t('ops.settings.securityNote') }}</p>
-        </header>
-        <form id="settings-password-form" class="ls-adminpage__form" @submit.prevent="changePassword">
-          <label class="ls-field">
-            <span class="ls-field__label">{{ t('users.oldPassword') }}</span>
-            <input
-              id="settings-old-password"
-              v-model="passwordForm.old"
-              class="ls-input"
-              type="password"
-              autocomplete="current-password"
-              :disabled="passwordBusy"
-            />
-          </label>
-          <label class="ls-field">
-            <span class="ls-field__label">{{ t('users.newPassword') }}</span>
-            <input
-              id="settings-new-password"
-              v-model="passwordForm.next"
-              class="ls-input"
-              type="password"
-              autocomplete="new-password"
-              :disabled="passwordBusy"
-            />
-          </label>
-          <label class="ls-field">
-            <span class="ls-field__label">{{ t('settings.confirmPassword') }}</span>
-            <input
-              id="settings-confirm-password"
-              v-model="passwordForm.confirm"
-              class="ls-input"
-              type="password"
-              autocomplete="new-password"
-              :disabled="passwordBusy"
-            />
-          </label>
-          <p v-if="passwordError" id="settings-password-error" class="ls-adminpage__form-error" role="alert">
-            {{ passwordError }}
-          </p>
-          <div class="ls-adminpage__primary">
-            <button
-              id="settings-password-submit"
-              class="ls-btn ls-btn--primary"
-              type="submit"
-              :disabled="passwordBusy"
-              :aria-busy="passwordBusy"
-            >
-              <span v-if="passwordBusy" class="ls-spinner" aria-hidden="true" />
-              {{ t('common.save') }}
-            </button>
-          </div>
-        </form>
-        <p
-          v-if="passwordNotice"
-          id="settings-password-notice"
-          class="ls-notice ls-notice--success"
-          role="status"
-        >
-          {{ passwordNotice }}
         </p>
       </section>
 

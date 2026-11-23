@@ -717,6 +717,7 @@ onMounted(() => {
           @open-url="reopenUrl"
           @save="saveLoginScript"
           @open-panel="openPanel"
+          @panel-saved="loadServer(false)"
         />
         <ServerMetaTab
           v-else-if="tab === 'meta'"

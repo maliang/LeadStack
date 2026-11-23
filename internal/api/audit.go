@@ -164,6 +164,7 @@ var auditActionTable = map[string]string{
 	"POST /api/v1/servers/{serverID}/files/upload":               "file.upload",
 	"DELETE /api/v1/servers/{serverID}/files":                    "file.delete",
 	"POST /api/v1/credentials":                                   "credential.create",
+	"PATCH /api/v1/credentials/{credentialID}":                   "credential.update",
 	"DELETE /api/v1/credentials/{credentialID}":                  "credential.delete",
 	"POST /api/v1/checks":                                        "check.create",
 	"PATCH /api/v1/checks/{checkID}":                             "check.update",

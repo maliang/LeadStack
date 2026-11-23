@@ -323,6 +323,7 @@ type HostInfo struct { // 字段与 hostinfo.Info 一一对应，json tag 相同
 |---|---|---|
 | GET | `/credentials` | 凭证列表，**绝不返回明文或密钥内容**：`{id,name,kind,username,fingerprint,created_at,server_count}` |
 | POST | `/credentials` | 创建凭证 `{name,kind,username,password?,private_key?,passphrase?}` → 201 |
+| PATCH | `/credentials/{id}` | 更新凭证；字段省略=不改，秘密传空串=清空。SSH 凭证由服务器表单维护，宝塔凭据由服务器详情维护 |
 | DELETE | `/credentials/{id}` | 被服务器引用时返回 409 `conflict` |
 | POST | `/servers/{id}/test-connection` | → `{ok,latency_ms,ssh_banner,host_key_fingerprint,error?}` |
 | POST | `/servers/{id}/refresh-host-info` | 通过 SSH 采集并落库 → `host_info` |

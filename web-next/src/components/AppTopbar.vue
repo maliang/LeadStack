@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { RouterLink, useRoute } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import AppModal from './AppModal.vue'
 import type { Crumb } from '@/lib/nav'
@@ -9,6 +9,7 @@ import { useI18n } from '@/i18n'
 import type { AuthStatus } from '@/composables/useAuth'
 import { api, type User } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
+import { useUpgradeCenter } from '@/composables/useUpgradeCenter'
 
 /**
  * 顶栏：抽屉开关、面包屑、账号下拉（资料 / 改密 / 退出）。
@@ -29,7 +30,10 @@ const emit = defineEmits<{
 }>()
 
 const copy = useShellCopy()
+const route = useRoute()
 const { t, language } = useI18n()
+const upgrade = useUpgradeCenter()
+const upgradeOpen = ref(false)
 
 const menuButton = ref<HTMLButtonElement | null>(null)
 const accountButton = ref<HTMLButtonElement | null>(null)
@@ -167,6 +171,25 @@ async function savePassword(): Promise<void> {
   }
 }
 
+async function confirmUpgrade(): Promise<void> {
+  try {
+    await upgrade.apply()
+    upgradeOpen.value = false
+  } catch {
+    // 错误已写入 upgrade.error，弹窗保留给用户重试/取消。
+  }
+}
+
+watch(
+  () => route.fullPath,
+  () => {
+    closeMenu(false)
+    profileOpen.value = false
+    passwordOpen.value = false
+    upgradeOpen.value = false
+  },
+)
+
 function handleLogout(): void {
   closeMenu()
   emit('logout')
@@ -232,6 +255,29 @@ onBeforeUnmount(() => {
       </template>
 
       <template v-else>
+        <button
+          v-if="upgrade.allowed.value && upgrade.active.value"
+          id="topbar-upgrade-progress"
+          class="ls-upgrade-pill ls-upgrade-pill--busy"
+          type="button"
+          :title="`${upgrade.phaseLabel.value} ${upgrade.progress.value}%`"
+          aria-live="polite"
+        >
+          <span class="ls-upgrade-pill__bar" aria-hidden="true">
+            <span class="ls-upgrade-pill__fill" :style="{ width: `${upgrade.progress.value}%` }" />
+          </span>
+          <span class="ls-upgrade-pill__text">{{ upgrade.phaseLabel.value }} {{ upgrade.progress.value }}%</span>
+        </button>
+        <button
+          v-else-if="upgrade.allowed.value && upgrade.hasUpdate.value"
+          id="topbar-upgrade"
+          class="ls-upgrade-pill"
+          type="button"
+          @click="upgradeOpen = true"
+        >
+          <AppIcon name="upgrade" size="0.875rem" />
+          <span class="ls-upgrade-pill__text">{{ t('upgrade.available', { version: upgrade.latest.value ?? '' }) }}</span>
+        </button>
         <div class="ls-topbar-account" @keydown="onMenuKeydown">
           <button
             ref="accountButton"
@@ -311,6 +357,31 @@ onBeforeUnmount(() => {
     </AppModal>
 
     <AppModal
+      v-if="upgradeOpen"
+      :title="t('upgrade.confirmTitle', { version: upgrade.latest.value ?? '' })"
+      :description="t('upgrade.confirmText', { from: upgrade.info.value?.current ?? t('common.na'), to: upgrade.latest.value ?? '' })"
+      size="sm"
+      @close="upgradeOpen = false"
+    >
+      <p v-if="upgrade.error.value" class="ls-inline-error" role="alert">{{ upgrade.error.value }}</p>
+      <template #footer>
+        <button id="topbar-upgrade-cancel" class="ls-btn" type="button" :disabled="upgrade.applying.value" @click="upgradeOpen = false">
+          {{ t('upgrade.cancel') }}
+        </button>
+        <button
+          id="topbar-upgrade-confirm"
+          class="ls-btn ls-btn--primary"
+          type="button"
+          :disabled="upgrade.applying.value"
+          :aria-busy="upgrade.applying.value"
+          @click="confirmUpgrade"
+        >
+          {{ upgrade.applying.value ? t('upgrade.submitting') : t('upgrade.confirmApply') }}
+        </button>
+      </template>
+    </AppModal>
+
+    <AppModal
       v-if="passwordOpen"
       :title="t('users.changePassword')"
       :description="t('user.passwordHint')"
@@ -330,8 +401,8 @@ onBeforeUnmount(() => {
           <span class="ls-field__label">{{ t('settings.confirmPassword') }}</span>
           <input id="profile-confirm-password" v-model="passwordForm.confirm" class="ls-input" type="password" autocomplete="new-password" />
         </label>
-        <p v-if="passwordError" class="ls-inline-error" role="alert">{{ passwordError }}</p>
-        <p v-if="passwordNotice" class="ls-ok-hint" role="status">{{ passwordNotice }}</p>
+        <p v-if="passwordError" id="profile-password-error" class="ls-inline-error" role="alert">{{ passwordError }}</p>
+        <p v-if="passwordNotice" id="profile-password-notice" class="ls-ok-hint" role="status">{{ passwordNotice }}</p>
       </div>
       <template #footer>
         <button class="ls-btn" type="button" :disabled="passwordBusy" @click="passwordOpen = false">{{ t('common.close') }}</button>

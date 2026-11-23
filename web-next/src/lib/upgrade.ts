@@ -12,14 +12,69 @@ export const UPLOAD_MAX_BYTES = 200 * 1024 * 1024
 const TERMINAL_PHASES: readonly string[] = ['success', 'failed', 'rolled_back', 'stalled']
 
 const PHASE_LABEL_KEYS: Record<string, string> = {
-  downloading: 'upgrade.phase.downloading',
+  validating: 'upgrade.phase.validating',
+  backup: 'upgrade.phase.backing_up',
   backing_up: 'upgrade.phase.backing_up',
+  download: 'upgrade.phase.downloading',
+  downloading: 'upgrade.phase.downloading',
+  verify_checksum: 'upgrade.phase.verifyChecksum',
+  extract: 'upgrade.phase.extract',
+  prepare: 'upgrade.phase.prepare',
+  swap: 'upgrade.phase.swap',
   replacing: 'upgrade.phase.replacing',
+  spawn_watchdog: 'upgrade.phase.spawnWatchdog',
+  exec: 'upgrade.phase.exec',
   restarting: 'upgrade.phase.restarting',
   success: 'upgrade.phase.success',
   failed: 'upgrade.phase.failed',
   rolled_back: 'upgrade.phase.rolled_back',
   stalled: 'upgrade.phase.stalled',
+}
+
+/** 升级步骤顺序：进度条与“详细步骤”共用这一份，避免两处各写一套阶段顺序。 */
+export const UPGRADE_STEPS = [
+  { phase: 'validating', labelKey: 'upgrade.phase.validating' },
+  { phase: 'backup', labelKey: 'upgrade.phase.backing_up' },
+  { phase: 'download', labelKey: 'upgrade.phase.downloading' },
+  { phase: 'verify_checksum', labelKey: 'upgrade.phase.verifyChecksum' },
+  { phase: 'extract', labelKey: 'upgrade.phase.extract' },
+  { phase: 'prepare', labelKey: 'upgrade.phase.prepare' },
+  { phase: 'swap', labelKey: 'upgrade.phase.swap' },
+  { phase: 'spawn_watchdog', labelKey: 'upgrade.phase.spawnWatchdog' },
+  { phase: 'exec', labelKey: 'upgrade.phase.exec' },
+] as const
+
+/** 各阶段对应的进度百分比（阶段结束时到达该值）。 */
+const PHASE_PROGRESS: Record<string, number> = {
+  validating: 4,
+  backup: 18,
+  download: 38,
+  verify_checksum: 52,
+  extract: 64,
+  prepare: 76,
+  swap: 88,
+  spawn_watchdog: 94,
+  exec: 98,
+  restarting: 99,
+  success: 100,
+  failed: 100,
+  rolled_back: 100,
+  stalled: 100,
+}
+
+/** 当前阶段 → 进度百分比；未知/空阶段给 0。 */
+export function phaseProgress(phase: UpdatePhase | null | undefined): number {
+  if (!phase) return 0
+  return PHASE_PROGRESS[phase] ?? 0
+}
+
+/** 当前阶段在步骤列表中的索引；终态时返回最后一步。 */
+export function phaseStepIndex(phase: UpdatePhase | null | undefined): number {
+  if (!phase) return -1
+  if (phase === 'success' || phase === 'failed' || phase === 'rolled_back' || phase === 'stalled') {
+    return UPGRADE_STEPS.length - 1
+  }
+  return UPGRADE_STEPS.findIndex((step) => step.phase === phase)
 }
 
 export function isTerminalPhase(phase: UpdatePhase | null | undefined): boolean {

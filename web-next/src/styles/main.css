@@ -6383,6 +6383,81 @@ body.ls-scroll-locked {
   overflow-wrap: anywhere;
 }
 
+.ls-upgrade__notes.ls-markdown {
+  white-space: normal;
+}
+
+.ls-markdown > :first-child {
+  margin-top: 0;
+}
+
+.ls-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.ls-markdown h1,
+.ls-markdown h2,
+.ls-markdown h3,
+.ls-markdown h4 {
+  margin: var(--ls-space-3) 0 var(--ls-space-1);
+  color: var(--ls-text);
+  font: 600 var(--ls-text-sm) / 1.4 var(--ls-font-sans);
+}
+
+.ls-markdown p {
+  margin: var(--ls-space-1) 0;
+}
+
+.ls-markdown ul,
+.ls-markdown ol {
+  margin: var(--ls-space-1) 0;
+  padding-inline-start: var(--ls-space-5);
+}
+
+.ls-markdown li {
+  margin: 0.125rem 0;
+}
+
+.ls-markdown blockquote {
+  margin: var(--ls-space-2) 0;
+  padding: var(--ls-space-1) var(--ls-space-3);
+  border-left: 2px solid var(--ls-border-strong);
+  color: var(--ls-text-subtle);
+}
+
+.ls-markdown pre {
+  margin: var(--ls-space-2) 0;
+  padding: var(--ls-space-2) var(--ls-space-3);
+  overflow-x: auto;
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-sm);
+  background: var(--ls-surface);
+}
+
+.ls-markdown code {
+  padding: 0.0625rem 0.25rem;
+  border-radius: 0.25rem;
+  background: var(--ls-surface);
+  font: 400 var(--ls-text-xs) / 1.5 var(--ls-font-mono);
+}
+
+.ls-markdown pre code {
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.ls-markdown a {
+  color: var(--ls-primary);
+  overflow-wrap: anywhere;
+}
+
+.ls-markdown hr {
+  margin: var(--ls-space-2) 0;
+  border: 0;
+  border-top: 1px solid var(--ls-border);
+}
+
 .ls-upgrade__actions {
   display: flex;
   flex-wrap: wrap;
@@ -6541,6 +6616,67 @@ body.ls-scroll-locked {
   height: 100%;
   background: var(--ls-primary-fill);
   transition: width var(--ls-duration) ease;
+}
+
+.ls-upgrade__bar-fill--danger {
+  background: var(--ls-danger);
+}
+
+.ls-upgrade__bar-fill--warning {
+  background: var(--ls-warning);
+}
+
+.ls-upgrade__steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-1) var(--ls-space-3);
+  margin: var(--ls-space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ls-upgrade__step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ls-space-1);
+  color: var(--ls-text-subtle);
+  font: 400 var(--ls-text-xs) / 1.5 var(--ls-font-sans);
+}
+
+.ls-upgrade__step-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1px solid var(--ls-border-strong);
+  border-radius: var(--ls-radius-full);
+  background: var(--ls-surface);
+}
+
+.ls-upgrade__step--done {
+  color: var(--ls-success);
+}
+
+.ls-upgrade__step--done .ls-upgrade__step-dot {
+  border-color: var(--ls-success);
+  background: var(--ls-success);
+}
+
+.ls-upgrade__step--current {
+  color: var(--ls-text);
+  font-weight: 600;
+}
+
+.ls-upgrade__step--current .ls-upgrade__step-dot {
+  border-color: var(--ls-primary-fill);
+  background: var(--ls-primary-fill);
+}
+
+.ls-upgrade__step--failed {
+  color: var(--ls-danger);
+}
+
+.ls-upgrade__step--failed .ls-upgrade__step-dot {
+  border-color: var(--ls-danger);
+  background: var(--ls-danger);
 }
 
 @media (max-width: 760px) {
@@ -8569,4 +8705,65 @@ body.ls-scroll-locked {
   clip-path: inset(50%);
   border: 0;
   white-space: nowrap;
+}
+
+
+/* ---------- 顶栏升级提示 / 迷你进度 ---------- */
+
+.ls-upgrade-pill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--ls-space-1);
+  max-width: 13rem;
+  min-height: var(--ls-hit-size);
+  padding: 0 var(--ls-space-2);
+  border: 1px solid var(--ls-brand-100);
+  border-radius: var(--ls-radius-full);
+  background: var(--ls-primary-soft);
+  color: var(--ls-primary);
+  font: 500 var(--ls-text-xs) / 1.2 var(--ls-font-sans);
+  cursor: pointer;
+}
+
+.ls-upgrade-pill:hover {
+  border-color: var(--ls-primary-fill);
+}
+
+.ls-upgrade-pill:focus-visible {
+  outline: none;
+  box-shadow: var(--ls-focus-ring);
+}
+
+.ls-upgrade-pill--busy {
+  cursor: default;
+}
+
+.ls-upgrade-pill__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ls-upgrade-pill__bar {
+  flex: none;
+  width: 2.5rem;
+  height: 0.3125rem;
+  overflow: hidden;
+  border-radius: var(--ls-radius-full);
+  background: var(--ls-brand-100);
+}
+
+.ls-upgrade-pill__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ls-primary-fill);
+  transition: width var(--ls-duration) ease;
+}
+
+@media (max-width: 760px) {
+  .ls-upgrade-pill__text {
+    display: none;
+  }
 }

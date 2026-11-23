@@ -77,7 +77,7 @@ function infoFixture(overrides = {}) {
     has_update: true,
     published_at: NOW - 3_600_000,
     release_url: 'https://example.com/releases/2.0.0',
-    notes: '新增离线升级包上传；升级前自动备份当前版本并支持失败回退。',
+    notes: '## 更新内容\n\n* 新增离线升级包上传\n* 升级前自动备份当前版本并支持失败回退\n\n> 这是引用说明\n\n```sh\ncurl -fsSL https://example.com/install.sh | sh\n```\n',
     schema_changed: true,
     assets: [],
     upgradable: true,
@@ -408,6 +408,17 @@ async function run() {
     })
     const notes = (await page.locator('#upgrade-notes').innerText()).trim()
     verify({ check: '更新说明渲染', ok: notes.includes('离线升级包上传'), detail: notes.slice(0, 24) })
+    verify({
+      check: '更新说明按 Markdown 渲染标题/列表/引用/代码块',
+      ok:
+        (await page.locator('#upgrade-notes h2').count()) === 1 &&
+        (await page.locator('#upgrade-notes ul li').count()) === 2 &&
+        (await page.locator('#upgrade-notes blockquote').count()) === 1 &&
+        (await page.locator('#upgrade-notes pre code').innerText()).includes('install.sh') &&
+        !notes.includes('##') &&
+        !notes.includes('```'),
+      detail: notes.replace(/\s+/g, ' ').slice(0, 100),
+    })
     verify({
       check: 'schema_changed 时显示「含数据库迁移」徽标',
       ok: (await page.locator('#upgrade-schema-badge').innerText()).trim() === '含数据库迁移',

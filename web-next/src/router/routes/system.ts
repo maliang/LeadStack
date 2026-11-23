@@ -1,17 +1,13 @@
 import type { RouteRecordRaw } from 'vue-router'
 
 /**
- * 系统管理域路由：凭证 / 用户 / 角色 / 分组 / 令牌 / 审计 / 备份 / 设置。
+ * 系统管理域路由：用户 / 角色 / 分组 / 令牌 / 审计 / 备份 / 设置。
+ *
+ * 凭证不再单独成页：SSH 凭证在服务器表单内维护，宝塔面板在服务器详情内维护。
  *
  * 只放路由记录；实例、守卫与权限判定在 src/router/index.ts。
  */
 export const systemRoutes: RouteRecordRaw[] = [
-  {
-    path: '/credentials',
-    name: 'credentials',
-    component: () => import('@/pages/ops/CredentialsPage.vue'),
-    meta: { titleKey: 'nav.credentials', permission: 'server.write' },
-  },
   {
     path: '/users',
     name: 'users',

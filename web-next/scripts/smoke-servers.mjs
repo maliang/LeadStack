@@ -263,6 +263,13 @@ async function installMockApi(context, state) {
         },
       })
     }
+    if (path === '/api/v1/credentials' && method === 'POST') {
+      const body = JSON.parse(request.postData() || '{}')
+      state.createdCredential = body
+      return json(201, {
+        data: { id: 'cred-new', ...body, username: body.username || '', server_count: 0, fingerprint: null, created_at: Date.now(), panel_url: body.panel_url || null, insecure_skip_verify: false },
+      })
+    }
     if (path === '/api/v1/credentials' && method === 'GET') {
       return json(200, {
         data: [
@@ -870,12 +877,12 @@ async function run() {
       await batchPage.fill('#server-form-name', 'gamma-node')
       await batchPage.fill('#server-form-host', '10.0.0.33')
       await batchPage.click('#server-form-mode-ssh')
-      await batchPage.waitForSelector('#server-form-credential', { timeout: 5000 })
-      await batchPage.selectOption('#server-form-credential', 'cred-ssh')
+      await batchPage.waitForSelector('#server-form-credential-username', { timeout: 5000 })
+      await batchPage.fill('#server-form-credential-username', 'root')
+      await batchPage.fill('#server-form-credential-password', 'server-password')
       await batchPage.fill('#server-form-tags', 'edge, 测试,')
       check('标签输入分隔符后渲染为可删除标签块', (await batchPage.locator('#server-form .ls-tag').count()) === 2)
       await batchPage.selectOption('#server-form-group', 'grp-test')
-      await batchPage.selectOption('#server-form-panel', 'cred-baota')
       const createResponse = batchPage.waitForResponse(
         (response) =>
           response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/servers',
@@ -891,8 +898,9 @@ async function run() {
           createBody.host === '10.0.0.33' &&
           createBody.port === 22 &&
           createBody.mode === 'ssh' &&
-          createBody.credential_id === 'cred-ssh' &&
-          createBody.panel_credential_id === 'cred-baota',
+          createBody.credential_id === 'cred-new' &&
+          batchState.createdCredential?.kind === 'password' &&
+          batchState.createdCredential?.username === 'root',
         JSON.stringify(createBody),
       )
       check(

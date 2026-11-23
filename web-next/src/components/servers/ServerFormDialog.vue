@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AppSelect from '@/components/AppSelect.vue'
-import { RouterLink } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
 import { useCan } from '@/composables/useCan'
@@ -59,8 +58,11 @@ const form = reactive({
   host: '',
   port: '22',
   mode: 'agent' as 'agent' | 'ssh',
-  credentialId: '',
-  panelCredentialId: '',
+  credentialKind: 'password' as 'password' | 'key',
+  credentialUsername: '',
+  credentialPassword: '',
+  credentialPrivateKey: '',
+  credentialPassphrase: '',
   groupChoice: '' as string,
   customGroup: '',
   hostKeyPolicy: 'accept-new' as 'accept-new' | 'strict' | 'insecure',
@@ -86,8 +88,6 @@ const localError = ref<string | null>(null)
 const localResult = ref<LocalServerResult | null>(null)
 const localCopied = ref(false)
 
-const sshCredentials = computed(() => credentials.value.filter((item) => item.kind !== 'baota'))
-const baotaCredentials = computed(() => credentials.value.filter((item) => item.kind === 'baota'))
 const selectedGroupName = computed(() => {
   if (form.groupChoice === '' || form.groupChoice === CUSTOM_GROUP) return ''
   return serverGroups.value.find((group) => group.id === form.groupChoice)?.name ?? ''
@@ -104,8 +104,9 @@ function hydrate(server: Server): void {
   form.host = server.host
   form.port = server.port === null ? '22' : String(server.port)
   form.mode = server.mode === 'ssh' ? 'ssh' : 'agent'
-  form.credentialId = server.credential_id ?? ''
-  form.panelCredentialId = server.panel_credential_id ?? ''
+  form.credentialPassword = ''
+  form.credentialPrivateKey = ''
+  form.credentialPassphrase = ''
   form.hostKeyPolicy = 'accept-new'
   tags.value = [...server.tags]
   tagDraft.value = ''
@@ -120,6 +121,13 @@ async function loadCredentials(): Promise<void> {
   credentialsError.value = null
   try {
     credentials.value = await api.credentials()
+    const current = props.server?.credential_id
+      ? credentials.value.find((item) => item.id === props.server?.credential_id)
+      : null
+    if (current && current.kind !== 'baota') {
+      form.credentialKind = current.kind === 'key' ? 'key' : 'password'
+      form.credentialUsername = current.username
+    }
     credentialsState.value = 'ready'
   } catch (caught) {
     credentialsState.value = 'error'
@@ -216,8 +224,11 @@ function validate(): boolean {
     const port = Number(form.port)
     if (!Number.isInteger(port) || port < 1 || port > 65535) next.port = t('server.form.errorPort')
   }
-  if (!editing.value && form.mode === 'ssh' && form.credentialId === '') {
-    next.credential = t('server.form.errorCredential')
+  if (form.mode === 'ssh') {
+    if (form.credentialUsername.trim() === '') next.credential = t('server.form.errorCredential')
+    if (!editing.value && form.credentialPassword === '' && form.credentialPrivateKey === '') {
+      next.credential = t('server.form.errorCredential')
+    }
   }
   fieldErrors.value = next
   return Object.keys(next).length === 0
@@ -230,6 +241,48 @@ function buildGroup(): { group: string; groupIds: string[] } {
     return { group: form.customGroup.trim(), groupIds: [] }
   }
   return { group: selectedGroupName.value || props.server?.group || '', groupIds: [form.groupChoice] }
+}
+
+async function ensureSshCredential(serverName: string): Promise<string> {
+  const existingId = props.server?.credential_id ?? ''
+  const existing = existingId ? credentials.value.find((item) => item.id === existingId) : null
+  const secretPayload: Record<string, string> = {}
+  if (form.credentialKind === 'key' && form.credentialPrivateKey !== '') {
+    secretPayload.private_key = form.credentialPrivateKey
+    if (form.credentialPassphrase !== '') secretPayload.passphrase = form.credentialPassphrase
+  }
+  if (form.credentialKind === 'password' && form.credentialPassword !== '') {
+    secretPayload.password = form.credentialPassword
+  }
+  if (existing && existing.kind !== 'baota') {
+    const changed =
+      existing.username !== form.credentialUsername.trim() ||
+      existing.kind !== form.credentialKind ||
+      Object.keys(secretPayload).length > 0
+    if (!changed) return existing.id
+    const updated = await api.updateCredential(existing.id, {
+      name: existing.name,
+      username: form.credentialUsername.trim(),
+      ...secretPayload,
+    })
+    return updated.id
+  }
+  const created =
+    form.credentialKind === 'key'
+      ? await api.createCredential({
+          name: `${serverName}-ssh`,
+          kind: 'key',
+          username: form.credentialUsername.trim(),
+          private_key: form.credentialPrivateKey,
+          passphrase: form.credentialPassphrase || undefined,
+        })
+      : await api.createCredential({
+          name: `${serverName}-ssh`,
+          kind: 'password',
+          username: form.credentialUsername.trim(),
+          password: form.credentialPassword,
+        })
+  return created.id
 }
 
 async function submit(): Promise<void> {
@@ -247,24 +300,25 @@ async function submit(): Promise<void> {
         tags: tagsValue,
         group: group.group,
         group_ids: group.groupIds,
-        panel_credential_id: form.panelCredentialId,
       }
       // agent 模式的 host/port 由 agent 上报，不参与连接；编辑时不提交，避免无意义变更。
       if (props.server.mode === 'ssh') {
         payload.host = form.host.trim()
         payload.port = Number(form.port)
+        const credentialId = await ensureSshCredential(form.name.trim())
+        if (credentialId !== (props.server.credential_id ?? '')) payload.credential_id = credentialId
       }
       const saved = await api.updateServer(props.server.id, payload)
       emit('saved', saved)
       return
     }
+    const credentialId = form.mode === 'ssh' ? await ensureSshCredential(form.name.trim()) : undefined
     const created = await api.createServer({
       name: form.name.trim(),
       host: form.host.trim(),
       port: showPort.value ? Number(form.port) : 22,
       mode: form.mode,
-      credential_id: form.mode === 'ssh' ? form.credentialId : undefined,
-      panel_credential_id: form.panelCredentialId === '' ? undefined : form.panelCredentialId,
+      credential_id: credentialId,
       group: group.group === '' ? undefined : group.group,
       group_ids: group.groupIds,
       tags: tagsValue,
@@ -418,34 +472,41 @@ watch(
           </button>
         </div>
 
-        <label v-if="form.mode === 'ssh'" class="ls-field" for="server-form-credential">
-          <span class="ls-field__label">{{ t('server.form.credential') }}</span>
-          <AppSelect
-            id="server-form-credential"
-            v-model="form.credentialId"
-            class="ls-input"
-            :disabled="credentialsState === 'loading'"
-            :aria-invalid="Boolean(fieldErrors.credential)"
-          >
-            <option value="">{{ t('server.form.credentialNone') }}</option>
-            <option v-for="credential in sshCredentials" :key="credential.id" :value="credential.id">
-              {{ credential.name }}（{{ credential.username || credential.kind }}）
-            </option>
-          </AppSelect>
+        <div v-if="form.mode === 'ssh'" class="ls-form__row">
+          <label class="ls-field" for="server-form-credential-kind">
+            <span class="ls-field__label">{{ t('server.form.credentialKind') }}</span>
+            <AppSelect id="server-form-credential-kind" v-model="form.credentialKind" class="ls-input">
+              <option value="password">{{ t('server.form.credentialPassword') }}</option>
+              <option value="key">{{ t('server.form.credentialKey') }}</option>
+            </AppSelect>
+          </label>
+          <label class="ls-field" for="server-form-credential-username">
+            <span class="ls-field__label">{{ t('server.form.credentialUsername') }}</span>
+            <input id="server-form-credential-username" v-model="form.credentialUsername" class="ls-input" type="text" autocomplete="username" :disabled="credentialsState === 'loading'" />
+          </label>
+        </div>
+        <label v-if="form.mode === 'ssh' && form.credentialKind === 'password'" class="ls-field" for="server-form-credential-password">
+          <span class="ls-field__label">{{ t('server.form.credentialPasswordValue') }}</span>
+          <input id="server-form-credential-password" v-model="form.credentialPassword" class="ls-input" type="password" autocomplete="new-password" :placeholder="editing ? t('server.form.secretKeepHint') : ''" />
           <span class="ls-field__hint">{{ t('server.form.credentialHint') }}</span>
-          <span v-if="fieldErrors.credential" class="ls-field__error" role="alert">
-            {{ fieldErrors.credential }}
-          </span>
         </label>
-
+        <template v-else-if="form.mode === 'ssh' && form.credentialKind === 'key'">
+          <label class="ls-field" for="server-form-credential-key">
+            <span class="ls-field__label">{{ t('server.form.credentialPrivateKey') }}</span>
+            <textarea id="server-form-credential-key" v-model="form.credentialPrivateKey" class="ls-input ls-textarea" rows="4" spellcheck="false" :placeholder="editing ? t('server.form.secretKeepHint') : ''" />
+          </label>
+          <label class="ls-field" for="server-form-credential-passphrase">
+            <span class="ls-field__label">{{ t('server.form.credentialPassphrase') }}</span>
+            <input id="server-form-credential-passphrase" v-model="form.credentialPassphrase" class="ls-input" type="password" autocomplete="new-password" />
+            <span class="ls-field__hint">{{ t('server.form.credentialHint') }}</span>
+          </label>
+        </template>
+        <p v-if="fieldErrors.credential" class="ls-field__error" role="alert">{{ fieldErrors.credential }}</p>
         <p v-if="form.mode === 'ssh' && credentialsState === 'error'" class="ls-inline-error" role="alert">
           {{ credentialsError }}
           <button class="ls-btn ls-btn--small" type="button" @click="loadCredentials">
             {{ t('common.retry') }}
           </button>
-        </p>
-        <p v-else-if="form.mode === 'ssh' && credentialsState === 'ready' && sshCredentials.length === 0" class="ls-field__hint">
-          {{ t('server.form.noCredentials') }}
         </p>
 
         <label v-if="form.mode === 'ssh'" class="ls-field" for="server-form-policy">
@@ -511,32 +572,6 @@ watch(
           </span>
         </div>
       </div>
-
-      <label class="ls-field" for="server-form-panel">
-        <span class="ls-field__label">{{ t('server.form.panelCredential') }}</span>
-        <AppSelect
-          id="server-form-panel"
-          v-model="form.panelCredentialId"
-          class="ls-input"
-          :disabled="credentialsState === 'loading'"
-        >
-          <option value="">{{ t('server.form.panelCredentialNone') }}</option>
-          <option v-for="credential in baotaCredentials" :key="credential.id" :value="credential.id">
-            {{ credential.name }}
-          </option>
-          <option
-            v-if="form.panelCredentialId && !baotaCredentials.some((item) => item.id === form.panelCredentialId)"
-            :value="form.panelCredentialId"
-          >
-            {{ form.panelCredentialId }}
-          </option>
-        </AppSelect>
-        <span class="ls-field__hint">{{ t('server.form.panelCredentialHint') }}</span>
-        <span v-if="credentialsState === 'ready' && baotaCredentials.length === 0" class="ls-field__hint">
-          {{ t('server.form.noPanelCredentials') }}
-          <RouterLink to="/credentials">{{ t('server.form.openCredentials') }}</RouterLink>
-        </span>
-      </label>
 
       <p v-if="error" id="server-form-error" class="ls-adminpage__form-error" role="alert">{{ error }}</p>
 
