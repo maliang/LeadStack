@@ -362,7 +362,7 @@ onBeforeUnmount(() => {
                 :title="t('server.accounts.copyField', { field: fieldLabel('name') })"
                 @click="copyField(account, 'name')"
               >
-                {{ copiedKey === `${account.id}:name` ? t('common.copied') : t('server.access.copy') }}
+                <AppIcon name="copy" size="0.75rem" />
               </button>
               <div class="ls-account__chips">
                 <span v-if="account.has_password" class="ls-chip ls-chip--muted">
@@ -378,7 +378,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="ls-account__actions">
               <button class="ls-btn ls-btn--small" type="button" @click="copyAll(account)">
-                <AppIcon name="file-text" size="0.875rem" />
+                <AppIcon name="copy" size="0.875rem" />
                 {{
                   copiedKey === `all:${account.id}`
                     ? t('common.copied')
@@ -428,7 +428,7 @@ onBeforeUnmount(() => {
                     :aria-label="t('server.accounts.copyField', { field: fieldLabel('address') })"
                     @click="copyField(account, 'address')"
                   >
-                    {{ copiedKey === `${account.id}:address` ? t('common.copied') : t('server.access.copy') }}
+                    <AppIcon name="copy" size="0.75rem" />
                   </button>
                 </span>
               </dd>
@@ -447,7 +447,7 @@ onBeforeUnmount(() => {
                     :aria-label="t('server.accounts.copyField', { field: fieldLabel('username') })"
                     @click="copyField(account, 'username')"
                   >
-                    {{ copiedKey === `${account.id}:username` ? t('common.copied') : t('server.access.copy') }}
+                    <AppIcon name="copy" size="0.75rem" />
                   </button>
                 </span>
               </dd>
@@ -468,7 +468,7 @@ onBeforeUnmount(() => {
                     :aria-label="t('server.accounts.copyField', { field: fieldLabel('password') })"
                     @click="copyField(account, 'password')"
                   >
-                    {{ copiedKey === `${account.id}:password` ? t('common.copied') : t('server.access.copy') }}
+                    <AppIcon name="copy" size="0.75rem" />
                   </button>
                 </span>
               </dd>
@@ -484,7 +484,7 @@ onBeforeUnmount(() => {
                     :aria-label="t('server.accounts.copyField', { field: fieldLabel('note') })"
                     @click="copyField(account, 'note')"
                   >
-                    {{ copiedKey === `${account.id}:note` ? t('common.copied') : t('server.access.copy') }}
+                    <AppIcon name="copy" size="0.75rem" />
                   </button>
                 </span>
               </dd>
@@ -501,7 +501,7 @@ onBeforeUnmount(() => {
                 :aria-label="t('server.accounts.copyField', { field: key })"
                 @click="copyText(`${account.id}:field:${key}`, value)"
               >
-                {{ copiedKey === `${account.id}:field:${key}` ? t('common.copied') : t('server.access.copy') }}
+                <AppIcon name="copy" size="0.75rem" />
               </button>
             </li>
           </ul>

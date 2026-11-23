@@ -26,6 +26,7 @@ const emit = defineEmits<{
   (event: 'select', id: string, selected: boolean): void
   (event: 'edit', id: string): void
   (event: 'open-panel', id: string): void
+  (event: 'open-accounts', id: string): void
 }>()
 
 const { t } = useI18n()
@@ -69,6 +70,7 @@ const mode = computed(() => props.server.mode.trim())
     <p class="ls-srv-card__address" :title="serverAddress(server)">
       <AppIcon name="server" size="0.875rem" />
       <span class="ls-srv-card__address-text">{{ serverAddress(server) }}</span>
+      <span v-if="mode" class="ls-chip ls-chip--muted ls-srv-card__mode">{{ mode }}</span>
     </p>
 
     <dl class="ls-srv-meta">
@@ -95,8 +97,7 @@ const mode = computed(() => props.server.mode.trim())
     </div>
     <p v-else class="ls-srv-card__metrics ls-field__hint">{{ t('servers.metricsPending') }}</p>
 
-    <div v-if="mode || groupLabels.length > 0 || server.tags.length > 0" class="ls-srv-card__chips">
-      <span v-if="mode" class="ls-chip ls-chip--muted">{{ mode }}</span>
+    <div v-if="groupLabels.length > 0 || server.tags.length > 0" class="ls-srv-card__chips">
       <span v-for="group in groupLabels" :key="group" class="ls-chip" :title="group">{{ group }}</span>
       <span v-for="tag in server.tags" :key="tag" class="ls-chip ls-chip--muted" :title="`#${tag}`">
         #{{ tag }}
@@ -115,6 +116,16 @@ const mode = computed(() => props.server.mode.trim())
         {{ t('servers.panelLogin') }}
       </button>
       <button
+        :id="`server-card-${server.id}-accounts`"
+        class="ls-btn ls-btn--small"
+        type="button"
+        @click="emit('open-accounts', server.id)"
+      >
+        <AppIcon name="users" size="0.875rem" />
+        {{ t('servers.accessAccounts') }}
+      </button>
+      <RouterLink class="ls-btn ls-btn--small" :to="detailTarget">{{ t('servers.viewDetail') }}</RouterLink>
+      <button
         v-if="props.canEdit"
         :id="`server-card-${server.id}-edit`"
         class="ls-btn ls-btn--small"
@@ -124,7 +135,6 @@ const mode = computed(() => props.server.mode.trim())
         <AppIcon name="settings" size="0.875rem" />
         {{ t('common.edit') }}
       </button>
-      <RouterLink class="ls-btn ls-btn--small" :to="detailTarget">{{ t('servers.viewDetail') }}</RouterLink>
     </div>
   </article>
 </template>

@@ -445,6 +445,22 @@ async function installMockApi(context, state) {
       return json(200, { data: ACCESS })
     }
 
+    const securityAudit = /^\/api\/v1\/servers\/([^/]+)\/security\/audit$/.exec(path)
+    if (securityAudit && method === 'POST') {
+      state.securityAuditCalls = (state.securityAuditCalls || 0) + 1
+      return json(200, {
+        data: {
+          server_id: state.server.id,
+          score: 70,
+          checked_at: Date.now(),
+          findings: [
+            { id: 'firewall', level: 'high', title: '未检测到启用的主机防火墙', detail: 'ufw inactive', recommendation: '启用 ufw' },
+            { id: 'fail2ban', level: 'ok', title: 'fail2ban 正在运行', detail: 'active' },
+          ],
+        },
+      })
+    }
+
     const panelLogin = /^\/api\/v1\/servers\/([^/]+)\/panel-login$/.exec(path)
     if (panelLogin && method === 'POST') {
       state.panelLoginCalls = (state.panelLoginCalls || 0) + 1
@@ -689,7 +705,7 @@ async function run() {
     await page.waitForSelector('.ls-detail__title', { timeout: 15000 })
     check('详情页渲染标题', (await page.locator('.ls-detail__title').innerText()).includes('alpha-node'))
     check('详情只拉一次 /servers/{id}', state.detailCalls === 1, `${state.detailCalls} 次`)
-    check('九个 tab 都在', (await page.locator('.ls-tabs__btn').count()) === 9, String(await page.locator('.ls-tabs__btn').count()))
+    check('十一个 tab 都在', (await page.locator('.ls-tabs__btn').count()) === 11, String(await page.locator('.ls-tabs__btn').count()))
     await shot(page, '01-overview')
     check('概览 tab 默认选中', (await page.locator('#server-tab-overview').getAttribute('aria-selected')) === 'true')
 
@@ -889,8 +905,12 @@ async function run() {
     check('检测只拉一次 /checks', state.checkCalls === 1, `${state.checkCalls} 次`)
     check('只显示本服务器的检测项', (await page.locator('.ls-checks__row').count()) === 1)
     check('检测项名称正确', (await page.locator('.ls-checks__name').innerText()) === 'alpha tcp 22')
-    check('只读标识可见', (await page.locator('.ls-card').innerText()).includes('只读'))
+    check('只读标识可见', (await page.locator('section[aria-label="检测"]').innerText()).includes('只读'))
     check('没有执行检测按钮', (await page.locator('.ls-checks button', { hasText: '执行' }).count()) === 0)
+    await page.click('#security-audit-run')
+    await page.waitForSelector('.ls-security-score', { timeout: 5000 })
+    check('安全体检分数与风险项渲染', (await page.locator('.ls-security-score__value').innerText()).trim() === '70' && (await page.locator('.ls-security-item--high').count()) === 1)
+    check('安全体检只发一次请求', state.securityAuditCalls === 1, `${state.securityAuditCalls} 次`)
     const narrowChecks = await noHorizontalScroll()
     check('320px 检测页无横向滚动', narrowChecks.overflow <= 0, `溢出 ${narrowChecks.overflow}px`)
 
@@ -1285,7 +1305,7 @@ async function run() {
       await limitedPage.goto(`${base}/#/servers/srv-alpha?tab=terminal`, { waitUntil: 'domcontentloaded' })
       await limitedPage.waitForSelector('.ls-detail__title', { timeout: 15000 })
       await limitedPage.waitForSelector('.ls-banner--warning', { timeout: 5000 })
-      check('缺权限时九个 tab 仍可见', (await limitedPage.locator('.ls-tabs__btn').count()) === 9)
+      check('缺权限时十一个 tab 仍可见', (await limitedPage.locator('.ls-tabs__btn').count()) === 11)
       check(
         '缺权限时 ?tab=terminal 仍选中终端',
         (await limitedPage.locator('#server-tab-terminal').getAttribute('aria-selected')) === 'true',

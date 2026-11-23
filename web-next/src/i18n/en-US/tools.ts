@@ -3,6 +3,13 @@
  * 键保持扁平点号路径，与 en-US/index.ts 展开合并后的 t('…') 查询一致；新增键请在 zh-CN / en-US 同名文件同步添加。
  */
 const tools: Record<string, string> = {
+  'files.search': 'Search this folder',
+  'files.searchEmpty': 'No matching files',
+  'files.actions': 'Actions',
+  'files.uploadingFile': 'Uploading…',
+  'files.downloadStarted': 'Downloading {name}',
+  'files.deleteConfirmTitle': 'Delete {name}',
+  'files.deleteConfirmText': 'This cannot be undone. Make sure the file is no longer in use.',
   'files.deleteFailed': 'Delete failed',
   'files.deleteImpact': 'This cannot be undone. Make sure the file is no longer used.',
   'files.deleteTitle': 'Delete file',

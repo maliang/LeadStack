@@ -34,6 +34,7 @@ const emit = defineEmits<{
   (event: 'select', id: string, selected: boolean): void
   (event: 'edit', id: string): void
   (event: 'open-panel', id: string): void
+  (event: 'open-accounts', id: string): void
 }>()
 
 const { t } = useI18n()
@@ -89,10 +90,10 @@ function openDetailFromRow(event: MouseEvent): void {
           <RouterLink class="ls-srv-row__name-link" :to="detailTarget" @click.stop>{{ server.name }}</RouterLink>
         </h2>
         <span class="ls-srv-row__address" :title="address">{{ address }}</span>
+        <span v-if="server.mode" class="ls-chip ls-chip--muted ls-srv-row__mode">{{ server.mode }}</span>
       </div>
 
       <div class="ls-srv-row__meta">
-        <span v-if="server.mode" class="ls-chip ls-chip--muted">{{ server.mode }}</span>
         <span v-for="group in server.group_names" :key="group" class="ls-chip" :title="group">
           {{ group }}
         </span>
@@ -146,6 +147,15 @@ function openDetailFromRow(event: MouseEvent): void {
         >
           <AppIcon name="key-round" size="0.875rem" />
           {{ t('servers.panelLogin') }}
+        </button>
+        <button
+          :id="`server-${server.id}-accounts`"
+          class="ls-btn ls-srv-row__action"
+          type="button"
+          @click.stop.prevent="emit('open-accounts', server.id)"
+        >
+          <AppIcon name="users" size="0.875rem" />
+          {{ t('servers.accessAccounts') }}
         </button>
         <button
           v-if="props.canEdit"

@@ -399,7 +399,10 @@ async function main() {
     /* ---------- ⑨：词典 chunk 加载失败时不落盘、保持原语言（S3 回归） ---------- */
     // 断网时若仍把 en-US 写进 localStorage，下次冷启动会反复重试失败的 chunk；
     // 这里故意 abort 掉 en-US 的独立 chunk，验证失败时存储与界面都留在 zh-CN。
-    const failContext = await browser.newContext()
+    // 用一个全新浏览器：同一 browser 的 HTTP/模块缓存可能让 abort 后的 chunk 仍从缓存加载，
+    // 导致「加载失败」断言偶发假通过。新进程缓存为空，abort 结果确定。
+    const failBrowser = await launchChromium(chromium, !HEADED)
+    const failContext = await failBrowser.newContext()
     try {
       await failContext.addInitScript(
         ([key, value]) => {
@@ -412,8 +415,20 @@ async function main() {
         [LANGUAGE_KEY, 'zh-CN'],
       )
       await installMockApi(failContext)
-      await failContext.route(/\/assets\/en-US-[^/]+\.js(?:\?.*)?$/, (route) => route.abort())
+      // 用会抛错的 JS 代替 abort：abort 在某些 Chromium 版本会命中模块缓存被当成成功加载。
+      await failContext.route(/\/assets\/en-US-[^/]+\.js(?:\?.*)?$/, (route) =>
+        route.fulfill({ status: 200, contentType: 'application/javascript', body: 'throw new Error("blocked")' }),
+      )
       const failPage = await failContext.newPage()
+      // 关闭 HTTP 缓存：主 context 刚加载过 en-US chunk，缓存命中会绕过 route.abort，
+      // 让「断网时词典加载失败」这条断言偶发假通过。
+      try {
+        const cdp = await failContext.newCDPSession(failPage)
+        await cdp.send('Network.setCacheDisabled', { cacheDisabled: true })
+        await cdp.send('Network.setBlockedURLs', { urls: ['*/assets/en-US-*.js*'] })
+      } catch {
+        /* 非 Chromium 环境忽略 */
+      }
       await login(failPage, base)
       await failPage.goto(`${base}/#/settings`, { waitUntil: 'domcontentloaded' })
       await failPage.waitForSelector('#settings-appearance-language', { timeout: 15000 })
@@ -440,6 +455,7 @@ async function main() {
       )
     } finally {
       await failContext.close()
+      await failBrowser.close()
     }
 
     /* ---------- ⑩：慢网冷启动骨架（S2 回归） ---------- */

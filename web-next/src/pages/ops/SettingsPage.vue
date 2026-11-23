@@ -7,7 +7,7 @@ import { useTheme } from '@vean/ui'
 import AppIcon from '@/components/AppIcon.vue'
 import { useAuth } from '@/composables/useAuth'
 import { useCan } from '@/composables/useCan'
-import { SUPPORTED_LANGUAGES, switchLanguage, useI18n, type Language } from '@/i18n'
+import { SUPPORTED_LANGUAGES, switchLanguage, useI18n } from '@/i18n'
 import { api, type NetworkConfig, type NetworkUpdatePayload, type SystemInfo } from '@/lib/api'
 import { appearanceDensity, setDensity, type AppearanceDensity } from '@/lib/appearance'
 import { errorMessage } from '@/lib/errors'
@@ -24,19 +24,14 @@ const htmlLang = computed(() => (language.value === 'en-US' ? 'en' : 'zh-CN'))
 
 const languageError = ref<string | null>(null)
 
-const languageModel = computed<Language>({
-  get: () => language.value,
-  // en-US 词典是按需加载的独立 chunk：先 await 词典就绪再切换，
-  // 保证下拉框选完立即是英文，而不是先闪一下 zh-CN 回退文案。
-  // 加载失败时 switchLanguage 不切语言、不落盘并返回 false：
-  // 这里提示失败，下拉框因 language 未变随重渲染回到旧语言（即回滚），用户可重选重试。
-  set: async (value) => {
-    languageError.value = null
-    if (value === language.value) return
-    const ok = await switchLanguage(value)
-    if (!ok && value !== language.value) languageError.value = t('common.error')
-  },
-})
+async function onLanguagePick(value: string): Promise<void> {
+  if (value !== 'zh-CN' && value !== 'en-US') return
+  if (value === language.value) return
+  languageError.value = null
+  const ok = await switchLanguage(value)
+  if (!ok) languageError.value = t('common.error')
+}
+
 
 /** 密度选项文案随语言切换，读取 language 建立依赖。 */
 const densityOptions = computed<{ value: AppearanceDensity; label: string }[]>(() => {
@@ -377,8 +372,9 @@ onMounted(() => {
             <div class="ls-appearance__control">
               <AppSelect
                 id="settings-appearance-language"
-                v-model="languageModel"
+                :model-value="language"
                 class="ls-input ls-appearance__select"
+                @update:modelValue="onLanguagePick"
               >
                 <option v-for="item in SUPPORTED_LANGUAGES" :key="item.value" :value="item.value">
                   {{ item.label }}

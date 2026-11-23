@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import AppModal from './AppModal.vue'
@@ -34,6 +34,7 @@ const route = useRoute()
 const { t, language } = useI18n()
 const upgrade = useUpgradeCenter()
 const upgradeOpen = ref(false)
+const appVersion = ref('')
 
 const menuButton = ref<HTMLButtonElement | null>(null)
 const accountButton = ref<HTMLButtonElement | null>(null)
@@ -45,6 +46,18 @@ function label(key: string): string {
 }
 
 const displayName = computed(() => props.user?.display_name?.trim() || props.user?.username || '')
+const currentVersion = computed(() => upgrade.info.value?.current || appVersion.value)
+const versionLabel = computed(() => (currentVersion.value ? `v${currentVersion.value.replace(/^v/i, '')}` : ''))
+
+async function loadVersion(): Promise<void> {
+  if (appVersion.value !== '') return
+  try {
+    const info = await api.systemInfo()
+    appVersion.value = info.version
+  } catch {
+    // 版本号只是展示信息，失败不打扰用户。
+  }
+}
 const roleLabel = computed(() => {
   const current = props.user
   if (!current) return copy.value.roleFallback
@@ -202,6 +215,17 @@ function focusMenuButton(): void {
 
 defineExpose({ focusMenuButton })
 
+onMounted(() => {
+  if (props.status === 'authenticated') void loadVersion()
+})
+
+watch(
+  () => props.status,
+  (value) => {
+    if (value === 'authenticated') void loadVersion()
+  },
+)
+
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick, true)
 })
@@ -255,6 +279,9 @@ onBeforeUnmount(() => {
       </template>
 
       <template v-else>
+        <span v-if="versionLabel" id="topbar-version" class="ls-topbar__version" :title="t('topbar.version')">
+          {{ versionLabel }}
+        </span>
         <button
           v-if="upgrade.allowed.value && upgrade.active.value"
           id="topbar-upgrade-progress"

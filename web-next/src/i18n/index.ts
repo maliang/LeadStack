@@ -35,6 +35,10 @@ const LOADERS: Partial<Record<Language, () => Promise<{ default: Dict }>>> = {
 /** 进行中的加载：同一语言并发调用只发一次请求（防重复 load）。 */
 const inflight = new Map<Language, Promise<boolean>>()
 
+/** 标记「词典 import 进行中」，供 main.ts 的预加载错误处理区分语言包失败与路由 chunk 失败。 */
+const IMPORT_FLAG = '__leadstackI18nImporting'
+type ImportFlagWindow = Window & { [IMPORT_FLAG]?: boolean }
+
 export function readStoredLanguage(): Language {
   try {
     const raw = window.localStorage.getItem(LANGUAGE_STORAGE_KEY)
@@ -66,6 +70,7 @@ export function ensureLanguage(lang: Language): Promise<boolean> {
   const loader = LOADERS[lang]
   if (!loader) return Promise.resolve(true)
 
+  ;(window as ImportFlagWindow)[IMPORT_FLAG] = true
   const task = loader()
     .then((mod) => {
       dictionaries[lang] = (mod && mod.default) || {}
@@ -78,6 +83,7 @@ export function ensureLanguage(lang: Language): Promise<boolean> {
     })
     .then((ok) => {
       inflight.delete(lang)
+      ;(window as ImportFlagWindow)[IMPORT_FLAG] = false
       return ok
     })
 

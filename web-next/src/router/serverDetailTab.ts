@@ -18,17 +18,21 @@ export type ServerDetailTab =
   | 'terminal'
   | 'files'
   | 'logs'
+  | 'groups'
+  | 'backups'
 
 export const SERVER_DETAIL_TABS: readonly ServerDetailTab[] = [
   'overview',
-  'access',
-  'accounts',
   'login',
+  'accounts',
   'meta',
   'checks',
   'terminal',
   'files',
   'logs',
+  'groups',
+  'backups',
+  'access',
 ]
 
 export const SERVER_DETAIL_TAB_QUERY: Record<ServerDetailTab, { tab: ServerDetailTab } | null> = {
@@ -41,6 +45,8 @@ export const SERVER_DETAIL_TAB_QUERY: Record<ServerDetailTab, { tab: ServerDetai
   terminal: { tab: 'terminal' },
   files: { tab: 'files' },
   logs: { tab: 'logs' },
+  groups: { tab: 'groups' },
+  backups: { tab: 'backups' },
 }
 
 /** 深链值归一化：`?tab=logs` / `?tab=files` 等原样认，其他（含数组首值）回 overview。 */

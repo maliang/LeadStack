@@ -3,6 +3,13 @@
  * 键保持扁平点号路径，与 zh-CN/index.ts 展开合并后的 t('…') 查询一致；新增键请在 zh-CN / en-US 同名文件同步添加。
  */
 const tools: Record<string, string> = {
+  'files.search': '搜索当前目录',
+  'files.searchEmpty': '没有匹配的文件',
+  'files.actions': '操作',
+  'files.uploadingFile': '上传中…',
+  'files.downloadStarted': '已开始下载 {name}',
+  'files.deleteConfirmTitle': '删除 {name}',
+  'files.deleteConfirmText': '删除后不可恢复，请确认该文件不再被使用。',
   'files.deleteFailed': '删除失败',
   'files.deleteImpact': '删除后不可恢复，请确认该文件不再被使用。',
   'files.deleteTitle': '删除文件',

@@ -11,8 +11,11 @@ import { ensureLanguage, initI18n, readStoredLanguage } from './i18n'
  * 刷新后拿到新 index.html 与新 chunk，用户不会停在坏页面上。
  */
 const CHUNK_RELOAD_KEY = 'leadstack.chunk-reload-at'
-window.addEventListener('vite:preloadError', (event) => {
-  event.preventDefault()
+window.addEventListener('vite:preloadError', () => {
+  // 不能 preventDefault：Vite 的 __vitePreload 在 preventDefault 后会把失败的
+  // import 当成 undefined 成功返回，i18n 等调用方会误以为模块已加载。
+  // 词典加载失败要留给设置页展示可读提示，不能直接刷新把提示冲掉。
+  if ((window as Window & { __leadstackI18nImporting?: boolean }).__leadstackI18nImporting) return
   const last = Number(window.sessionStorage.getItem(CHUNK_RELOAD_KEY) ?? '0')
   if (Date.now() - last < 10_000) return
   window.sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()))

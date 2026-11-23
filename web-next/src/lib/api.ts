@@ -616,6 +616,21 @@ export interface CreateCredentialPayload {
   insecure_skip_verify?: boolean
 }
 
+export interface SecurityFinding {
+  id: string
+  level: 'critical' | 'high' | 'medium' | 'low' | 'ok' | string
+  title: string
+  detail: string
+  recommendation?: string
+}
+
+export interface SecurityAudit {
+  server_id: string
+  score: number
+  checked_at: number
+  findings: SecurityFinding[]
+}
+
 export interface TestConnectionResult {
   ok: boolean
   latency_ms: number | null
@@ -3059,6 +3074,19 @@ export const api = {
    */
   serverPanel(id: string): Promise<ServerPanel> {
     return request<unknown>(`/servers/${encodeURIComponent(id)}/panel`).then(normalizeServerPanel)
+  },
+
+  /** POST /servers/{id}/security/audit —— agent/SSH 只读安全基线体检 */
+  securityAudit(id: string): Promise<SecurityAudit> {
+    return request<SecurityAudit>(`/servers/${encodeURIComponent(id)}/security/audit`, { method: 'POST' })
+  },
+
+  /** POST /servers/{id}/security/harden —— 低风险基础加固（需 server.write） */
+  securityHarden(id: string): Promise<{ server_id: string; changed: string[] }> {
+    return request<{ server_id: string; changed: string[] }>(
+      `/servers/${encodeURIComponent(id)}/security/harden`,
+      { method: 'POST' },
+    )
   },
 
   /** POST /servers/{id}/panel-login —— 生成一次性宝塔登录地址（120 秒内有效） */

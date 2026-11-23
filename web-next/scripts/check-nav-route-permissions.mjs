@@ -43,6 +43,15 @@ const KNOWN_UNGUARDED = new Map([
 /** 不在菜单里、也不该有权限门的独立页面。 */
 const NON_MENU_ROUTES = new Set(['/login', '/forbidden', '/about'])
 
+/**
+ * 已内化进服务器详情的旧栏目：保留直达路由（兼容书签/深链），但不再出现在左侧菜单。
+ * 权限门保留，路由权限以 meta 为准；不在菜单里是产品决策，不是漂移。
+ */
+const INTERNALIZED_ROUTES = new Map([
+  ['/groups', '分组已内化到服务器详情「分组」tab'],
+  ['/backups', '备份已内化到服务器详情「备份」tab'],
+])
+
 function fail(message) {
   console.error(`check:nav 解析失败：${message}`)
   process.exit(1)
@@ -206,6 +215,14 @@ for (const route of routes) {
     const parent = route.path.split('/:')[0] || '/'
     if (!navByPath.has(parent)) {
       mismatches.push(`[覆盖缺口] 详情路由 ${route.path} 的父路径 ${parent} 不在菜单中，权限语义无法对照`)
+    }
+    continue
+  }
+
+  if (INTERNALIZED_ROUTES.has(route.path)) {
+    stats.standalone += 1
+    if (!route.permission) {
+      mismatches.push(`[内化路由缺权限门] ${route.path}：${INTERNALIZED_ROUTES.get(route.path)}`)
     }
     continue
   }

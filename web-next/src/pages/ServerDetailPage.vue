@@ -9,6 +9,9 @@ import ServerAccountsTab from '@/components/server-detail/ServerAccountsTab.vue'
 import ServerLoginTab from '@/components/server-detail/ServerLoginTab.vue'
 import ServerMetaTab from '@/components/server-detail/ServerMetaTab.vue'
 import ServerChecksTab from '@/components/server-detail/ServerChecksTab.vue'
+import ServerSecurityAudit from '@/components/server-detail/ServerSecurityAudit.vue'
+import GroupsPage from '@/pages/ops/GroupsPage.vue'
+import BackupsPage from '@/pages/ops/BackupsPage.vue'
 import ServerFilesPanel from '@/components/server-tools/ServerFilesPanel.vue'
 import ServerLogsPanel from '@/components/server-tools/ServerLogsPanel.vue'
 import ServerTerminalPanel from '@/components/server-tools/ServerTerminalPanel.vue'
@@ -47,7 +50,8 @@ import {
 } from '@/lib/server-metrics'
 
 /**
- * 服务器详情页：八个 tab（概览 / 登录信息 / 一键登录 / 服务器档案 / 检测 / 终端 / 文件 / 日志）。
+ * 服务器详情页：概览 / 一键登录 / 访问账号 / 服务器档案 / 安全 / 终端 / 文件 / 日志 /
+ * 分组 / 备份 / SSH 登录信息（最后）。
  *
  * 本页是唯一的数据 owner：详情、登录信息、一键登录、面板、档案、检测项的
  * 异步状态都在这里，各 tab 组件只负责渲染与派发。这样「登录信息收起即丢弃」
@@ -60,14 +64,16 @@ import {
  */
 const TABS: { key: ServerDetailTab; labelKey: string }[] = [
   { key: 'overview', labelKey: 'server.tab.overview' },
-  { key: 'access', labelKey: 'server.tab.access' },
-  { key: 'accounts', labelKey: 'server.tab.accounts' },
   { key: 'login', labelKey: 'server.tab.login' },
+  { key: 'accounts', labelKey: 'server.tab.accounts' },
   { key: 'meta', labelKey: 'server.tab.meta' },
   { key: 'checks', labelKey: 'server.tab.checks' },
   { key: 'terminal', labelKey: 'server.tab.terminal' },
   { key: 'files', labelKey: 'server.tab.files' },
   { key: 'logs', labelKey: 'server.tab.logs' },
+  { key: 'groups', labelKey: 'server.tab.groups' },
+  { key: 'backups', labelKey: 'server.tab.backups' },
+  { key: 'access', labelKey: 'server.tab.access' },
 ]
 
 /** 需要 terminal.use 的面板；缺权限时只渲染说明，不挂载组件。 */
@@ -697,6 +703,8 @@ onMounted(() => {
           :server="server"
           :can-write="canWrite"
         />
+        <GroupsPage v-else-if="tab === 'groups'" />
+        <BackupsPage v-else-if="tab === 'backups'" />
         <ServerAccessTab
           v-else-if="tab === 'access'"
           :title="t('server.access.title')"
@@ -738,13 +746,15 @@ onMounted(() => {
           :saved-at="metaSavedAt"
           @save="saveMeta"
         />
-        <ServerChecksTab
-          v-else-if="tab === 'checks'"
-          :checks="serverChecks"
-          :loading="checksLoading"
-          :error="checksError"
-          @reload="loadChecks"
-        />
+        <div v-else-if="tab === 'checks'" class="ls-detail__stack">
+          <ServerSecurityAudit :server-id="serverId" :can-run="canRead" :can-harden="canWrite" />
+          <ServerChecksTab
+            :checks="serverChecks"
+            :loading="checksLoading"
+            :error="checksError"
+            @reload="loadChecks"
+          />
+        </div>
 
         <!-- 终端 / 文件 / 日志：缺 terminal.use 时只给说明，绝不挂载面板（避免发请求）。 -->
         <div

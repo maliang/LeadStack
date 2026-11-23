@@ -7,6 +7,7 @@ import ServerBatchBar from '@/components/servers/ServerBatchBar.vue'
 import ServerBatchResultDialog from '@/components/servers/ServerBatchResultDialog.vue'
 import ServerListToolbar from '@/components/servers/ServerListToolbar.vue'
 import ServerCard from '@/components/servers/ServerCard.vue'
+import ServerAccountsDialog from '@/components/servers/ServerAccountsDialog.vue'
 import ServerFormDialog from '@/components/servers/ServerFormDialog.vue'
 import ServerGroupManagerDialog from '@/components/servers/ServerGroupManagerDialog.vue'
 import ServerRow from '@/components/servers/ServerRow.vue'
@@ -266,6 +267,16 @@ function openCreateForm(): void {
   formOpen.value = true
 }
 
+const accountsTarget = ref<Server | null>(null)
+
+function openAccounts(id: string): void {
+  accountsTarget.value = servers.value.find((server) => server.id === id) ?? null
+}
+
+function closeAccounts(): void {
+  accountsTarget.value = null
+}
+
 function openEditForm(id: string): void {
   const target = servers.value.find((server) => server.id === id)
   if (!target || !canWrite.value) return
@@ -484,6 +495,7 @@ async function handleFormSaved(saved: Server): Promise<void> {
         @select="onSelect"
         @edit="openEditForm"
         @open-panel="openPanel"
+        @open-accounts="openAccounts"
       />
     </div>
 
@@ -502,6 +514,7 @@ async function handleFormSaved(saved: Server): Promise<void> {
         @select="onSelect"
         @edit="openEditForm"
         @open-panel="openPanel"
+        @open-accounts="openAccounts"
       />
     </ul>
 
@@ -607,6 +620,13 @@ async function handleFormSaved(saved: Server): Promise<void> {
         </button>
       </template>
     </AppModal>
+
+    <ServerAccountsDialog
+      v-if="accountsTarget"
+      :server="accountsTarget"
+      :can-write="canWrite"
+      @close="closeAccounts"
+    />
 
     <ServerFormDialog
       v-if="formOpen"

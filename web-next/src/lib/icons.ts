@@ -122,6 +122,19 @@ const ICON_PATHS = {
     { tag: 'path', attrs: { d: 'M12 9v4M12 16.5h.01' } },
   ],
   'chevron-right': [{ tag: 'path', attrs: { d: 'm9 18 6-6-6-6' } }],
+  download: [
+    { tag: 'path', attrs: { d: 'M12 3v12' } },
+    { tag: 'path', attrs: { d: 'm7 10 5 5 5-5' } },
+    { tag: 'path', attrs: { d: 'M5 21h14' } },
+  ],
+  trash: [
+    { tag: 'path', attrs: { d: 'M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14' } },
+    { tag: 'path', attrs: { d: 'M10 11v6M14 11v6' } },
+  ],
+  copy: [
+    { tag: 'rect', attrs: { x: 9, y: 9, width: 12, height: 12, rx: 2 } },
+    { tag: 'path', attrs: { d: 'M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1' } },
+  ],
 } as const satisfies Record<string, readonly IconNode[]>
 
 export type IconName = keyof typeof ICON_PATHS
