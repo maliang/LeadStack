@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useI18n } from '@/i18n'
 
@@ -14,8 +14,12 @@ const props = withDefaults(
     title: string
     description?: string
     size?: 'sm' | 'md' | 'lg'
+    /** danger 用红色标题，表达破坏性后果（删除 / 回滚 / 恢复） */
+    tone?: 'default' | 'danger'
+    /** 供端到端脚本定位的 data-testid */
+    testId?: string
   }>(),
-  { size: 'md', description: undefined },
+  { size: 'md', description: undefined, tone: 'default', testId: undefined },
 )
 
 const emit = defineEmits<{ close: [] }>()
@@ -23,10 +27,14 @@ const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
 const panel = ref<HTMLElement | null>(null)
 
-let sequence = 0
-sequence += 1
-const titleId = `ls-modal-title-${sequence}`
-const descriptionId = `ls-modal-desc-${sequence}`
+/**
+ * 标题 / 描述的 id 用 Vue 的 useId()：它在实例间唯一。
+ * 之前用 `<script setup>` 内的自增变量，每个实例都从 0 开始（永远得到 -1），
+ * 两个模态同时存在时 aria-labelledby 会指向同一个 id。
+ */
+const uid = useId()
+const titleId = `ls-modal-title-${uid}`
+const descriptionId = `ls-modal-desc-${uid}`
 
 let trigger: HTMLElement | null = null
 let previousOverflow: string | null = null
@@ -106,11 +114,11 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div class="ls-modal" @click.self="requestClose">
+    <div class="ls-modal" :data-testid="props.testId" @click.self="requestClose">
       <div
         ref="panel"
         class="ls-modal__panel"
-        :class="`ls-modal__panel--${props.size}`"
+        :class="[`ls-modal__panel--${props.size}`, { 'ls-modal__panel--danger': props.tone === 'danger' }]"
         role="dialog"
         aria-modal="true"
         :aria-labelledby="titleId"

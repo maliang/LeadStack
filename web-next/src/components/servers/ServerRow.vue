@@ -23,11 +23,14 @@ const props = defineProps<{
   /** 无 server.write 时页面传 false：多选框不渲染 */
   selectable?: boolean
   selected?: boolean
+  /** 无 server.write 时页面传 false：编辑按钮不渲染 */
+  canEdit?: boolean
 }>()
 
 const emit = defineEmits<{
   (event: 'toggle', id: string): void
   (event: 'select', id: string, selected: boolean): void
+  (event: 'edit', id: string): void
 }>()
 
 const { t } = useI18n()
@@ -119,6 +122,16 @@ function openDetailFromRow(event: MouseEvent): void {
           <AppIcon name="folder" size="0.875rem" />
           {{ t('servers.expandFiles') }}
         </button>
+        <button
+          v-if="props.canEdit"
+          :id="`server-${server.id}-edit`"
+          class="ls-btn ls-srv-row__action"
+          type="button"
+          @click.stop.prevent="emit('edit', server.id)"
+        >
+          <AppIcon name="settings" size="0.875rem" />
+          {{ t('common.edit') }}
+        </button>
       </div>
     </div>
 
@@ -141,44 +154,3 @@ function openDetailFromRow(event: MouseEvent): void {
     </div>
   </li>
 </template>
-
-<style scoped>
-/* 行内名称链接与「整行可点」共存：链接保持原文本样式，hover/focus 才给下划线暗示 */
-.ls-srv-row {
-  cursor: pointer;
-}
-
-.ls-srv-row__name-link {
-  color: inherit;
-  text-decoration: none;
-}
-
-.ls-srv-row__name-link:hover,
-.ls-srv-row__name-link:focus-visible {
-  text-decoration: underline;
-}
-
-.ls-srv-row:focus-visible {
-  outline: none;
-  box-shadow: var(--ls-focus-ring);
-}
-
-/* 多选框：命中区 24px，列宽不随字号抖动 */
-.ls-srv-row__select {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.5rem;
-  min-height: 1.5rem;
-  cursor: pointer;
-}
-
-.ls-srv-row__select input {
-  width: 1rem;
-  height: 1rem;
-  margin: 0;
-  accent-color: var(--ls-primary-fill);
-  cursor: pointer;
-}
-</style>

@@ -216,7 +216,7 @@ async function run() {
     const posts = () => writes(calls).filter((call) => call.method === 'POST' && call.path === '/api/v1/apps').length
     await page.click('#apps-new')
     await page.waitForSelector('[data-testid="app-form-dialog"]', { timeout: 5000 })
-    check('新建弹窗标题为新建应用', (await page.locator('[data-testid="app-form-dialog"] .ls-dialog__title').innerText()).includes('新建应用'))
+    check('新建弹窗标题为新建应用', (await page.locator('[data-testid="app-form-dialog"] .ls-modal__title').innerText()).includes('新建应用'))
     await page.click('#app-form-submit')
     await page.waitForTimeout(150)
     check('空表单提交出现字段错误', (await page.locator('[data-testid="app-form-dialog"] .ls-field__error').count()) === 2)
@@ -260,7 +260,7 @@ async function run() {
     const deleteText = await page.locator('[data-testid="app-delete-dialog"]').innerText()
     check('删除弹窗写明对象名', deleteText.includes('shop-web-v2'), deleteText.replace(/\s+/g, ' ').slice(0, 60))
     check('删除弹窗写明影响范围', deleteText.includes('5') && deleteText.includes('不可撤销'))
-    await page.locator('[data-testid="app-delete-dialog"] .ls-dialog__foot .ls-btn:not(.ls-btn--danger)').click()
+    await page.locator('[data-testid="app-delete-dialog"] .ls-modal__foot .ls-btn:not(.ls-btn--danger)').click()
     await page.waitForSelector('[data-testid="app-delete-dialog"]', { state: 'detached', timeout: 5000 })
     await page.waitForTimeout(200)
     check('取消删除不发 DELETE', deletes() === 0, `${deletes()} 次`)
@@ -268,7 +268,7 @@ async function run() {
 
     await page.locator('.ls-deploy__row[data-app-id="app-shop"] .ls-btn--danger').click()
     await page.waitForSelector('[data-testid="app-delete-dialog"]', { timeout: 5000 })
-    await page.locator('[data-testid="app-delete-dialog"] .ls-dialog__foot .ls-btn--danger').click()
+    await page.locator('[data-testid="app-delete-dialog"] .ls-modal__foot .ls-btn--danger').click()
     await page.waitForSelector('.ls-deploy__row[data-app-id="app-shop"]', { state: 'detached', timeout: 5000 })
     check('确认删除发出 DELETE 且行消失', deletes() === 1, `${deletes()} 次`)
     check('删除后剩两行', (await page.locator('.ls-deploy__row').count()) === 2)

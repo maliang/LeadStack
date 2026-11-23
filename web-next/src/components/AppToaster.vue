@@ -15,7 +15,7 @@ const toasts = useToasts()
 const copiedId = ref<number | null>(null)
 
 function copy(item: ToastItem): void {
-  const text = item.requestId ? `${item.title}：${item.message}` : `${item.title}：${item.message}`
+  const text = t('toast.copyFormat', { title: item.title, message: item.message })
   void writeClipboard(text).then((ok) => {
     copiedId.value = ok ? item.id : null
     if (ok) setTimeout(() => { if (copiedId.value === item.id) copiedId.value = null }, 1800)
@@ -24,7 +24,7 @@ function copy(item: ToastItem): void {
 </script>
 
 <template>
-  <div class="ls-toaster" aria-label="notifications">
+  <div class="ls-toaster" :aria-label="t('toast.notifications')">
     <div
       v-for="item in toasts"
       :key="item.id"

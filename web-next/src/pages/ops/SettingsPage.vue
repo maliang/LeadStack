@@ -71,7 +71,19 @@ const passwordBusy = ref(false)
 const passwordError = ref<string | null>(null)
 const passwordNotice = ref<string | null>(null)
 
-const roleLabel = computed(() => (user.value ? t(`role.${user.value.role}`) : t('common.na')))
+/**
+ * 角色名优先用后端给的 role_name（自定义角色没有 role.<key> 文案，
+ * 直接拼 key 会把 `role.auditor` 这样的内部标识显示到界面上）。
+ * 内置角色没有 role_name 时才查词表，查不到再退回 key。
+ */
+const roleLabel = computed(() => {
+  const current = user.value
+  if (!current) return t('common.na')
+  if (current.role_name) return current.role_name
+  const key = `role.${current.role}`
+  const translated = t(key)
+  return translated === key ? current.role : translated
+})
 
 function syncForm(data: NetworkConfig): void {
   form.value = {
@@ -236,12 +248,8 @@ onMounted(() => {
           </button>
         </div>
         <div class="ls-settingspage__links">
-          <RouterLink class="ls-btn ls-btn--small" to="/users">{{ t('settings.manageUsers') }}</RouterLink>
-          <RouterLink v-if="can('role.manage')" class="ls-btn ls-btn--small" to="/roles">
-            {{ t('nav.roles') }}
-          </RouterLink>
-          <RouterLink v-if="can('server.read')" class="ls-btn ls-btn--small" to="/groups">
-            {{ t('nav.groups') }}
+          <RouterLink v-if="can('user.manage')" class="ls-btn ls-btn--small" to="/users">
+            {{ t('settings.manageUsers') }}
           </RouterLink>
           <RouterLink v-if="can('server.write')" class="ls-btn ls-btn--small" to="/credentials">
             {{ t('nav.credentials') }}
@@ -297,12 +305,19 @@ onMounted(() => {
               class="ls-btn ls-btn--primary"
               type="submit"
               :disabled="passwordBusy"
+              :aria-busy="passwordBusy"
             >
+              <span v-if="passwordBusy" class="ls-spinner" aria-hidden="true" />
               {{ t('common.save') }}
             </button>
           </div>
         </form>
-        <p v-if="passwordNotice" id="settings-password-notice" class="ls-notice" role="status">
+        <p
+          v-if="passwordNotice"
+          id="settings-password-notice"
+          class="ls-notice ls-notice--success"
+          role="status"
+        >
           {{ passwordNotice }}
         </p>
       </section>
@@ -414,7 +429,12 @@ onMounted(() => {
           <p class="ls-adminpage__form-hint">{{ t('network.honestNotice') }}</p>
         </form>
 
-        <p v-if="networkNotice" id="settings-network-notice" class="ls-notice" role="status">
+        <p
+          v-if="networkNotice"
+          id="settings-network-notice"
+          class="ls-notice ls-notice--success"
+          role="status"
+        >
           {{ networkNotice }}
         </p>
       </section>

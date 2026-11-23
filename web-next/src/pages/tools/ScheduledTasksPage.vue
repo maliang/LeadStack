@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
 import { useCan } from '@/composables/useCan'
 import { useI18n } from '@/i18n'
 import { api, type ScheduledTask, type ScheduledTaskRun, type Server } from '@/lib/api'
 import { parseCron, describeCron } from '@/lib/cron'
 import { errorMessage } from '@/lib/errors'
-import { formatDateTime, formatRelativeTime } from '@/lib/format'
+import { formatDateTime, formatLatency, formatRelativeTime } from '@/lib/format'
 
 /**
  * 定时任务页（挂载面：AppShell 默认 slot → .ls-main__inner）。
@@ -34,6 +35,8 @@ const createOpen = ref(false)
 const editing = ref<ScheduledTask | null>(null)
 const saving = ref(false)
 const formErrorKey = ref<string | null>(null)
+/** 服务端返回的保存失败原因：贴在弹窗内部，避免关窗后只剩页面顶部的 actionError。 */
+const formSubmitError = ref<string | null>(null)
 
 const form = reactive({
   name: '',
@@ -78,6 +81,7 @@ function resetForm(): void {
   form.enabled = true
   form.serverIds = []
   formErrorKey.value = null
+  formSubmitError.value = null
 }
 
 function openCreate(): void {
@@ -98,6 +102,7 @@ function openEdit(task: ScheduledTask): void {
   form.enabled = task.enabled
   form.serverIds = [...task.server_ids]
   formErrorKey.value = null
+  formSubmitError.value = null
   createOpen.value = true
 }
 
@@ -106,6 +111,7 @@ function closeForm(): void {
   createOpen.value = false
   editing.value = null
   formErrorKey.value = null
+  formSubmitError.value = null
 }
 
 function toggleServer(id: string): void {
@@ -161,6 +167,7 @@ async function submitForm(): Promise<void> {
     return
   }
   formErrorKey.value = null
+  formSubmitError.value = null
   saving.value = true
   actionError.value = null
   const payload = {
@@ -184,10 +191,8 @@ async function submitForm(): Promise<void> {
     editing.value = null
     await load(true)
   } catch (err) {
-    formErrorKey.value = null
-    actionError.value = errorMessage(err, t('common.error'))
-    createOpen.value = false
-    editing.value = null
+    // 保存失败不关弹窗：用户刚填的 cron / 命令不能因为一次 409 就丢光。
+    formSubmitError.value = errorMessage(err, t('common.error'))
   } finally {
     saving.value = false
   }
@@ -284,6 +289,14 @@ function runStatusClass(status: string): string {
   return 'ls-scheduledpage__status--idle'
 }
 
+/** 运行状态文案：与发布详情页一样走映射，绝不把后端 raw status 直接贴到界面。 */
+function runStatusLabel(status: string): string {
+  if (status === 'success' || status === 'failed' || status === 'running') {
+    return t(`schedules.runStatus.${status}`)
+  }
+  return t('schedules.runStatus.other')
+}
+
 onMounted(() => {
   if (!canRead.value) return
   void load()
@@ -307,12 +320,13 @@ onMounted(() => {
         <div class="ls-adminpage__head-actions">
           <button
             id="scheduled-refresh"
-            class="ls-btn ls-btn--small"
+            class="ls-btn"
             type="button"
             :disabled="refreshing"
             @click="refresh"
           >
-            <span v-if="refreshing" class="ls-spinner" aria-hidden="true"></span>
+            <span v-if="refreshing" class="ls-spinner" aria-hidden="true" />
+            <AppIcon v-else name="refresh" size="0.875rem" />
             {{ t('common.refresh') }}
           </button>
           <button
@@ -322,6 +336,7 @@ onMounted(() => {
             type="button"
             @click="openCreate"
           >
+            <AppIcon name="plus" size="0.875rem" />
             {{ t('schedules.create') }}
           </button>
         </div>
@@ -332,16 +347,27 @@ onMounted(() => {
       </p>
 
       <div v-if="actionError" id="scheduled-action-error" class="ls-notice ls-notice--error" role="alert">
+        <p class="ls-notice__title">{{ t('common.error') }}</p>
         <p class="ls-notice__text">{{ actionError }}</p>
+        <button class="ls-notice__action" type="button" @click="actionError = null">
+          {{ t('common.close') }}
+        </button>
       </div>
 
-      <p v-if="notice" id="scheduled-action-notice" class="ls-notice" role="status">
-        <span class="ls-notice__text">{{ notice }}</span>
-      </p>
+      <div v-if="notice" id="scheduled-action-notice" class="ls-notice ls-notice--success" role="status">
+        <p class="ls-notice__title">{{ notice }}</p>
+        <button class="ls-notice__action" type="button" @click="notice = null">
+          {{ t('common.close') }}
+        </button>
+      </div>
 
-      <div v-if="error && loaded" id="scheduled-banner-error" class="ls-notice ls-notice--error" role="alert">
-        <span>{{ error }}</span>
-        <button class="ls-btn ls-btn--small" type="button" @click="refresh">{{ t('common.retry') }}</button>
+      <div v-if="error && loaded" id="scheduled-banner-error" class="ls-banner" role="alert">
+        <AppIcon name="alert-triangle" size="1rem" />
+        <div class="ls-banner__body">
+          <p class="ls-banner__title">{{ t('common.error') }}</p>
+          <p class="ls-banner__text">{{ error }}</p>
+        </div>
+        <button class="ls-notice__action" type="button" @click="refresh">{{ t('common.retry') }}</button>
       </div>
 
       <div v-if="state === 'loading'" id="scheduled-loading" class="ls-scheduledpage__loading" aria-busy="true">
@@ -444,7 +470,7 @@ onMounted(() => {
                     {{ t('common.edit') }}
                   </button>
                   <button
-                    class="ls-btn ls-btn--small ls-adminpage__danger ls-scheduledpage__delete"
+                    class="ls-btn ls-btn--small ls-btn--danger ls-scheduledpage__delete"
                     type="button"
                     @click="askDelete(task)"
                   >
@@ -525,6 +551,9 @@ onMounted(() => {
         <p v-if="formError" id="scheduled-form-error" class="ls-adminpage__form-error" role="alert">
           {{ formError }}
         </p>
+        <p v-if="formSubmitError" id="scheduled-form-submit-error" class="ls-adminpage__form-error" role="alert">
+          {{ formSubmitError }}
+        </p>
       </form>
 
       <template #footer>
@@ -559,7 +588,7 @@ onMounted(() => {
         </button>
         <button
           id="scheduled-delete-confirm"
-          class="ls-btn ls-adminpage__danger"
+          class="ls-btn ls-btn--danger"
           type="button"
           :disabled="deleteBusy"
           @click="confirmDelete"
@@ -588,11 +617,15 @@ onMounted(() => {
         <ul v-else class="ls-scheduledpage__run-list">
           <li v-for="run in runs" :key="run.id" class="ls-scheduledpage__run-item">
             <div class="ls-scheduledpage__run-head">
-              <span class="ls-chip" :class="runStatusClass(run.status)">{{ run.status }}</span>
+              <span class="ls-chip" :class="runStatusClass(run.status)">{{ runStatusLabel(run.status) }}</span>
               <span class="ls-adminpage__meta">{{ serverName(run.server_id) }}</span>
               <span class="ls-adminpage__meta">{{ run.ts ? formatDateTime(run.ts) : t('common.na') }}</span>
-              <span class="ls-adminpage__meta">exit {{ run.exit_code ?? t('common.na') }}</span>
-              <span class="ls-adminpage__meta">{{ run.duration_ms ?? 0 }} ms</span>
+              <span class="ls-adminpage__meta">
+                {{ t('schedules.exitCode', { code: run.exit_code ?? t('common.na') }) }}
+              </span>
+              <span class="ls-adminpage__meta">
+                {{ t('schedules.duration') }} {{ formatLatency(run.duration_ms) }}
+              </span>
             </div>
             <p v-if="run.message" class="ls-scheduledpage__run-message">{{ run.message }}</p>
             <pre v-if="run.stdout" class="ls-scheduledpage__run-output">{{ run.stdout }}</pre>

@@ -2,7 +2,7 @@ import { computed } from 'vue'
 import { ApiError } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import { formatDuration } from '@/lib/format'
-import { t, useI18n, type Language } from '@/i18n'
+import { t, useI18n } from '@/i18n'
 
 /**
  * 登录页 / 无权限页的全部可见文案与状态映射（纯函数）。
@@ -35,9 +35,8 @@ export interface LoginCopy {
   signedInAs: string
 }
 
-/** 纯函数：给定语言返回整页文案（不读全局状态）。 */
-export function loginCopy(language: Language): LoginCopy {
-  const zh = language !== 'en-US'
+/** 纯函数：按当前语言返回整页文案（t 内部读取当前词典）。 */
+export function loginCopy(): LoginCopy {
   return {
     brandTagline: t('s.0253'),
     title: t('s.1039'),
@@ -47,7 +46,7 @@ export function loginCopy(language: Language): LoginCopy {
     usernameLabel: t('s.0112'),
     passwordLabel: t('s.0073'),
     submit: t('s.1042'),
-    submitting: zh ? '正在登录…' : 'Signing in…',
+    submitting: t('login.submitting'),
     showPassword: t('server.access.showPassword'),
     hidePassword: t('server.access.hidePassword'),
     checkingSession: t('s.0487'),
@@ -56,17 +55,21 @@ export function loginCopy(language: Language): LoginCopy {
     retry: t('common.retry'),
     footHint: t('s.1043'),
     forbiddenTitle: t('authz.noPermission'),
-    forbiddenHint: zh ? '当前账号缺少访问该页面所需的权限点。' : 'This account lacks the permission required for that page.',
-    backHome: zh ? '返回首页' : 'Back to home',
-    backToLogin: zh ? '重新登录' : 'Sign in again',
-    signedInAs: zh ? '当前账号' : 'Signed in as',
+    forbiddenHint: t('login.forbiddenHint'),
+    backHome: t('login.backHome'),
+    backToLogin: t('login.backToLogin'),
+    signedInAs: t('login.signedInAs'),
   }
 }
 
 /** 组合式版本：语言切换时自动刷新文案。 */
 export function useLoginCopy() {
   const { language } = useI18n()
-  return computed<LoginCopy>(() => loginCopy(language.value))
+  return computed<LoginCopy>(() => {
+    // 建立对 language 的响应式依赖：切换语言后重新取值
+    void language.value
+    return loginCopy()
+  })
 }
 
 /**
@@ -78,8 +81,8 @@ export function useLoginCopy() {
  * - status=401 + details.remaining_attempts ≥ 1 → 提示剩余次数
  * - 其余 → errorMessage() 的文案（网络 / 5xx / 未知）
  */
-export function loginErrorMessage(error: unknown, language: Language): string {
-  const fallback = language === 'en-US' ? 'Sign-in failed' : t('s.1037')
+export function loginErrorMessage(error: unknown): string {
+  const fallback = t('login.failed')
   if (!(error instanceof ApiError)) return errorMessage(error, fallback)
 
   const details = error.details ?? {}

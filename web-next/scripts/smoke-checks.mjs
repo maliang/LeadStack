@@ -315,6 +315,14 @@ async function installMockApi(context, state) {
       return route.fulfill({ status: 204, body: '' })
     }
 
+    if (path === '/api/v1/servers' && method === 'GET') {
+      return json(200, {
+        data: [
+          { id: 'srv-alpha', name: 'alpha-node', host: '10.0.0.11', port: 22, mode: 'agent', status: 'online', tags: [] },
+          { id: 'srv-beta', name: 'beta-node', host: '10.0.0.12', port: 22, mode: 'agent', status: 'online', tags: [] },
+        ],
+      })
+    }
     if (path === '/api/v1/checks' && method === 'GET') {
       state.listCalls += 1
       if (state.listFailures > 0) {
@@ -322,6 +330,24 @@ async function installMockApi(context, state) {
         return json(500, { error: { code: 'internal', message: 'mock 列表故障', request_id: 'req-mock-1' } })
       }
       return json(200, { data: state.checks })
+    }
+    if (path === '/api/v1/checks' && method === 'POST') {
+      const body = JSON.parse(request.postData() || '{}')
+      state.creates.push(body)
+      const created = checkFixture({
+        id: 'c-new',
+        name: body.name,
+        kind: body.kind,
+        target: body.target,
+        interval_s: body.interval_s,
+        timeout_s: body.timeout_s,
+        params: body.params ?? {},
+        server_ids: body.server_ids ?? [],
+        server_count: (body.server_ids ?? []).length,
+        target_count: (body.server_ids ?? []).length,
+      })
+      state.checks.push(created)
+      return json(200, { data: created })
     }
 
     const detail = /^\/api\/v1\/checks\/([^/]+)$/.exec(path)
@@ -333,9 +359,25 @@ async function installMockApi(context, state) {
       if (method === 'PATCH') {
         const body = JSON.parse(request.postData() || '{}')
         state.patches.push({ id, body })
+        Object.assign(found, body)
         if (typeof body.enabled === 'boolean') found.enabled = body.enabled
         return json(200, { data: found })
       }
+      if (method === 'DELETE') {
+        state.deletes.push(id)
+        state.checks = state.checks.filter((item) => item.id !== id)
+        return json(200, { data: {} })
+      }
+    }
+
+    const targets = /^\/api\/v1\/checks\/([^/]+)\/targets$/.exec(path)
+    if (targets && method === 'POST') {
+      const id = decodeURIComponent(targets[1])
+      const body = JSON.parse(request.postData() || '{}')
+      state.targetSets.push({ id, body })
+      const found = state.checks.find((item) => item.id === id)
+      if (found) found.server_ids = body.server_ids ?? body.ids ?? found.server_ids
+      return json(200, { data: {} })
     }
 
     const run = /^\/api\/v1\/checks\/([^/]+)\/run$/.exec(path)
@@ -389,6 +431,9 @@ function newState(userRecord) {
     patches: [],
     runs: [],
     resultCalls: [],
+    creates: [],
+    deletes: [],
+    targetSets: [],
   }
 }
 
@@ -642,7 +687,52 @@ async function run() {
     check('320px 行内执行按钮可见可点', narrow.buttonVisible)
     await page.setViewportSize({ width: 1280, height: 900 })
 
-    // 15) 无 check.read：路由守卫拦到 /forbidden，且一次 /checks 请求都不发
+    // 15) 新建 / 编辑 / 删除检测项（check.write）
+    await page.click('#checks-create')
+    await page.waitForSelector('#check-form', { timeout: 5000 })
+    await page.fill('#check-form-name', 'new-http')
+    await page.fill('#check-form-target', 'https://example.com/healthz')
+    check(
+      '无 server.read 时目标选择降级为说明（仍可保存）',
+      (await page.locator('.ls-check-form__servers').count()) === 0,
+    )
+    await page.click('#check-form-submit')
+    await page.waitForSelector('#checks-action-notice', { timeout: 8000 })
+    const createBody = state.creates.at(-1) || {}
+    check(
+      '新建检测项提交名称/类型/目标（无 server.read 时目标为空）',
+      createBody.name === 'new-http' &&
+        createBody.kind === 'http' &&
+        createBody.target === 'https://example.com/healthz' &&
+        Array.isArray(createBody.server_ids) &&
+        createBody.server_ids.length === 0,
+      JSON.stringify(createBody),
+    )
+    await page.waitForSelector('#check-row-c-new', { timeout: 8000 })
+
+    await page.click('#check-edit-c-new')
+    await page.waitForSelector('#check-form', { timeout: 5000 })
+    await page.fill('#check-form-interval', '90')
+    await page.click('#check-form-submit')
+    await page.waitForSelector('#check-form', { state: 'detached', timeout: 8000 })
+    const editBody = state.patches.at(-1)?.body || {}
+    check(
+      '编辑检测项提交修改后的间隔',
+      state.patches.at(-1)?.id === 'c-new' && editBody.interval_s === 90,
+      JSON.stringify(editBody),
+    )
+
+    await page.click('#check-delete-c-new')
+    await page.waitForSelector('#check-delete-confirm', { timeout: 5000 })
+    await page.click('#check-delete-confirm')
+    await page.waitForSelector('#check-row-c-new', { state: 'detached', timeout: 8000 })
+    check(
+      '删除检测项发出 DELETE 且行消失',
+      state.deletes.includes('c-new') && (await page.locator('.ls-checkspage__row').count()) === 3,
+      JSON.stringify(state.deletes),
+    )
+
+    // 16) 无 check.read：路由守卫拦到 /forbidden，且一次 /checks 请求都不发
     stop: {
       legacyContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
       const denied = newState(NO_CHECK_PERM)

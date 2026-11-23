@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
 import { useCan } from '@/composables/useCan'
 import { useI18n } from '@/i18n'
-import { api, type CreateTemplatePayload, type DeployTemplate } from '@/lib/api'
+import { api, TEMPLATE_PLACEHOLDERS, type CreateTemplatePayload, type DeployTemplate } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import { formatDateTime } from '@/lib/format'
 import {
@@ -53,6 +53,7 @@ const formErrors = ref<TemplateFormErrors>({})
 const formAttempted = ref(false)
 
 const deleting = ref<DeployTemplate | null>(null)
+const contentEl = ref<HTMLTextAreaElement | null>(null)
 
 const loading = computed(() => state.value === 'loading')
 const visibleTemplates = computed(() =>
@@ -103,6 +104,26 @@ watch(
 
 function clearWriteError(): void {
   writeError.value = null
+}
+
+/** 在光标处插入 {{NAME}}；没有焦点时追加到末尾。 */
+function insertPlaceholder(name: string): void {
+  const token = `{{${name}}}`
+  const el = contentEl.value
+  if (!el) {
+    form.value.content += token
+    return
+  }
+  const start = el.selectionStart ?? form.value.content.length
+  const end = el.selectionEnd ?? start
+  const before = form.value.content.slice(0, start)
+  const after = form.value.content.slice(end)
+  form.value.content = `${before}${token}${after}`
+  void nextTick(() => {
+    el.focus()
+    el.selectionStart = start + token.length
+    el.selectionEnd = start + token.length
+  })
 }
 
 async function write(action: () => Promise<unknown>): Promise<boolean> {
@@ -379,6 +400,7 @@ function firstLine(content: string): string {
           <span class="ls-field__label">{{ t('templates.form.content') }}</span>
           <textarea
             id="template-form-content"
+            ref="contentEl"
             v-model="form.content"
             class="ls-textarea ls-templates__code"
             spellcheck="false"
@@ -392,6 +414,22 @@ function firstLine(content: string): string {
             {{ t('templates.form.contentHint') }}
           </span>
         </label>
+
+        <div class="ls-templates__placeholders">
+          <span class="ls-field__label">{{ t('templates.form.placeholders') }}</span>
+          <div class="ls-chip-group">
+            <button
+              v-for="placeholder in TEMPLATE_PLACEHOLDERS"
+              :key="placeholder.name"
+              class="ls-chip ls-chip--button"
+              type="button"
+              :title="placeholder.description"
+              @click="insertPlaceholder(placeholder.name)"
+            >
+              {{ placeholder.name }}
+            </button>
+          </div>
+        </div>
 
         <p v-if="writeError" class="ls-inline-error" role="alert">{{ writeError }}</p>
         <p v-if="formAttempted && Object.keys(formErrors).length > 0" class="ls-inline-error" role="alert">

@@ -46,7 +46,8 @@ const templates: Record<string, string> = {
   'templates.form.kind': 'Template kind',
   'templates.form.content': 'Template content',
   'templates.form.contentRequired': 'Template content is required',
-  'templates.form.contentHint': 'Supports {{.Var}} placeholders; rendering a preview runs no commands.',
+  'templates.form.placeholders': 'Available placeholders (click to insert)',
+  'templates.form.contentHint': 'Supports placeholders such as {{APP_SLUG}}; rendering a preview runs no commands.',
   'templates.form.invalid': 'Fix the form errors first',
 
   'templates.delete.title': 'Delete template',

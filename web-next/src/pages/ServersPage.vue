@@ -6,6 +6,7 @@ import ServerBatchBar from '@/components/servers/ServerBatchBar.vue'
 import ServerBatchResultDialog from '@/components/servers/ServerBatchResultDialog.vue'
 import ServerListToolbar from '@/components/servers/ServerListToolbar.vue'
 import ServerCard from '@/components/servers/ServerCard.vue'
+import ServerFormDialog from '@/components/servers/ServerFormDialog.vue'
 import ServerRow from '@/components/servers/ServerRow.vue'
 import { useCan } from '@/composables/useCan'
 import {
@@ -21,7 +22,7 @@ import {
   type ServersView,
 } from '@/composables/useServers'
 import { useI18n } from '@/i18n'
-import { api, type BatchAction, type BatchResultItem } from '@/lib/api'
+import { api, type BatchAction, type BatchResultItem, type Server } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import {
   CUSTOM_GROUP_VALUE,
@@ -242,6 +243,40 @@ function resetFilters(): void {
 function toggleRow(id: string): void {
   expandedId.value = expandedId.value === id ? null : id
 }
+
+/* ---------------- 新增 / 编辑服务器 ---------------- */
+
+const formOpen = ref(false)
+const formTarget = ref<Server | null>(null)
+const actionNotice = ref<string | null>(null)
+
+function openCreateForm(): void {
+  if (!canWrite.value) return
+  formTarget.value = null
+  actionNotice.value = null
+  formOpen.value = true
+}
+
+function openEditForm(id: string): void {
+  const target = servers.value.find((server) => server.id === id)
+  if (!target || !canWrite.value) return
+  formTarget.value = target
+  actionNotice.value = null
+  formOpen.value = true
+}
+
+function closeForm(): void {
+  formOpen.value = false
+  formTarget.value = null
+}
+
+async function handleFormSaved(saved: Server): Promise<void> {
+  const edited = formTarget.value !== null
+  formOpen.value = false
+  formTarget.value = null
+  actionNotice.value = t(edited ? 'server.form.saved' : 'server.form.created', { name: saved.name })
+  await refresh()
+}
 </script>
 
 <template>
@@ -251,18 +286,37 @@ function toggleRow(id: string): void {
         <h1 class="ls-servers__title">{{ t('servers.title') }}</h1>
         <p class="ls-servers__subtitle">{{ t('servers.subtitle') }}</p>
       </div>
-      <button
-        id="servers-refresh"
-        class="ls-btn ls-servers__refresh"
-        type="button"
-        :disabled="refreshing"
-        @click="refresh"
-      >
-        <span v-if="refreshing" class="ls-spinner" aria-hidden="true" />
-        <AppIcon v-else name="refresh" size="0.875rem" />
-        {{ t('common.refresh') }}
-      </button>
+      <div class="ls-servers__head-actions">
+        <button
+          id="servers-refresh"
+          class="ls-btn ls-servers__refresh"
+          type="button"
+          :disabled="refreshing"
+          @click="refresh"
+        >
+          <span v-if="refreshing" class="ls-spinner" aria-hidden="true" />
+          <AppIcon v-else name="refresh" size="0.875rem" />
+          {{ t('common.refresh') }}
+        </button>
+        <button
+          v-if="canWrite"
+          id="servers-create"
+          class="ls-btn ls-btn--primary"
+          type="button"
+          @click="openCreateForm"
+        >
+          <AppIcon name="plus" size="0.875rem" />
+          {{ t('server.form.createAction') }}
+        </button>
+      </div>
     </header>
+
+    <div v-if="actionNotice" id="servers-action-notice" class="ls-notice ls-notice--success" role="status">
+      <p class="ls-notice__title">{{ actionNotice }}</p>
+      <button class="ls-notice__action" type="button" @click="actionNotice = null">
+        {{ t('common.close') }}
+      </button>
+    </div>
 
     <ServerListToolbar
       :filters="filters"
@@ -335,6 +389,15 @@ function toggleRow(id: string): void {
       <button v-if="filtersActive" class="ls-notice__action" type="button" @click="resetFilters">
         {{ t('s.0525') }}
       </button>
+      <button
+        v-else-if="canWrite"
+        id="servers-empty-create"
+        class="ls-notice__action"
+        type="button"
+        @click="openCreateForm"
+      >
+        {{ t('server.form.createAction') }}
+      </button>
     </div>
 
     <div v-else-if="viewMode === 'card'" class="ls-servers__cards">
@@ -344,7 +407,9 @@ function toggleRow(id: string): void {
         :server="server"
         :selectable="canWrite"
         :selected="selectedIds.includes(server.id)"
+        :can-edit="canWrite"
         @select="onSelect"
+        @edit="openEditForm"
       />
     </div>
 
@@ -357,8 +422,10 @@ function toggleRow(id: string): void {
         :terminal-allowed="terminalAllowed"
         :selectable="canWrite"
         :selected="selectedIds.includes(server.id)"
+        :can-edit="canWrite"
         @toggle="toggleRow"
         @select="onSelect"
+        @edit="openEditForm"
       />
     </ul>
 
@@ -465,6 +532,15 @@ function toggleRow(id: string): void {
       </template>
     </AppModal>
 
+    <ServerFormDialog
+      v-if="formOpen"
+      :server="formTarget"
+      :group-options="groups"
+      @close="closeForm"
+      @saved="handleFormSaved"
+      @local-created="refresh()"
+    />
+
     <ServerBatchResultDialog
       v-if="resultOpen"
       :results="batchResults"
@@ -477,81 +553,3 @@ function toggleRow(id: string): void {
     />
   </section>
 </template>
-
-<style scoped>
-/* 批量选择行：与工具栏同宽，窄宽下整行换行而不是横向溢出 */
-.ls-servers__selection {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--ls-space-2);
-  min-width: 0;
-}
-
-.ls-servers__select-all {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ls-space-2);
-  min-width: 0;
-  min-height: 1.75rem;
-  color: var(--ls-text-muted);
-  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
-  cursor: pointer;
-}
-
-.ls-servers__select-all input {
-  flex: none;
-  width: 1rem;
-  height: 1rem;
-  margin: 0;
-  accent-color: var(--ls-primary-fill);
-  cursor: pointer;
-}
-
-.ls-servers__select-all span {
-  overflow-wrap: anywhere;
-}
-
-/* 批量参数弹窗：目标列表内滚，避免长名单把弹窗撑出屏幕 */
-.ls-batch-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ls-space-3);
-  min-width: 0;
-}
-
-.ls-batch-form__warning {
-  margin: 0;
-  padding: var(--ls-space-2) var(--ls-space-3);
-  border-radius: var(--ls-radius-md);
-  background: var(--ls-danger-soft);
-  color: var(--ls-danger);
-  font: 500 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
-}
-
-.ls-batch-form__targets {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ls-space-1);
-  min-width: 0;
-}
-
-.ls-batch-form__targets-title {
-  margin: 0;
-  color: var(--ls-text-subtle);
-  font: 500 var(--ls-text-2xs) / 1.4 var(--ls-font-sans);
-}
-
-.ls-batch-form__target-list {
-  max-height: 10rem;
-  margin: 0;
-  padding-inline-start: var(--ls-space-4);
-  overflow-y: auto;
-}
-
-.ls-batch-form__target-list li {
-  overflow-wrap: anywhere;
-  color: var(--ls-text);
-  font: 400 var(--ls-text-xs) / 1.6 var(--ls-font-sans);
-}
-</style>

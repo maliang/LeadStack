@@ -200,7 +200,7 @@ onMounted(() => {
         </button>
       </div>
 
-      <div v-if="actionNotice" id="tokens-action-notice" class="ls-notice" role="status">
+      <div v-if="actionNotice" id="tokens-action-notice" class="ls-notice ls-notice--success" role="status">
         <p class="ls-notice__title">{{ actionNotice }}</p>
         <button class="ls-notice__action" type="button" @click="actionNotice = null">
           {{ t('common.close') }}
@@ -228,6 +228,15 @@ onMounted(() => {
       <div v-else-if="tokens.length === 0" id="tokens-empty" class="ls-notice">
         <p class="ls-notice__title">{{ t('tokens.emptyTitle') }}</p>
         <p class="ls-notice__text">{{ t('tokens.emptyDescription') }}</p>
+        <button
+          v-if="canManage"
+          id="tokens-empty-create"
+          class="ls-notice__action"
+          type="button"
+          @click="openCreate"
+        >
+          {{ t('tokens.create') }}
+        </button>
       </div>
 
       <div v-else class="ls-adminpage__scroll">
@@ -380,7 +389,7 @@ onMounted(() => {
         </button>
         <button
           id="tokens-revoke-confirm"
-          class="ls-btn ls-btn--primary ls-adminpage__danger"
+          class="ls-btn ls-btn--danger"
           type="button"
           :disabled="revokeBusy"
           @click="submitRevoke"

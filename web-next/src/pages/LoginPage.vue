@@ -5,7 +5,6 @@ import AppIcon from '@/components/AppIcon.vue'
 import BrandMark from '@/components/BrandMark.vue'
 import { loginErrorMessage, useLoginCopy } from '@/composables/useLoginCopy'
 import { useAuth } from '@/composables/useAuth'
-import { useI18n } from '@/i18n'
 
 /**
  * 登录页：对接 lib/api.ts 的 api.login（经 useAuth().login 落到会话单例）。
@@ -16,7 +15,6 @@ import { useI18n } from '@/i18n'
 const route = useRoute()
 const router = useRouter()
 const copy = useLoginCopy()
-const { language } = useI18n()
 const { status, login, ensureSession } = useAuth()
 
 const username = ref('admin')
@@ -57,7 +55,7 @@ async function submit(): Promise<void> {
     await login(name, password.value)
     await goAfterLogin()
   } catch (error) {
-    errorText.value = loginErrorMessage(error, language.value)
+    errorText.value = loginErrorMessage(error)
     await nextTick()
     // 失败后把焦点交回密码框，键盘用户可以直接改密码重试
     passwordInput.value?.focus()

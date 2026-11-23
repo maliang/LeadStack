@@ -457,14 +457,14 @@ async function run() {
       rollbackText.includes('shop-web') && rollbackText.includes('1.3.0') && rollbackText.includes('1 台'),
       rollbackText.replace(/\s+/g, ' ').slice(0, 80),
     )
-    await page.locator('[data-testid="rollback-dialog"] .ls-dialog__foot .ls-btn:not(.ls-btn--danger)').click()
+    await page.locator('[data-testid="rollback-dialog"] .ls-modal__foot .ls-btn:not(.ls-btn--danger)').click()
     await page.waitForSelector('[data-testid="rollback-dialog"]', { state: 'detached', timeout: 5000 })
     await page.waitForTimeout(200)
     check('取消回滚不发请求', rollbackPosts() === 0, `${rollbackPosts()} 次`)
     await page.locator('header .ls-btn', { hasText: '回滚' }).first().click()
     await page.waitForSelector('[data-testid="rollback-dialog"] input[type="radio"]', { timeout: 5000 })
     await page.locator('[data-testid="rollback-dialog"] input[type="radio"]').first().check()
-    await page.locator('[data-testid="rollback-dialog"] .ls-dialog__foot .ls-btn--danger').click()
+    await page.locator('[data-testid="rollback-dialog"] .ls-modal__foot .ls-btn--danger').click()
     await page.waitForSelector('[data-testid="rollback-dialog"]', { state: 'detached', timeout: 5000 })
     await page.waitForTimeout(200)
     check('确认回滚发出一次请求', rollbackPosts() === 1, `${rollbackPosts()} 次`)
@@ -489,12 +489,12 @@ async function run() {
       '中止弹窗写明影响台数',
       (await page.locator('[data-testid="release-cancel-dialog"]').innerText()).includes('1'),
     )
-    await page.locator('[data-testid="release-cancel-dialog"] .ls-dialog__foot .ls-btn:not(.ls-btn--danger)').click()
+    await page.locator('[data-testid="release-cancel-dialog"] .ls-modal__foot .ls-btn:not(.ls-btn--danger)').click()
     await page.waitForSelector('[data-testid="release-cancel-dialog"]', { state: 'detached', timeout: 5000 })
     check('取消中止不发请求', state.actions.filter((item) => item.startsWith('cancel')).length === 0)
     await page.locator('header .ls-btn--danger').click()
     await page.waitForSelector('[data-testid="release-cancel-dialog"]', { timeout: 5000 })
-    await page.locator('[data-testid="release-cancel-dialog"] .ls-dialog__foot .ls-btn--danger').click()
+    await page.locator('[data-testid="release-cancel-dialog"] .ls-modal__foot .ls-btn--danger').click()
     await page.waitForSelector('[data-testid="release-cancel-dialog"]', { state: 'detached', timeout: 5000 })
     await page.waitForTimeout(200)
     check(

@@ -221,7 +221,7 @@ onMounted(() => {
         </button>
       </div>
 
-      <p v-if="notice" id="import-notice" class="ls-notice" role="status">
+      <p v-if="notice" id="import-notice" class="ls-notice ls-notice--success" role="status">
         <span class="ls-notice__text">{{ notice }}</span>
       </p>
 

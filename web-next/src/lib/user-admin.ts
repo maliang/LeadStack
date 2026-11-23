@@ -71,10 +71,6 @@ export function assignablePermissions(permissions: Permission[]): Permission[] {
   return permissions.filter((permission) => !permission.admin_only)
 }
 
-export function adminOnlyPermissions(permissions: Permission[]): Permission[] {
-  return permissions.filter((permission) => permission.admin_only)
-}
-
 /** 已选权限里真正能提交给后端的部分（过滤掉 admin-only，后端会 400）。 */
 export function selectedGrantable(permissions: Permission[], selected: string[]): string[] {
   const grantable = new Set(assignablePermissions(permissions).map((permission) => permission.key))
@@ -88,14 +84,6 @@ export function filterUsers(users: ManagedUser[], keyword: string): ManagedUser[
     [user.username, user.role, user.role_name ?? '', user.id].some((field) =>
       field.toLowerCase().includes(query),
     ),
-  )
-}
-
-export function filterRoles(roles: Role[], keyword: string): Role[] {
-  const query = keyword.trim().toLowerCase()
-  if (query === '') return roles
-  return roles.filter((role) =>
-    [role.name, role.key, role.description].some((field) => field.toLowerCase().includes(query)),
   )
 }
 

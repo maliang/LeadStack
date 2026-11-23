@@ -38,11 +38,6 @@ const ACTION_NAME: Record<BatchAction, string> = {
   delete: 'delete',
 }
 
-/** i18n 键里的驼峰动作名：serversBatch.action.<name> / serversBatch.dialog.<name>.title */
-export function batchActionI18nName(action: BatchAction): string {
-  return ACTION_NAME[action]
-}
-
 export function batchActionLabelKey(action: BatchAction): string {
   return `serversBatch.action.${ACTION_NAME[action]}`
 }
@@ -54,11 +49,6 @@ export function batchActionDialogKey(action: BatchAction, part: 'title' | 'desc'
 /** 删除是唯一不可撤销的动作：按钮用危险色并带二次确认文案。 */
 export function isDangerousBatchAction(action: BatchAction): boolean {
   return action === 'delete'
-}
-
-/** add-tags / set-group 需要参数；其余三个是直接执行的确认框。 */
-export function batchActionNeedsParams(action: BatchAction): boolean {
-  return action === 'add-tags' || action === 'set-group'
 }
 
 export interface BatchDraft {
@@ -193,10 +183,6 @@ export function selectAllVisible(selected: readonly string[], visible: readonly 
   const next = [...selected]
   for (const id of visible) if (!next.includes(id)) next.push(id)
   return next
-}
-
-export function clearSelectionFor(visible: readonly string[]): string[] {
-  return [...visible]
 }
 
 /** 过滤条件变化后丢掉已不可见的选中项，保持原顺序。 */

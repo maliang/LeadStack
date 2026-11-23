@@ -40,6 +40,8 @@ const emit = defineEmits<{
   (event: 'run'): void
   (event: 'toggle', enabled: boolean): void
   (event: 'detail'): void
+  (event: 'edit'): void
+  (event: 'delete'): void
 }>()
 
 const { t } = useI18n()
@@ -145,6 +147,24 @@ const lastTime = () => formatRelativeTime(props.check.last_result?.ts ?? null)
       >
         {{ t('checks.detail') }}
         <AppIcon name="chevron-right" size="0.75rem" />
+      </button>
+      <button
+        v-if="canWrite"
+        :id="`check-edit-${check.id}`"
+        class="ls-btn ls-btn--small ls-checkspage__edit"
+        type="button"
+        @click="emit('edit')"
+      >
+        {{ t('common.edit') }}
+      </button>
+      <button
+        v-if="canWrite"
+        :id="`check-delete-${check.id}`"
+        class="ls-btn ls-btn--small ls-btn--danger ls-checkspage__delete"
+        type="button"
+        @click="emit('delete')"
+      >
+        {{ t('common.delete') }}
       </button>
     </td>
   </tr>

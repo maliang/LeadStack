@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
+import ServerFormDialog from '@/components/servers/ServerFormDialog.vue'
 import ServerOverviewTab from '@/components/server-detail/ServerOverviewTab.vue'
 import ServerAccessTab from '@/components/server-detail/ServerAccessTab.vue'
 import ServerLoginTab from '@/components/server-detail/ServerLoginTab.vue'
@@ -541,6 +542,19 @@ function backToList(): void {
   void router.push('/servers')
 }
 
+/* 编辑服务器（server.write）：复用列表页的纳管弹窗，保存后重读详情 ------- */
+const editOpen = ref(false)
+
+function openEdit(): void {
+  if (!canWrite.value) return
+  editOpen.value = true
+}
+
+async function onServerSaved(): Promise<void> {
+  editOpen.value = false
+  await loadServer(false)
+}
+
 onMounted(() => {
   void loadServer(true)
 })
@@ -563,15 +577,27 @@ onMounted(() => {
           <span v-if="address" class="ls-detail__address" :title="address">{{ address }}</span>
         </p>
       </div>
-      <button
-        class="ls-btn ls-btn--small"
-        type="button"
-        :disabled="refreshing || status === 'loading'"
-        @click="loadServer(false)"
-      >
-        <AppIcon name="refresh" size="0.875rem" />
-        {{ t('common.refresh') }}
-      </button>
+      <div class="ls-detail__actions">
+        <button
+          v-if="canWrite && server"
+          id="server-detail-edit"
+          class="ls-btn ls-btn--small"
+          type="button"
+          @click="openEdit"
+        >
+          <AppIcon name="settings" size="0.875rem" />
+          {{ t('server.edit.action') }}
+        </button>
+        <button
+          class="ls-btn ls-btn--small"
+          type="button"
+          :disabled="refreshing || status === 'loading'"
+          @click="loadServer(false)"
+        >
+          <AppIcon name="refresh" size="0.875rem" />
+          {{ t('common.refresh') }}
+        </button>
+      </div>
     </header>
 
     <div v-if="status === 'loading'" class="ls-detail__loading" role="status">
@@ -720,5 +746,12 @@ onMounted(() => {
         <ServerLogsPanel v-else-if="tab === 'logs'" :server-id="serverId" :allowed="canTerminal" />
       </div>
     </template>
+
+    <ServerFormDialog
+      v-if="editOpen && server"
+      :server="server"
+      @close="editOpen = false"
+      @saved="onServerSaved"
+    />
   </section>
 </template>

@@ -79,9 +79,3 @@ export function dismissToast(id: number): void {
   }
   state.items = state.items.filter((item) => item.id !== id)
 }
-
-export function clearToasts(): void {
-  for (const timer of timers.values()) clearTimeout(timer)
-  timers.clear()
-  state.items = []
-}

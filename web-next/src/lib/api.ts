@@ -1402,12 +1402,6 @@ export interface ServerLogsResult {
   truncated: boolean
 }
 
-export interface SetupStatus {
-  needs_setup: boolean
-  version: string
-  instance_name: string | null
-}
-
 /* ------------------------------------------------------------------ */
 /* 告警：告警（契约第 18/20 节）                                          */
 /* ------------------------------------------------------------------ */
@@ -3911,10 +3905,4 @@ export const api = {
       }),
     )
   },
-}
-
-/** 安装命令里要填的控制端地址：开发态指向被代理的后端，生产态用当前同源地址。 */
-export function resolveControlUrl(): string {
-  if (import.meta.env.DEV) return 'http://127.0.0.1:8080'
-  return window.location.origin
 }

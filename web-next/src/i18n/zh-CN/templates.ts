@@ -45,7 +45,8 @@ const templates: Record<string, string> = {
   'templates.form.kind': '模板类型',
   'templates.form.content': '模板内容',
   'templates.form.contentRequired': '请填写模板内容',
-  'templates.form.contentHint': '支持 {{.Var}} 占位符，渲染预览不会执行任何命令。',
+  'templates.form.placeholders': '可用占位符（点击插入）',
+  'templates.form.contentHint': '支持 {{APP_SLUG}} 这类占位符；渲染预览不会执行任何命令。',
   'templates.form.invalid': '请先修正表单中的错误',
 
   'templates.delete.title': '删除模板',

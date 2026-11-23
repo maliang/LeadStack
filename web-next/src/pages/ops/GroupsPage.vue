@@ -247,7 +247,7 @@ onMounted(() => {
         </button>
       </div>
 
-      <div v-if="actionNotice" id="groups-action-notice" class="ls-notice" role="status">
+      <div v-if="actionNotice" id="groups-action-notice" class="ls-notice ls-notice--success" role="status">
         <p class="ls-notice__title">{{ actionNotice }}</p>
         <button class="ls-notice__action" type="button" @click="actionNotice = null">
           {{ t('common.close') }}
@@ -275,6 +275,15 @@ onMounted(() => {
       <div v-else-if="groups.length === 0" id="groups-empty" class="ls-notice">
         <p class="ls-notice__title">{{ t('groups.emptyTitle') }}</p>
         <p class="ls-notice__text">{{ t('groups.emptyDescription') }}</p>
+        <button
+          v-if="canWrite"
+          id="groups-empty-create"
+          class="ls-notice__action"
+          type="button"
+          @click="openCreate"
+        >
+          {{ t('groups.create') }}
+        </button>
       </div>
 
       <div v-else class="ls-adminpage__scroll">
@@ -325,7 +334,7 @@ onMounted(() => {
                 </button>
                 <button
                   v-if="canWrite"
-                  class="ls-btn ls-btn--small ls-adminpage__danger ls-groupspage__delete"
+                  class="ls-btn ls-btn--small ls-btn--danger ls-groupspage__delete"
                   type="button"
                   :disabled="deleting"
                   @click="openDelete(group)"
@@ -406,7 +415,7 @@ onMounted(() => {
         </button>
         <button
           id="groups-delete-confirm"
-          class="ls-btn ls-btn--primary ls-adminpage__danger"
+          class="ls-btn ls-btn--danger"
           type="button"
           :disabled="deleting"
           @click="submitDelete"

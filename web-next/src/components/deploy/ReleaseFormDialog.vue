@@ -145,17 +145,17 @@ function submit(): void {
 
       <fieldset class="ls-form__group">
         <legend class="ls-field__label">{{ t('apps.releaseForm.targets') }}</legend>
-        <ul class="ls-dialog__choices ls-dialog__choices--scroll" data-testid="release-targets">
+        <ul class="ls-modal__choices ls-modal__choices--scroll" data-testid="release-targets">
           <li v-for="server in servers" :key="server.id">
-            <label class="ls-dialog__choice">
+            <label class="ls-modal__choice">
               <input
                 type="checkbox"
                 :checked="form.serverIds.includes(server.id)"
                 :value="server.id"
                 @change="toggleServer(server.id)"
               />
-              <span class="ls-dialog__choice-main">{{ server.name }}</span>
-              <span class="ls-dialog__choice-meta">{{ server.host }}</span>
+              <span class="ls-modal__choice-main">{{ server.name }}</span>
+              <span class="ls-modal__choice-meta">{{ server.host }}</span>
             </label>
           </li>
         </ul>
@@ -164,11 +164,11 @@ function submit(): void {
 
       <fieldset class="ls-form__group">
         <legend class="ls-field__label">{{ t('release.strategy') }}</legend>
-        <label class="ls-dialog__choice">
+        <label class="ls-modal__choice">
           <input v-model="form.strategy" type="radio" value="all" name="release-strategy" />
-          <span class="ls-dialog__choice-main">{{ t('release.strategyAll') }}</span>
+          <span class="ls-modal__choice-main">{{ t('release.strategyAll') }}</span>
         </label>
-        <label class="ls-dialog__choice">
+        <label class="ls-modal__choice">
           <input
             v-model="form.strategy"
             type="radio"
@@ -176,8 +176,8 @@ function submit(): void {
             name="release-strategy"
             :disabled="canaryDisabled"
           />
-          <span class="ls-dialog__choice-main">{{ t('release.strategyCanary') }}</span>
-          <span class="ls-dialog__choice-meta">
+          <span class="ls-modal__choice-main">{{ t('release.strategyCanary') }}</span>
+          <span class="ls-modal__choice-meta">
             {{ canaryDisabled ? t('release.canaryDisabled') : t('release.canaryCount') + ' ' + canaryMax }}
           </span>
         </label>

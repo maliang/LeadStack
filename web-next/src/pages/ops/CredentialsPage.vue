@@ -272,7 +272,7 @@ onMounted(() => {
         </button>
       </div>
 
-      <div v-if="actionNotice" id="credentials-action-notice" class="ls-notice" role="status">
+      <div v-if="actionNotice" id="credentials-action-notice" class="ls-notice ls-notice--success" role="status">
         <p class="ls-notice__title">{{ actionNotice }}</p>
         <button class="ls-notice__action" type="button" @click="actionNotice = null">
           {{ t('common.close') }}
@@ -300,6 +300,15 @@ onMounted(() => {
       <div v-else-if="credentials.length === 0" id="credentials-empty" class="ls-notice">
         <p class="ls-notice__title">{{ t('ops.credentials.emptyTitle') }}</p>
         <p class="ls-notice__text">{{ t('ops.credentials.emptyDescription') }}</p>
+        <button
+          v-if="canWrite"
+          id="credentials-empty-create"
+          class="ls-notice__action"
+          type="button"
+          @click="openCreate"
+        >
+          {{ t('ops.credentials.create') }}
+        </button>
       </div>
 
       <div v-else class="ls-adminpage__scroll">
@@ -360,7 +369,7 @@ onMounted(() => {
                   }}
                 </button>
                 <button
-                  class="ls-btn ls-btn--small ls-adminpage__danger ls-credentialspage__delete"
+                  class="ls-btn ls-btn--small ls-btn--danger ls-credentialspage__delete"
                   type="button"
                   :disabled="deleting"
                   @click="openDelete(credential)"
@@ -524,7 +533,7 @@ onMounted(() => {
         </button>
         <button
           id="credentials-delete-confirm"
-          class="ls-btn ls-btn--primary ls-adminpage__danger"
+          class="ls-btn ls-btn--danger"
           type="button"
           :disabled="deleting"
           @click="submitDelete"

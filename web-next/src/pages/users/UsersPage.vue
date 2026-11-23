@@ -334,7 +334,7 @@ onMounted(() => {
         </button>
       </div>
 
-      <div v-if="actionNotice" id="users-action-notice" class="ls-notice" role="status">
+      <div v-if="actionNotice" id="users-action-notice" class="ls-notice ls-notice--success" role="status">
         <p class="ls-notice__title">{{ actionNotice }}</p>
         <button class="ls-notice__action" type="button" @click="actionNotice = null">
           {{ t('common.close') }}
@@ -362,6 +362,9 @@ onMounted(() => {
       <div v-else-if="users.length === 0" id="users-empty" class="ls-notice">
         <p class="ls-notice__title">{{ t('users.emptyTitle') }}</p>
         <p class="ls-notice__text">{{ t('users.emptyDescription') }}</p>
+        <button id="users-empty-create" class="ls-notice__action" type="button" @click="openCreate">
+          {{ t('users.create') }}
+        </button>
       </div>
 
       <div v-else-if="filteredUsers.length === 0" id="users-empty-filtered" class="ls-notice">
@@ -613,7 +616,7 @@ onMounted(() => {
         </button>
         <button
           id="users-delete-confirm"
-          class="ls-btn ls-adminpage__danger"
+          class="ls-btn ls-btn--danger"
           type="button"
           :disabled="deleteBusy"
           @click="submitDelete"

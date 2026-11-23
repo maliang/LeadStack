@@ -97,6 +97,10 @@ const ICON_PATHS = {
   ],
   menu: [{ tag: 'path', attrs: { d: 'M4 6h16M4 12h16M4 18h16' } }],
   close: [{ tag: 'path', attrs: { d: 'M6 6l12 12M18 6 6 18' } }],
+  info: [
+    { tag: 'circle', attrs: { cx: 12, cy: 12, r: 9 } },
+    { tag: 'path', attrs: { d: 'M12 11v5M12 8h.01' } },
+  ],
   logout: [
     {
       tag: 'path',

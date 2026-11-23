@@ -394,24 +394,3 @@ onBeforeUnmount(() => {
     </section>
   </div>
 </template>
-
-<style scoped>
-.ls-script-editor {
-  min-height: 12rem;
-  font: 400 var(--ls-text-sm) / 1.6 var(--ls-font-mono);
-  tab-size: 2;
-}
-
-.ls-script-samples {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--ls-space-2);
-}
-
-.ls-script-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--ls-space-2);
-}
-</style>

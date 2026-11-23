@@ -348,6 +348,9 @@ const deploy: Record<string, string> = {
   'releaseDetail.showLogs': '查看日志',
   'releaseDetail.hideLogs': '收起日志',
   'releaseDetail.noLogs': '暂无日志输出',
+  'apps.envKeysSeparator': '、',
+  'apps.envKeysTruncated': '（已截断）',
+  'apps.envKeysLead': '：',
   'apps.releaseForm.stepCount': '{count} 步',
 }
 

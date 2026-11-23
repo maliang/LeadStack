@@ -363,7 +363,7 @@ async function main() {
   try {
     console.log(`\n品牌绿调色板验收：${base}（dist=${DIST}）\n`)
 
-    // 1) 登录进首页（主按钮在 HomeView 的首屏）
+    // 1) 登录进首页（主按钮在总览页头部）
     await page.goto(`${base}/#/login`, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('#login-password', { timeout: 15000 })
 
@@ -415,8 +415,8 @@ async function main() {
     await page.waitForTimeout(250)
     const darkLoginStyle = await readLoginButton()
     check(
-      '深色模式登录页主按钮填充 = rgb(22, 163, 74)（品牌 600）',
-      isBrand600(darkLoginStyle.background),
+      '深色模式登录页主按钮填充 = rgb(21, 128, 61)（品牌 700，600 降亮一阶）',
+      /rgb\(21,\s*128,\s*61\)/.test(darkLoginStyle.background),
       darkLoginStyle.background,
     )
     checkNoEmerald('深色模式登录页主按钮不含 emerald', `${darkLoginStyle.background} ${darkLoginStyle.color}`)
@@ -465,7 +465,9 @@ async function main() {
     await page.evaluate(() => document.documentElement.classList.remove('dark'))
     await page.waitForTimeout(300)
 
-    const primary = page.getByRole('button', { name: '开始使用' })
+    // 总览页头部的主操作（RouterLink 渲染成 <a class="ls-btn ls-btn--primary">）；
+    // 用稳定 id 定位，避免文案调整（「查看服务器」）让验收脚本失效。
+    const primary = page.locator('#dash-view-servers')
     await primary.waitFor({ state: 'visible', timeout: 10000 })
 
     // 2) 主按钮 computed background 必须命中品牌绿色阶

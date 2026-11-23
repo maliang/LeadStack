@@ -133,8 +133,10 @@ const modeOptions = [
       </label>
       <p v-if="app && app.redacted" class="ls-field__hint" data-app-env-keys>
         {{ t('apps.envKeysOnly') }}
-        <template v-if="app.env_keys.length > 0">：{{ app.env_keys.join('、') }}</template>
-        <template v-if="app.env_keys_truncated">（已截断）</template>
+        <template v-if="app.env_keys.length > 0">
+          {{ t('apps.envKeysLead') }}{{ app.env_keys.join(t('apps.envKeysSeparator')) }}
+        </template>
+        <template v-if="app.env_keys_truncated">{{ t('apps.envKeysTruncated') }}</template>
       </p>
       <label class="ls-field" for="app-form-description">
         <span class="ls-field__label">{{ t('apps.form.note') }}</span>

@@ -110,5 +110,17 @@ function isActive(item: NavGroup['items'][number]): boolean {
         </div>
       </template>
     </nav>
+
+    <div class="ls-sidebar__foot">
+      <RouterLink
+        class="ls-nav__item ls-sidebar__about"
+        to="/about"
+        :aria-current="props.activePath === '/about' ? 'page' : undefined"
+        @click="emit('navigate')"
+      >
+        <AppIcon class="ls-nav__icon" name="info" />
+        <span class="ls-nav__label">{{ label('shell.title.about') }}</span>
+      </RouterLink>
+    </div>
   </div>
 </template>

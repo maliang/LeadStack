@@ -909,8 +909,8 @@ async function run() {
     await page.waitForSelector('[data-backup-verify-result]', { timeout: 8000 })
     const verifyOkText = await page.locator('[data-backup-verify-result]').first().innerText()
     check(
-      '校验面板显示 ok=true 与 manifest 文件条目',
-      verifyOkText.includes('ok=true') && verifyOkText.includes('leadstack.db') && verifyOkText.includes('归档文件（2 个）'),
+      '校验面板显示「校验通过」与 manifest 文件条目',
+      verifyOkText.includes('校验通过') && verifyOkText.includes('leadstack.db') && verifyOkText.includes('归档文件（2 个）'),
       verifyOkText.replace(/\s+/g, ' ').slice(0, 140),
     )
     check(
@@ -965,8 +965,8 @@ async function run() {
     await page.waitForSelector('#backups-restore-staged', { timeout: 8000 })
     const stagedText = await page.locator('#backups-restore-staged').innerText()
     check(
-      '恢复 202 后展示 restart_required 与重启提示',
-      stagedText.includes('restart_required = true') && stagedText.includes('重启控制端后自动应用'),
+      '恢复 202 后展示「需要重启：是」与重启提示',
+      stagedText.includes('需要重启：是') && stagedText.includes('重启控制端后自动应用'),
       stagedText.replace(/\s+/g, ' ').slice(0, 160),
     )
     check(
@@ -1162,6 +1162,9 @@ async function run() {
         (await page.locator('#backups-restore-polling').count()) === 0,
       `${restoreStatusBefore} → ${state.restoreStatusCalls}`,
     )
+    // 失败后确认弹窗保持打开（保留已选文件、错误就近展示），先取消再继续后续用例。
+    await page.click('#backups-restore-cancel')
+    await page.waitForSelector('#backups-restore-confirm', { state: 'detached', timeout: 5000 })
 
     await page.click(`[data-backup-name="${backupName()}"] .ls-backupspage__delete`)
     await page.waitForSelector('#backups-delete-confirm-submit', { timeout: 5000 })

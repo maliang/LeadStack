@@ -325,7 +325,7 @@ onMounted(() => {
         </button>
       </div>
 
-      <div v-if="actionNotice" id="roles-action-notice" class="ls-notice" role="status">
+      <div v-if="actionNotice" id="roles-action-notice" class="ls-notice ls-notice--success" role="status">
         <p class="ls-notice__title">{{ actionNotice }}</p>
         <button class="ls-notice__action" type="button" @click="actionNotice = null">
           {{ t('common.close') }}
@@ -353,6 +353,9 @@ onMounted(() => {
       <div v-else-if="roles.length === 0" id="roles-empty" class="ls-notice">
         <p class="ls-notice__title">{{ t('roles.emptyTitle') }}</p>
         <p class="ls-notice__text">{{ t('roles.emptyDescription') }}</p>
+        <button id="roles-empty-create" class="ls-notice__action" type="button" @click="openCreate">
+          {{ t('roles.create') }}
+        </button>
       </div>
 
       <div v-else class="ls-adminpage__scroll">
@@ -622,7 +625,7 @@ onMounted(() => {
         </button>
         <button
           id="roles-delete-confirm"
-          class="ls-btn ls-adminpage__danger"
+          class="ls-btn ls-btn--danger"
           type="button"
           :disabled="deleteBusy"
           @click="submitDelete"

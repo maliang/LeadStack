@@ -368,10 +368,10 @@ async function run() {
     )
     const runText = await page.locator('#scheduled-runs').innerText()
     check('历史弹窗渲染 2 条运行记录', (await page.locator('.ls-scheduledpage__run-item').count()) === 2)
-    check('历史记录显示成功/失败状态', runText.includes('success') && runText.includes('failed'), runText.slice(0, 80))
+    check('历史记录本地化显示成功/失败状态', runText.includes('成功') && runText.includes('失败'), runText.slice(0, 80))
     check(
-      '失败记录逐字回显 stderr',
-      runText.includes('Permission denied') && runText.includes('exit 1'),
+      '失败记录逐字回显 stderr 与退出码',
+      runText.includes('Permission denied') && runText.includes('退出码 1'),
       runText.slice(0, 120),
     )
     await page.keyboard.press('Escape')

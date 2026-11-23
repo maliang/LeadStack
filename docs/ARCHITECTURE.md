@@ -1413,14 +1413,14 @@ POST /servers/import
 
 **i18n**： zh-CN（默认）/ en-US：`web-next/src/i18n/zh-CN/index.ts` 与 `web-next/src/i18n/en-US/index.ts` + `useI18n()`（`web-next/src/i18n/index.ts`）；语言存 `localStorage.leadstack.lang`；所有界面文案走 `t('key')`，**不允许硬编码中文残留**（验收会 grep 抽查）。
 
-**主题**：`light` / `dark` / `system` 三态 + 主题色预设（至少 蓝/靛/青/绿/紫 5 种）；写入 `document.documentElement.dataset.theme` 与 `--accent` CSS 变量；图表（uPlot）需随主题重绘。
+**主题**：`light` / `dark` / `system` 三态，品牌色唯一（品牌绿 #16a34a，`web-next/src/theme/brand.ts` 的 `BRAND_PRESET`）；不再提供多套主题色预设——`--ls-*` 语义 token 与 Vean preset 都以 `brand.ts` 为唯一来源。深色模式填充降到 green.700、前景近白（见 §46.1）。
 
-**字号**：`small` / `normal` / `large` 三档，映射到根 `font-size`（14/16/18px），Tailwind 用 rem 基准；持久化 `localStorage.leadstack.fontSize`。
+**字号**：不单独提供 `small` / `normal` / `large` 字号档位；信息密度由下面的「密度」控制，字号统一用 `src/styles/main.css` 的 `--ls-text-*` token。E2E 脚本依赖稳定的字号/行高，不要临时加根 `font-size` 缩放。
 
-**密度**：`comfortable` / `compact` 两档（表格行高与内边距）。
+**密度**：`standard` / `compact` 两档（表格行高与内边距），写入 `<html data-density>`，与主题一起存放在 Vean 的 `__VEAN_THEME` envelope 的 `extra` 字段。
 
 **布局与动线（必须遵守）**
-1. 左侧导航**分组**：监控（总览/服务器/检测/告警）· 运维（终端、文件、定时任务、日志）· 发布（应用/发布）· 系统（凭证/用户/审计/备份/设置）。
+1. 左侧导航**分组**（与 `web-next/src/lib/nav.ts` 的 `NAV_GROUPS` 一一对应）：监控（总览/服务器/检测/告警）· 运维（终端、文件、定时任务、日志、导入主机）· 发布（应用/发布/模板）· 系统（凭证/用户/令牌/角色/分组/审计/备份/设置）。
    > **总览与服务器必须是两个页面**（`web-next/src/pages/dashboard/DashboardPage.vue` / `web-next/src/pages/ServersPage.vue`）：总览只回答「现在整体怎么样」（KPI + 检测/告警/发布摘要 + 需要关注的离线机器，不含全量表格与批量操作），服务器页负责「具体某一台怎么操作」（筛选、批量、增删改、标签分组）。两者共用同一个组件曾导致点哪个菜单都一模一样（旧 `App.tsx` 里 `/` 与 `/servers` 指向同一 element；现分别由 `web-next/src/router/routes/servers.ts` 的两条路由承载），改动时不要退回那种写法。
 2. 顶部：面包屑 + 当前页操作区（主操作靠右）；移动端折叠为抽屉导航。
 3. 详情页统一结构：标题区（名称、状态徽标、主操作）→ 概览卡 → 标签页（概览/检测/监控/终端/文件/日志）。
@@ -2561,7 +2561,7 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 - **中止发布**：发布详情页对进行中的 run 提供「中止发布」（`web-next/src/pages/releases/ReleaseDetailPage.vue`），二次确认写明「已完成的 N 台不会回滚，剩余 pending 的会被取消」；成功后 toast「已中止 N 台」，N 取 `POST /releases/{id}/cancel` 响应里的 `canceled`（响应缺该字段时回落到操作前的 active 台数）。它与「取消」（关闭弹窗）严格区分措辞，避免让人以为能撤销已完成的服务器。
 
   中止之后的**发布整体状态显示「取消」而不是红色「失败」**：状态徽标由 `ReleaseStatusBadge` 的等价实现（`web-next/src/lib/deploy-domain.ts` 的 `releaseStatusLabelKey` / `releaseStatusTone`，在 `web-next/src/pages/releases/ReleaseDetailPage.vue` 渲染）按 `release.status` 渲染，`canceled` 是琥珀色（`s.0416` →「已取消」），`failed` 才是红色（`s.0301`）。这**不需要改前端代码**：页面上的台数统计取自每个 `run.status`（`web-next/src/pages/releases/ReleaseDetailPage.vue` 的 `stats`），「重试失败项」入口看 `stats.failed > 0`、「回退」入口看 `stats.success > 0`，都与 `release.status` 无关；本轮只改了后端汇聚规则（见 §23）与对应的 e2e 断言。
-- **探测通道**：`tcp` / `http` / `ping` 检测项可在向导里选「控制端直连 / 由目标机 agent 代检」，落库为 `params.probe_via = "control" | "agent"`（旧实现 `web/src/components/CheckFormDialog.tsx`，该文件已删除；web-next 目前只在 `web-next/src/pages/ChecksPage.vue` 展示 `probe_via === 'agent'` 的提示，尚无向导选择 UI）。后端只接受这两个值（大小写与空白归一，空串等于删除该键）；`process` / `script` 传该字段 → 400「只适用于 tcp/http/ping（process/script 本身就在目标机执行）」。`agent` 代检要求服务器是 agent 接入：执行通道不支持时检测项**直接判失败并给出原因，不静默回落控制端直连**（`internal/checker/probe.go`）。列表与服务器详情用「agent 代检」徽标标出（旧实现 `web/src/components/CheckBadges.tsx`，该文件已删除；现由 `web-next/src/pages/ChecksPage.vue` 的 `agentProbeCount` 提示条呈现）。
+- **探测通道**：`tcp` / `http` / `ping` 检测项可在向导里选「控制端直连 / 由目标机 agent 代检」，落库为 `params.probe_via = "control" | "agent"`（旧实现 `web/src/components/CheckFormDialog.tsx` 已删除；web-next 的创建/编辑弹窗是 `web-next/src/components/checks/CheckFormDialog.vue`，探测通道在同一弹窗里选 control / agent，列表仍用 `agentProbeCount` 提示条汇总）。后端只接受这两个值（大小写与空白归一，空串等于删除该键）；`process` / `script` 传该字段 → 400「只适用于 tcp/http/ping（process/script 本身就在目标机执行）」。`agent` 代检要求服务器是 agent 接入：执行通道不支持时检测项**直接判失败并给出原因，不静默回落控制端直连**（`internal/checker/probe.go`）。列表与服务器详情用「agent 代检」徽标标出（旧实现 `web/src/components/CheckBadges.tsx`，该文件已删除；现由 `web-next/src/pages/ChecksPage.vue` 的 `agentProbeCount` 提示条呈现）。
 - **按授权分组选机**：发布向导与检测向导一律按 `group_ids.includes(groupId)` 过滤，旧的文本字段 `servers.group` 只做展示、不再参与过滤；计数文案固定为「已选 N 台 / 该分组共 M 台」，切换分组时把已选集合裁剪到该分组内，避免「列表里看不见的服务器被一并提交」。
 - **错误 toast**：`error` 级不自动消失、可关闭、可复制，容器 `role="alert"` + `aria-live="assertive"`（普通提示仍是 4s 自动消失）；文案自动追加请求编号（见 §65.1）。
 - **升级 Agent 入口**：`mode=agent` 的服务器详情页有「升级 Agent」弹窗，按 `os` / `arch` 从 `agent_assets` 预填 `version` / `url` / `sha256` 且允许手改；没有 `agent.upgrade` 权限时入口禁用并说明原因。

@@ -247,11 +247,37 @@ async function installMockApi(context, state) {
       state.serverCalls += 1
       return json(200, { data: SERVERS })
     }
+    if (path === '/api/v1/servers' && method === 'POST') {
+      const body = JSON.parse(request.postData() || '{}')
+      state.serverCreateBodies = state.serverCreateBodies || []
+      state.serverCreateBodies.push(body)
+      return json(200, {
+        data: {
+          ...serverFixture({ id: 'srv-new', name: body.name, host: body.host, mode: body.mode }),
+          port: body.port,
+        },
+      })
+    }
+    if (path === '/api/v1/credentials' && method === 'GET') {
+      return json(200, {
+        data: [
+          { id: 'cred-ssh', name: 'deploy-key', kind: 'key', username: 'root', server_count: 0 },
+        ],
+      })
+    }
 
     const detail = /^\/api\/v1\/servers\/([^/]+)$/.exec(path)
     if (detail && method === 'GET') {
       const found = SERVERS.find((item) => item.id === decodeURIComponent(detail[1]))
       return found ? json(200, { data: found }) : json(404, { error: { code: 'not_found' } })
+    }
+    if (detail && method === 'PATCH') {
+      const id = decodeURIComponent(detail[1])
+      const body = JSON.parse(request.postData() || '{}')
+      state.serverPatchBodies = state.serverPatchBodies || []
+      state.serverPatchBodies.push(body)
+      const found = SERVERS.find((item) => item.id === id) ?? SERVERS[0]
+      return json(200, { data: { ...found, ...body } })
     }
 
     const ticket = /^\/api\/v1\/servers\/([^/]+)\/terminal-ticket$/.exec(path)
@@ -737,7 +763,16 @@ async function run() {
 
     // 9) n3 批量操作（有 server.write）：选择集 → POST /servers/batch 请求体、结果弹窗、删除二次确认
     const batchContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
-    const batchState = { terminalUse: false, write: true, serverCalls: 0, filePaths: [], batchCalls: 0, batchBodies: [] }
+    const batchState = {
+      terminalUse: false,
+      write: true,
+      serverCalls: 0,
+      filePaths: [],
+      batchCalls: 0,
+      batchBodies: [],
+      serverCreateBodies: [],
+      serverPatchBodies: [],
+    }
     await installMockApi(batchContext, batchState)
     const batchPage = await batchContext.newPage()
     const batchErrors = []
@@ -754,6 +789,70 @@ async function run() {
     }
     try {
       await loginAs(batchPage)
+
+      /* 新增服务器：agent / SSH 两种模式 + 请求体字段 */
+      await batchPage.click('#servers-create')
+      await batchPage.waitForSelector('#server-form', { timeout: 5000 })
+      await batchPage.fill('#server-form-name', 'gamma-node')
+      await batchPage.fill('#server-form-host', '10.0.0.33')
+      await batchPage.click('#server-form-mode-ssh')
+      await batchPage.waitForSelector('#server-form-credential', { timeout: 5000 })
+      await batchPage.selectOption('#server-form-credential', 'cred-ssh')
+      await batchPage.fill('#server-form-tags', 'edge, 测试')
+      await batchPage.fill('#server-form-group', '测试分组')
+      const createResponse = batchPage.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/servers',
+        { timeout: 10000 },
+      )
+      await batchPage.click('#server-form-submit')
+      await createResponse
+      await batchPage.waitForSelector('#server-form', { state: 'detached', timeout: 8000 })
+      const createBody = batchState.serverCreateBodies.at(-1) || {}
+      check(
+        '新增服务器提交 name/host/port/mode/credential',
+        createBody.name === 'gamma-node' &&
+          createBody.host === '10.0.0.33' &&
+          createBody.port === 22 &&
+          createBody.mode === 'ssh' &&
+          createBody.credential_id === 'cred-ssh',
+        JSON.stringify(createBody),
+      )
+      check(
+        '新增服务器标签按逗号/空白拆分、分组原样提交',
+        Array.isArray(createBody.tags) &&
+          createBody.tags.includes('edge') &&
+          createBody.tags.includes('测试') &&
+          createBody.group === '测试分组',
+        JSON.stringify({ tags: createBody.tags, group: createBody.group }),
+      )
+      await batchPage.waitForSelector('#servers-action-notice', { timeout: 5000 })
+
+      /* 编辑服务器：PATCH 只带名称/地址/端口/分组/标签，不误发 mode/credential */
+      await batchPage.click('#server-srv-alpha-edit')
+      await batchPage.waitForSelector('#server-form', { timeout: 5000 })
+      await batchPage.fill('#server-form-name', 'alpha-renamed')
+      await batchPage.fill('#server-form-host', '10.0.0.21')
+      const patchResponse = batchPage.waitForResponse(
+        (response) =>
+          response.request().method() === 'PATCH' && new URL(response.url()).pathname === '/api/v1/servers/srv-alpha',
+        { timeout: 10000 },
+      )
+      await batchPage.click('#server-form-submit')
+      await patchResponse
+      await batchPage.waitForSelector('#server-form', { state: 'detached', timeout: 8000 })
+      const patchBody = batchState.serverPatchBodies.at(-1) || {}
+      check(
+        '编辑服务器提交名称/地址/端口',
+        patchBody.name === 'alpha-renamed' && patchBody.host === '10.0.0.21' && patchBody.port === 22,
+        JSON.stringify(patchBody),
+      )
+      check(
+        '编辑服务器不提交接入方式与凭证',
+        !('mode' in patchBody) && !('credential_id' in patchBody),
+        JSON.stringify(patchBody),
+      )
+
       check('有 server.write 时每行出现选择框', (await batchPage.locator('.ls-srv-row__select input').count()) === 2)
       check('未选中时不出批量工具条', (await batchPage.locator('.ls-servers-batch').count()) === 0)
       await batchPage.locator('.ls-srv-row__select input').nth(0).check()

@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
+import AppModal from '@/components/AppModal.vue'
 import CheckDetailDrawer from '@/components/checks/CheckDetailDrawer.vue'
+import CheckFormDialog from '@/components/checks/CheckFormDialog.vue'
 import ChecksRow from '@/components/checks/ChecksRow.vue'
 import { useCan } from '@/composables/useCan'
 import { useChecks } from '@/composables/useChecks'
 import { useI18n } from '@/i18n'
-import type { CheckItem, CheckState } from '@/lib/api'
+import { api, type CheckItem, type CheckState } from '@/lib/api'
+import { errorMessage } from '@/lib/errors'
 import {
   CHECKS_PAGE_SIZE,
   checkKindLabel,
@@ -130,6 +133,77 @@ function closeDrawer(): void {
     drawerTrigger = null
   })
 }
+
+/* ---------------- 新建 / 编辑 / 删除 ---------------- */
+
+const formOpen = ref(false)
+const formTarget = ref<CheckItem | null>(null)
+const notice = ref<string | null>(null)
+
+const deleteTarget = ref<CheckItem | null>(null)
+const deleteBusy = ref(false)
+const deleteError = ref<string | null>(null)
+
+function openCreateForm(): void {
+  if (!canWrite.value) return
+  formTarget.value = null
+  notice.value = null
+  formOpen.value = true
+}
+
+function openEditForm(check: CheckItem): void {
+  if (!canWrite.value) return
+  formTarget.value = check
+  notice.value = null
+  formOpen.value = true
+}
+
+function closeForm(): void {
+  formOpen.value = false
+  formTarget.value = null
+}
+
+async function handleFormSaved(saved: CheckItem): Promise<void> {
+  const edited = formTarget.value !== null
+  formOpen.value = false
+  formTarget.value = null
+  notice.value = t(edited ? 'checks.form.saved' : 'checks.form.created', { name: saved.name })
+  await refresh()
+}
+
+function askDelete(check: CheckItem): void {
+  if (!canWrite.value) return
+  deleteTarget.value = check
+  deleteError.value = null
+}
+
+function closeDelete(): void {
+  if (deleteBusy.value) return
+  deleteTarget.value = null
+  deleteError.value = null
+}
+
+async function confirmDelete(): Promise<void> {
+  const target = deleteTarget.value
+  if (!target || deleteBusy.value) return
+  deleteBusy.value = true
+  deleteError.value = null
+  try {
+    await api.deleteCheck(target.id)
+    deleteTarget.value = null
+    notice.value = t('checks.form.deleted', { name: target.name })
+    if (drawerId.value === target.id) closeDrawer()
+    await refresh()
+  } catch (caught) {
+    deleteError.value = errorMessage(caught, t('checks.form.deleteFailed'))
+  } finally {
+    deleteBusy.value = false
+  }
+}
+
+function dismissRunFeedback(): void {
+  lastRun.value = null
+}
 </script>
 
 <template>
@@ -145,18 +219,37 @@ function closeDrawer(): void {
           <h1 class="ls-checkspage__title">{{ t('checks.title') }}</h1>
           <p class="ls-checkspage__subtitle">{{ t('checks.subtitle') }}</p>
         </div>
-        <button
-          id="checks-refresh"
-          class="ls-btn ls-checkspage__refresh"
-          type="button"
-          :disabled="refreshing"
-          @click="refresh"
-        >
-          <span v-if="refreshing" class="ls-spinner" aria-hidden="true" />
-          <AppIcon v-else name="refresh" size="0.875rem" />
-          {{ t('common.refresh') }}
-        </button>
+        <div class="ls-adminpage__head-actions">
+          <button
+            id="checks-refresh"
+            class="ls-btn ls-checkspage__refresh"
+            type="button"
+            :disabled="refreshing"
+            @click="refresh"
+          >
+            <span v-if="refreshing" class="ls-spinner" aria-hidden="true" />
+            <AppIcon v-else name="refresh" size="0.875rem" />
+            {{ t('common.refresh') }}
+          </button>
+          <button
+            v-if="canWrite"
+            id="checks-create"
+            class="ls-btn ls-btn--primary"
+            type="button"
+            @click="openCreateForm"
+          >
+            <AppIcon name="plus" size="0.875rem" />
+            {{ t('checks.form.createAction') }}
+          </button>
+        </div>
       </header>
+
+      <div v-if="notice" id="checks-action-notice" class="ls-notice ls-notice--success" role="status">
+        <p class="ls-notice__title">{{ notice }}</p>
+        <button class="ls-notice__action" type="button" @click="notice = null">
+          {{ t('common.close') }}
+        </button>
+      </div>
 
       <div class="ls-checkspage__toolbar">
         <div class="ls-checkspage__filters">
@@ -240,10 +333,13 @@ function closeDrawer(): void {
         <p class="ls-notice__text">{{ runSummaryText(lastRun) }}</p>
         <ul class="ls-checkspage__run-items">
           <li v-for="item in lastRun.results" :key="item.server_id" class="ls-checkspage__run-item">
-            <span class="ls-checkspage__run-server">{{ item.server_id }}</span>
+            <span class="ls-checkspage__run-server">{{ resolveServerName(item.server_id) }}</span>
             <span class="ls-checkspage__run-text">{{ runItemText(item) }}</span>
           </li>
         </ul>
+        <button class="ls-notice__action" type="button" @click="dismissRunFeedback">
+          {{ t('checks.dismiss') }}
+        </button>
       </div>
 
       <div
@@ -267,6 +363,15 @@ function closeDrawer(): void {
       <div v-else-if="checks.length === 0" id="checks-empty" class="ls-notice">
         <p class="ls-notice__title">{{ t('checks.emptyTitle') }}</p>
         <p class="ls-notice__text">{{ t('checks.emptyHint') }}</p>
+        <button
+          v-if="canWrite"
+          id="checks-empty-create"
+          class="ls-notice__action"
+          type="button"
+          @click="openCreateForm"
+        >
+          {{ t('checks.form.createAction') }}
+        </button>
       </div>
 
       <div v-else-if="visibleChecks.length === 0" id="checks-empty-filtered" class="ls-notice">
@@ -304,6 +409,8 @@ function closeDrawer(): void {
                 @run="run(check)"
                 @toggle="toggle(check, $event)"
                 @detail="openDetail(check)"
+                @edit="openEditForm(check)"
+                @delete="askDelete(check)"
               />
             </tbody>
           </table>
@@ -347,5 +454,39 @@ function closeDrawer(): void {
       @close="closeDrawer"
       @run="runDrawerCheck"
     />
+
+    <CheckFormDialog
+      v-if="formOpen"
+      :check="formTarget"
+      @close="closeForm"
+      @saved="handleFormSaved"
+    />
+
+    <AppModal
+      v-if="deleteTarget"
+      :title="t('checks.form.deleteTitle')"
+      :description="deleteTarget.name"
+      tone="danger"
+      size="sm"
+      @close="closeDelete"
+    >
+      <p class="ls-notice__text">{{ t('checks.form.deleteImpact') }}</p>
+      <p v-if="deleteError" class="ls-adminpage__form-error" role="alert">{{ deleteError }}</p>
+      <template #footer>
+        <button id="check-delete-cancel" class="ls-btn" type="button" :disabled="deleteBusy" @click="closeDelete">
+          {{ t('common.cancel') }}
+        </button>
+        <button
+          id="check-delete-confirm"
+          class="ls-btn ls-btn--danger"
+          type="button"
+          :disabled="deleteBusy"
+          :aria-busy="deleteBusy"
+          @click="confirmDelete"
+        >
+          {{ deleteBusy ? t('common.loading') : t('common.delete') }}
+        </button>
+      </template>
+    </AppModal>
   </section>
 </template>

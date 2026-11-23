@@ -53,39 +53,3 @@ const { t } = useI18n()
     </div>
   </div>
 </template>
-
-<style scoped>
-/* 工具条自身只负责换行与分组；颜色/按钮全部复用 .ls-btn 与设计 token */
-.ls-servers-batch {
-  display: flex;
-  flex-wrap: wrap;
-  /* 顶对齐：窄宽下按钮换行时，计数仍对齐第一行而不是漂到中间 */
-  align-items: flex-start;
-  gap: var(--ls-space-2);
-  min-width: 0;
-  padding: var(--ls-space-2) var(--ls-space-3);
-  border: 1px solid var(--ls-border-strong);
-  border-radius: var(--ls-radius-lg);
-  background: var(--ls-surface-muted);
-}
-
-.ls-servers-batch__count {
-  flex: none;
-  margin: 0;
-  color: var(--ls-text);
-  font: 600 var(--ls-text-sm) / 1.4 var(--ls-font-sans);
-  white-space: nowrap;
-}
-
-.ls-servers-batch__actions {
-  display: flex;
-  flex: 1 1 12rem;
-  flex-wrap: wrap;
-  gap: var(--ls-space-1);
-  min-width: 0;
-}
-
-.ls-servers-batch__clear {
-  margin-inline-start: auto;
-}
-</style>

@@ -43,8 +43,11 @@
 
   --ls-primary: var(--ls-brand-700);
   --ls-primary-fill: var(--ls-brand-600);
-  --ls-primary-contrast: #052e16;
+  --ls-primary-contrast: var(--ls-brand-950);
   --ls-primary-soft: var(--ls-brand-50);
+  /* Vean solid hover = fill/80 叠在页面底色上；前景保持深绿以维持 AA */
+  --ls-primary-hover-bg: rgb(22 163 74 / 0.8);
+  --ls-primary-hover-contrast: var(--ls-brand-950);
 
   /* 字族与字号（font 简写用） */
   --ls-font-sans:
@@ -115,9 +118,12 @@ html.dark {
   --ls-danger-soft: #3b1113;
   --ls-danger-border: #5c1f1f;
   --ls-primary: #4ade80;
-  --ls-primary-fill: #22c55e;
-  --ls-primary-contrast: #052e16;
+  /* 与 theme/brand.ts 的 BRAND_PRESET.dark 对齐：填充降到 700，前景近白（4.87:1） */
+  --ls-primary-fill: #15803d;
+  --ls-primary-contrast: #f8fafc;
   --ls-primary-soft: #0f2a1c;
+  --ls-primary-hover-bg: rgb(21 128 61 / 0.8);
+  --ls-primary-hover-contrast: #f8fafc;
 
   /* 品牌色阶在深色下反转：50/100 为绿底，700/900 为绿字，500/600 仍作标记渐变 */
   --ls-brand-50: #0f2a1c;
@@ -399,6 +405,16 @@ body.ls-scroll-locked {
   white-space: nowrap;
 }
 
+.ls-sidebar__foot {
+  margin-top: auto;
+  padding: var(--ls-space-2);
+  border-top: 1px solid var(--ls-border);
+}
+
+.ls-sidebar__about {
+  color: var(--ls-text-muted);
+}
+
 .ls-nav__skeleton {
   height: 2.25rem;
   margin: 0 var(--ls-space-1) var(--ls-space-1);
@@ -429,6 +445,16 @@ body.ls-scroll-locked {
 .ls-notice--error {
   border-color: var(--ls-danger-border);
   background: var(--ls-danger-soft);
+}
+
+/* 成功反馈：与错误态同级（有底色/描边），不再用裸 .ls-notice 冒充成功 */
+.ls-notice--success {
+  border-color: var(--ls-brand-100);
+  background: var(--ls-success-soft);
+}
+
+.ls-notice--success .ls-notice__title {
+  color: var(--ls-success);
 }
 
 .ls-notice__title {
@@ -1041,16 +1067,15 @@ body.ls-scroll-locked {
 }
 
 .ls-btn--primary:hover {
-  border-color: var(--ls-brand-700);
-  background: var(--ls-brand-700);
-  /* 底色压到 700 后 #052e16 只剩 ~3:1，hover 改用浅绿字保住 AA（4.9:1） */
-  color: var(--ls-brand-50);
+  /* 与 brand.ts 的约定保持一致：hover = 填充 80% 叠页面底色，不再自造一档实色 */
+  border-color: var(--ls-primary-fill);
+  background: var(--ls-primary-hover-bg);
+  color: var(--ls-primary-hover-contrast);
 }
 
 .ls-btn--primary:active {
-  background: var(--ls-brand-900);
-  /* 900 更深，浅绿字对比度 ~8.9:1 */
-  color: var(--ls-brand-50);
+  background: var(--ls-primary-fill);
+  color: var(--ls-primary-contrast);
 }
 
 .ls-btn--block {
@@ -1449,6 +1474,8 @@ body.ls-scroll-locked {
   border-radius: var(--ls-radius-lg);
   background: var(--ls-surface);
   box-shadow: var(--ls-shadow-sm);
+  /* 整行可点进详情；行内链接/按钮各自处理交互 */
+  cursor: pointer;
 }
 
 .ls-srv-row--expanded {
@@ -2309,10 +2336,6 @@ body.ls-scroll-locked {
   color: var(--ls-danger);
 }
 
-.ls-tone--muted {
-  color: var(--ls-text-subtle);
-}
-
 .ls-chip-group {
   display: inline-flex;
   flex-wrap: wrap;
@@ -2742,7 +2765,7 @@ body.ls-scroll-locked {
 .ls-checkspage {
   display: flex;
   flex-direction: column;
-  gap: var(--ls-space-3);
+  gap: var(--ls-space-4);
   min-width: 0;
 }
 
@@ -2751,7 +2774,7 @@ body.ls-scroll-locked {
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--ls-space-2);
+  gap: var(--ls-space-3);
 }
 
 .ls-checkspage__heading {
@@ -2761,25 +2784,26 @@ body.ls-scroll-locked {
 .ls-checkspage__title {
   margin: 0;
   color: var(--ls-text);
-  font: 600 var(--ls-text-lg) / 1.3 var(--ls-font-sans);
+  font: 600 var(--ls-text-xl) / 1.3 var(--ls-font-sans);
+  overflow-wrap: anywhere;
 }
 
 .ls-checkspage__subtitle {
+  max-width: 44rem;
   margin: var(--ls-space-1) 0 0;
   color: var(--ls-text-muted);
-  font: 400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+  font: 400 var(--ls-text-sm) / 1.6 var(--ls-font-sans);
+  overflow-wrap: anywhere;
 }
 
+/* 筛选工具条统一规格：内联一行、不套卡片（表格本身已是卡片，避免双层容器） */
 .ls-checkspage__toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--ls-space-2);
-  padding: var(--ls-space-2);
-  border: 1px solid var(--ls-border);
-  border-radius: var(--ls-radius-md);
-  background: var(--ls-surface);
+  min-width: 0;
 }
 
 .ls-checkspage__filters {
@@ -2802,6 +2826,7 @@ body.ls-scroll-locked {
 .ls-checkspage__count {
   color: var(--ls-text-muted);
   font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -2825,8 +2850,9 @@ body.ls-scroll-locked {
   max-height: 62vh;
   overflow: auto;
   border: 1px solid var(--ls-border);
-  border-radius: var(--ls-radius-md);
+  border-radius: var(--ls-radius-lg);
   background: var(--ls-surface);
+  box-shadow: var(--ls-shadow-sm);
 }
 
 .ls-checkspage__table {
@@ -2850,7 +2876,7 @@ body.ls-scroll-locked {
   border-bottom: 1px solid var(--ls-border);
   background: var(--ls-surface-muted);
   color: var(--ls-text-muted);
-  font: 500 var(--ls-text-2xs) / 1.4 var(--ls-font-sans);
+  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
   white-space: nowrap;
 }
 
@@ -2871,7 +2897,7 @@ body.ls-scroll-locked {
 }
 
 .ls-checkspage__row:hover {
-  background: var(--ls-surface-muted);
+  background: var(--ls-brand-50);
 }
 
 .ls-checkspage__cell {
@@ -3014,9 +3040,6 @@ body.ls-scroll-locked {
 .ls-checkspage__last-time {
   color: var(--ls-text-subtle);
   font-family: var(--ls-font-mono);
-}
-
-.ls-checkspage__last-time {
   white-space: nowrap;
 }
 
@@ -3095,7 +3118,8 @@ body.ls-scroll-locked {
 
 .ls-checkspage__pager-info {
   color: var(--ls-text-muted);
-  font: 400 var(--ls-text-xs) / 1 var(--ls-font-sans);
+  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -3111,7 +3135,7 @@ body.ls-scroll-locked {
 .ls-checkspage-drawer {
   position: fixed;
   inset: 0;
-  z-index: 120;
+  z-index: 100;
   display: flex;
   justify-content: flex-end;
 }
@@ -3291,6 +3315,7 @@ body.ls-scroll-locked {
     overflow: visible;
     border: 0;
     background: none;
+    box-shadow: none;
   }
 
   .ls-checkspage__table,
@@ -3364,7 +3389,7 @@ body.ls-scroll-locked {
 .ls-alertspage {
   display: flex;
   flex-direction: column;
-  gap: var(--ls-space-3);
+  gap: var(--ls-space-4);
   min-width: 0;
 }
 
@@ -3373,7 +3398,7 @@ body.ls-scroll-locked {
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--ls-space-2);
+  gap: var(--ls-space-3);
 }
 
 .ls-alertspage__heading {
@@ -3383,13 +3408,16 @@ body.ls-scroll-locked {
 .ls-alertspage__title {
   margin: 0;
   color: var(--ls-text);
-  font: 600 var(--ls-text-lg) / 1.3 var(--ls-font-sans);
+  font: 600 var(--ls-text-xl) / 1.3 var(--ls-font-sans);
+  overflow-wrap: anywhere;
 }
 
 .ls-alertspage__subtitle {
+  max-width: 44rem;
   margin: var(--ls-space-1) 0 0;
   color: var(--ls-text-muted);
-  font: 400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+  font: 400 var(--ls-text-sm) / 1.6 var(--ls-font-sans);
+  overflow-wrap: anywhere;
 }
 
 .ls-alertspage__toolbar {
@@ -3398,10 +3426,7 @@ body.ls-scroll-locked {
   align-items: center;
   justify-content: space-between;
   gap: var(--ls-space-2);
-  padding: var(--ls-space-2);
-  border: 1px solid var(--ls-border);
-  border-radius: var(--ls-radius-md);
-  background: var(--ls-surface);
+  min-width: 0;
 }
 
 .ls-alertspage__filters {
@@ -3422,6 +3447,7 @@ body.ls-scroll-locked {
 .ls-alertspage__count {
   color: var(--ls-text-muted);
   font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -3440,8 +3466,9 @@ body.ls-scroll-locked {
   max-height: 62vh;
   overflow: auto;
   border: 1px solid var(--ls-border);
-  border-radius: var(--ls-radius-md);
+  border-radius: var(--ls-radius-lg);
   background: var(--ls-surface);
+  box-shadow: var(--ls-shadow-sm);
 }
 
 .ls-alertspage__table {
@@ -3452,7 +3479,7 @@ body.ls-scroll-locked {
 
 .ls-alertspage__table th,
 .ls-alertspage__table td {
-  padding: var(--ls-space-2);
+  padding: var(--ls-space-2) var(--ls-space-3);
   text-align: left;
   vertical-align: middle;
   min-width: 0;
@@ -3465,7 +3492,7 @@ body.ls-scroll-locked {
   border-bottom: 1px solid var(--ls-border);
   background: var(--ls-surface-muted);
   color: var(--ls-text-muted);
-  font: 500 var(--ls-text-2xs) / 1.4 var(--ls-font-sans);
+  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
   white-space: nowrap;
 }
 
@@ -3594,6 +3621,7 @@ body.ls-scroll-locked {
 .ls-alertspage__pager-info {
   color: var(--ls-text-muted);
   font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -3613,7 +3641,7 @@ body.ls-scroll-locked {
 .ls-alertspage-drawer {
   position: fixed;
   inset: 0;
-  z-index: 120;
+  z-index: 100;
   display: flex;
   justify-content: flex-end;
 }
@@ -3781,6 +3809,7 @@ body.ls-scroll-locked {
     overflow: visible;
     border: 0;
     background: none;
+    box-shadow: none;
   }
 
   .ls-alertspage__table,
@@ -3852,6 +3881,16 @@ body.ls-scroll-locked {
   display: flex;
   flex-direction: column;
   gap: var(--ls-space-4);
+  min-width: 0;
+}
+
+.ls-toolspage__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ls-space-3);
+  min-width: 0;
 }
 
 .ls-toolspage__heading {
@@ -3876,10 +3915,7 @@ body.ls-scroll-locked {
   align-items: center;
   justify-content: space-between;
   gap: var(--ls-space-2);
-  padding: var(--ls-space-3);
-  border: 1px solid var(--ls-border);
-  border-radius: var(--ls-radius-lg);
-  background: var(--ls-surface);
+  min-width: 0;
 }
 
 .ls-toolspage__search {
@@ -3888,8 +3924,9 @@ body.ls-scroll-locked {
 }
 
 .ls-toolspage__count {
-  color: var(--ls-text-subtle);
-  font: 400 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  color: var(--ls-text-muted);
+  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -4023,14 +4060,17 @@ body.ls-scroll-locked {
 }
 
 .ls-adminpage__subtitle {
-  max-width: 42rem;
+  max-width: 44rem;
   margin: var(--ls-space-1) 0 0;
   color: var(--ls-text-muted);
   font: 400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
   overflow-wrap: anywhere;
 }
 
-.ls-adminpage__head-actions {
+/* 头部主操作区：所有页面共用一组按钮，窄宽下整组换行 */
+.ls-adminpage__head-actions,
+.ls-servers__head-actions,
+.ls-detail__actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--ls-space-2);
@@ -4045,21 +4085,27 @@ body.ls-scroll-locked {
 }
 
 .ls-adminpage__search {
-  max-width: 18rem;
+  flex: 1 1 12rem;
+  min-width: 0;
+  max-width: 22rem;
 }
 
 .ls-adminpage__count {
   color: var(--ls-text-muted);
-  font: 400 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 列表容器固定最大高度内滚，不让条目数把整页撑长 */
+/* 列表容器统一规格：62vh 内滚 + lg 圆角 + 细边，表格再长也不把整页撑长 */
 .ls-adminpage__scroll {
   overflow: auto;
   max-height: 62vh;
   border: 1px solid var(--ls-border);
-  border-radius: var(--ls-radius-md);
+  border-radius: var(--ls-radius-lg);
   background: var(--ls-surface);
+  box-shadow: var(--ls-shadow-sm);
 }
 
 .ls-adminpage__table {
@@ -4151,34 +4197,18 @@ body.ls-scroll-locked {
   white-space: normal;
 }
 
-.ls-adminpage__danger {
-  border-color: var(--ls-danger-border);
-  color: var(--ls-danger);
-}
-
-.ls-adminpage__danger:hover {
-  border-color: var(--ls-danger);
-  background: var(--ls-danger-soft);
-  color: var(--ls-danger);
-}
-
-.ls-adminpage__danger:focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px var(--ls-surface),
-    0 0 0 4px var(--ls-danger);
-}
-
 .ls-adminpage__pager {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   gap: var(--ls-space-2);
 }
 
 .ls-adminpage__pager-info {
   color: var(--ls-text-muted);
-  font: 400 var(--ls-text-xs) / 1 var(--ls-font-sans);
+  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .ls-adminpage__prev .ls-icon {
@@ -4285,6 +4315,10 @@ body.ls-scroll-locked {
 
 .ls-adminpage__mode-label {
   font: 600 var(--ls-text-sm) / 1.3 var(--ls-font-sans);
+}
+
+.ls-adminpage__modes--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .ls-adminpage__mode-hint {
@@ -4534,6 +4568,15 @@ body.ls-scroll-locked {
   max-width: 46rem;
 }
 
+/* 危险动作（删除 / 回滚 / 恢复）：标题转红，面板描边同步，避免只剩按钮一个信号 */
+.ls-modal__panel--danger {
+  border: 1px solid var(--ls-danger-border);
+}
+
+.ls-modal__panel--danger .ls-modal__title {
+  color: var(--ls-danger);
+}
+
 .ls-modal__head {
   display: flex;
   align-items: flex-start;
@@ -4581,20 +4624,34 @@ body.ls-scroll-locked {
 
 /* 窄宽（最坏基准 320px）：表格转卡片，不横向滚动、不重叠 */
 @media (max-width: 760px) {
-  .ls-adminpage__head {
+  .ls-adminpage__head,
+  .ls-servers__head,
+  .ls-checkspage__head,
+  .ls-alertspage__head,
+  .ls-deploy__head,
+  .ls-templates__head,
+  .ls-toolspage__head,
+  .ls-detail__head {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .ls-adminpage__head-actions {
+  .ls-adminpage__head-actions,
+  .ls-servers__head-actions,
+  .ls-detail__actions {
     justify-content: flex-start;
   }
 
-  .ls-adminpage__head-actions .ls-btn {
+  .ls-adminpage__head-actions .ls-btn,
+  .ls-servers__head-actions .ls-btn,
+  .ls-detail__actions .ls-btn {
     flex: 1 1 auto;
   }
 
-  .ls-adminpage__toolbar {
+  .ls-adminpage__toolbar,
+  .ls-checkspage__toolbar,
+  .ls-alertspage__toolbar,
+  .ls-toolspage__toolbar {
     flex-direction: column;
     align-items: stretch;
   }
@@ -4610,6 +4667,7 @@ body.ls-scroll-locked {
     overflow: visible;
     border: 0;
     background: none;
+    box-shadow: none;
   }
 
   .ls-adminpage__table,
@@ -4779,10 +4837,10 @@ body.ls-scroll-locked {
 
 .ls-deploy__count {
   margin: 0 0 0 auto;
-  color: var(--ls-text-subtle);
-  font:
-    400 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  color: var(--ls-text-muted);
+  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .ls-deploy__scroll {
@@ -5009,64 +5067,10 @@ body.ls-scroll-locked {
   color: var(--ls-text-subtle);
 }
 
-/* ---------- 模态（挂载到 body） ---------- */
+/* 模态内容工具类：结构（遮罩/面板/头/身/脚）统一在 .ls-modal，见上方。
+ * 这里只保留发布域弹窗使用的「正文段落 / 影响面列表 / 选项列表」排版。 */
 
-.ls-dialog {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--ls-space-4);
-}
-
-.ls-dialog__backdrop {
-  position: absolute;
-  inset: 0;
-  background: var(--ls-mask);
-}
-
-.ls-dialog__panel {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: var(--ls-space-3);
-  width: 100%;
-  max-width: 34rem;
-  max-height: calc(100vh - 2 * var(--ls-space-4));
-  overflow-y: auto;
-  padding: var(--ls-space-4);
-  border: 1px solid var(--ls-border);
-  border-radius: var(--ls-radius-lg);
-  background: var(--ls-surface);
-  box-shadow: var(--ls-shadow-lg);
-}
-
-.ls-dialog__panel--danger {
-  border-color: var(--ls-danger-border);
-}
-
-.ls-dialog__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--ls-space-2);
-}
-
-.ls-dialog__title {
-  margin: 0;
-  color: var(--ls-text);
-  font:
-    600 var(--ls-text-lg) / 1.35 var(--ls-font-sans);
-  overflow-wrap: anywhere;
-}
-
-.ls-dialog__panel--danger .ls-dialog__title {
-  color: var(--ls-danger);
-}
-
-.ls-dialog__text {
+.ls-modal__text {
   margin: 0;
   color: var(--ls-text-muted);
   font:
@@ -5074,21 +5078,7 @@ body.ls-scroll-locked {
   overflow-wrap: anywhere;
 }
 
-.ls-dialog__body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ls-space-3);
-  min-width: 0;
-}
-
-.ls-dialog__foot {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--ls-space-2);
-}
-
-.ls-dialog__details {
+.ls-modal__details {
   margin: 0;
   padding: var(--ls-space-2) var(--ls-space-3) var(--ls-space-2) var(--ls-space-6);
   border-radius: var(--ls-radius-md);
@@ -5098,18 +5088,18 @@ body.ls-scroll-locked {
     400 var(--ls-text-xs) / 1.7 var(--ls-font-sans);
 }
 
-.ls-dialog__detail {
+.ls-modal__detail {
   overflow-wrap: anywhere;
 }
 
-.ls-dialog__hint {
+.ls-modal__hint {
   margin: 0;
   color: var(--ls-text-subtle);
   font:
     400 var(--ls-text-xs) / 1.6 var(--ls-font-sans);
 }
 
-.ls-dialog__choices {
+.ls-modal__choices {
   display: flex;
   flex-direction: column;
   gap: var(--ls-space-1);
@@ -5119,7 +5109,7 @@ body.ls-scroll-locked {
   border: 0;
 }
 
-.ls-dialog__choices--scroll {
+.ls-modal__choices--scroll {
   max-height: 12rem;
   overflow-y: auto;
   padding: var(--ls-space-2);
@@ -5127,7 +5117,7 @@ body.ls-scroll-locked {
   border-radius: var(--ls-radius-md);
 }
 
-.ls-dialog__choice {
+.ls-modal__choice {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -5137,35 +5127,23 @@ body.ls-scroll-locked {
   border-radius: var(--ls-radius-sm);
 }
 
-.ls-dialog__choice:hover {
+.ls-modal__choice:hover {
   background: var(--ls-surface-muted);
 }
 
-.ls-dialog__choice-main {
+.ls-modal__choice-main {
   color: var(--ls-text);
   font:
     500 var(--ls-text-sm) / 1.4 var(--ls-font-sans);
   overflow-wrap: anywhere;
 }
 
-.ls-dialog__choice-meta {
+.ls-modal__choice-meta {
   margin-left: auto;
   color: var(--ls-text-subtle);
   font:
     400 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
   overflow-wrap: anywhere;
-}
-
-@media (max-width: 479px) {
-  .ls-dialog {
-    align-items: flex-end;
-    padding: 0;
-  }
-
-  .ls-dialog__panel {
-    max-height: 92vh;
-    border-radius: var(--ls-radius-lg) var(--ls-radius-lg) 0 0;
-  }
 }
 
 /* ---------- 表单 ---------- */
@@ -5924,19 +5902,15 @@ body.ls-scroll-locked {
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--ls-space-2);
-  padding: var(--ls-space-1) 0;
+  padding: var(--ls-space-1) var(--ls-space-2);
+  border-radius: var(--ls-radius-sm);
+  background: var(--ls-danger-soft);
   font:
     400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
 }
 
 .ls-importpage__created {
   border-bottom: 1px dashed var(--ls-border);
-}
-
-.ls-importpage__failed {
-  background: var(--ls-danger-soft);
-  border-radius: var(--ls-radius-sm);
-  padding-inline: var(--ls-space-2);
 }
 
 .ls-importpage__result-mark {
@@ -6284,12 +6258,9 @@ body.ls-scroll-locked {
 
 .ls-dashboard__release-runs,
 .ls-dashboard__release-time {
+  margin-left: auto;
   color: var(--ls-text-subtle);
   font: 400 var(--ls-text-2xs) / 1.4 var(--ls-font-sans);
-}
-
-.ls-dashboard__release-time {
-  margin-left: auto;
 }
 
 .ls-dashboard__foot {
@@ -6996,6 +6967,7 @@ body.ls-scroll-locked {
 .ls-alerts__cell--target,
 .ls-alerts__cell--condition {
   max-width: 14rem;
+  font: 400 var(--ls-text-xs) / 1.4 var(--ls-font-mono);
 }
 
 .ls-alerts__cell--target > span {
@@ -7003,10 +6975,6 @@ body.ls-scroll-locked {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.ls-alerts__cell--condition {
-  font: 400 var(--ls-text-xs) / 1.4 var(--ls-font-mono);
 }
 
 .ls-alerts__cell--num {
@@ -7283,12 +7251,8 @@ body.ls-scroll-locked {
 .ls-upgrade__result {
   display: flex;
   flex-direction: column;
-  gap: var(--ls-space-2);
-  min-width: 0;
-}
-
-.ls-upgrade__result {
   gap: var(--ls-space-1);
+  min-width: 0;
 }
 
 .ls-metrics__monoInput {
@@ -7364,10 +7328,10 @@ body.ls-scroll-locked {
 
 .ls-templates__count {
   margin: 0 0 0 auto;
-  color: var(--ls-text-subtle);
-  font:
-    400 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  color: var(--ls-text-muted);
+  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .ls-templates__skeleton {
@@ -7384,7 +7348,7 @@ body.ls-scroll-locked {
 /* 列表固定最大高度内滚：条目再多也不把整页撑长 */
 .ls-templates__scroll {
   min-width: 0;
-  max-height: 34rem;
+  max-height: 62vh;
   overflow: auto;
   border: 1px solid var(--ls-border);
   border-radius: var(--ls-radius-lg);
@@ -7503,6 +7467,17 @@ body.ls-scroll-locked {
   overflow: auto;
 }
 
+.ls-templates__placeholders {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-templates__placeholders .ls-chip {
+  font-family: var(--ls-font-mono);
+}
+
 .ls-templates__delete {
   display: flex;
   flex-direction: column;
@@ -7548,7 +7523,7 @@ body.ls-scroll-locked {
   position: fixed;
   right: 1rem;
   bottom: 1rem;
-  z-index: 80;
+  z-index: 200;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -7574,4 +7549,521 @@ body.ls-scroll-locked {
     bottom: 0.5rem;
     width: auto;
   }
+}
+
+
+/* ---------- 关于页 ---------- */
+
+.ls-about__version {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+}
+
+.ls-about__version-value {
+  padding: 0.125rem var(--ls-space-2);
+  border-radius: var(--ls-radius-sm);
+  background: var(--ls-surface-muted);
+  color: var(--ls-text);
+  font:
+    500 var(--ls-text-sm) / 1.5 var(--ls-font-mono);
+}
+
+.ls-about__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: var(--ls-space-2) var(--ls-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ls-about__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-about__icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-primary-soft);
+  color: var(--ls-primary);
+}
+
+.ls-about__text {
+  color: var(--ls-text-muted);
+  font:
+    400 var(--ls-text-sm) / 1.6 var(--ls-font-sans);
+  overflow-wrap: anywhere;
+}
+
+.ls-about__foot {
+  margin: 0;
+  color: var(--ls-text-subtle);
+  font:
+    400 var(--ls-text-xs) / 1.6 var(--ls-font-sans);
+}
+
+/* ---------- 404 ---------- */
+
+.ls-notfound {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ls-space-3);
+  max-width: 42rem;
+  min-width: 0;
+}
+
+.ls-notfound__code {
+  margin: 0;
+  color: var(--ls-text-subtle);
+  font:
+    600 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  letter-spacing: 0.16em;
+}
+
+.ls-notfound__title {
+  margin: 0;
+  color: var(--ls-text);
+  font:
+    600 1.5rem / 1.3 var(--ls-font-sans);
+  overflow-wrap: anywhere;
+}
+
+.ls-notfound__text,
+.ls-notfound__hint {
+  margin: 0;
+  color: var(--ls-text-subtle);
+  font:
+    400 var(--ls-text-md) / 1.7 var(--ls-font-sans);
+  overflow-wrap: anywhere;
+}
+
+.ls-notfound__path {
+  color: var(--ls-text);
+  font:
+    500 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ls-notfound__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-2);
+}
+
+@media (max-width: 360px) {
+  .ls-notfound__title {
+    font-size: 1.25rem;
+  }
+}
+
+
+/* ---------- 服务器纳管弹窗 ---------- */
+
+.ls-server-form__local {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-server-form__command {
+  margin: 0;
+  padding: var(--ls-space-2) var(--ls-space-3);
+  overflow-x: auto;
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-surface-muted);
+  color: var(--ls-text);
+  font:
+    400 var(--ls-text-xs) / 1.6 var(--ls-font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+
+/* ==========================================================================
+ * 服务器域组件样式
+ * 原先是各组件内的 <style scoped>，违反「组件不写样式，类名从 main.css 取」的约定；
+ * 类名均带组件前缀、无跨文件冲突，迁移为全局规则后行为等价。
+ * ========================================================================== */
+
+/* ---------- 来自 src/pages/ServersPage.vue（样式唯一 owner：本文件） ---------- */
+
+/* 批量选择行：与工具栏同宽，窄宽下整行换行而不是横向溢出 */
+.ls-servers__selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-servers__select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ls-space-2);
+  min-width: 0;
+  min-height: 1.75rem;
+  color: var(--ls-text-muted);
+  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+  cursor: pointer;
+}
+
+.ls-servers__select-all input {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--ls-primary-fill);
+  cursor: pointer;
+}
+
+.ls-servers__select-all span {
+  overflow-wrap: anywhere;
+}
+
+/* 批量参数弹窗：目标列表内滚，避免长名单把弹窗撑出屏幕 */
+.ls-batch-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-3);
+  min-width: 0;
+}
+
+.ls-batch-form__warning {
+  margin: 0;
+  padding: var(--ls-space-2) var(--ls-space-3);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-danger-soft);
+  color: var(--ls-danger);
+  font: 500 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+}
+
+.ls-batch-form__targets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-1);
+  min-width: 0;
+}
+
+.ls-batch-form__targets-title {
+  margin: 0;
+  color: var(--ls-text-subtle);
+  font: 500 var(--ls-text-2xs) / 1.4 var(--ls-font-sans);
+}
+
+.ls-batch-form__target-list {
+  max-height: 10rem;
+  margin: 0;
+  padding-inline-start: var(--ls-space-4);
+  overflow-y: auto;
+}
+
+.ls-batch-form__target-list li {
+  overflow-wrap: anywhere;
+  color: var(--ls-text);
+  font: 400 var(--ls-text-xs) / 1.6 var(--ls-font-sans);
+}
+
+/* ---------- 来自 src/components/servers/ServerRow.vue（样式唯一 owner：本文件） ---------- */
+
+/* 行内名称链接与「整行可点」共存：链接保持原文本样式，hover/focus 才给下划线暗示 */
+.ls-srv-row__name-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.ls-srv-row__name-link:hover,
+.ls-srv-row__name-link:focus-visible {
+  text-decoration: underline;
+}
+
+.ls-srv-row:focus-visible {
+  outline: none;
+  box-shadow: var(--ls-focus-ring);
+}
+
+/* 多选框：命中区 24px，列宽不随字号抖动 */
+.ls-srv-row__select {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  cursor: pointer;
+}
+
+.ls-srv-row__select input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--ls-primary-fill);
+  cursor: pointer;
+}
+
+/* ---------- 来自 src/components/servers/ServerCard.vue（样式唯一 owner：本文件） ---------- */
+
+/* 标题链接保持卡片原有文本样式，不引入浏览器默认的蓝色下划线 */
+.ls-srv-card__title-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.ls-srv-card__title-link:hover,
+.ls-srv-card__title-link:focus-visible {
+  text-decoration: underline;
+}
+
+.ls-srv-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--ls-space-2);
+  margin-top: var(--ls-space-2);
+}
+
+/* 多选框：命中区 24px，视觉尺寸不撑大标题行 */
+.ls-srv-card__select {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  cursor: pointer;
+}
+
+.ls-srv-card__select input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--ls-primary-fill);
+  cursor: pointer;
+}
+
+/* 有第三列（多选框）时标题吃掉中间剩余宽度，状态仍贴右 */
+.ls-srv-card__head .ls-srv-card__title {
+  flex: 1 1 auto;
+}
+
+/* ---------- 来自 src/components/servers/ServerBatchBar.vue（样式唯一 owner：本文件） ---------- */
+
+/* 工具条自身只负责换行与分组；颜色/按钮全部复用 .ls-btn 与设计 token */
+.ls-servers-batch {
+  display: flex;
+  flex-wrap: wrap;
+  /* 顶对齐：窄宽下按钮换行时，计数仍对齐第一行而不是漂到中间 */
+  align-items: flex-start;
+  gap: var(--ls-space-2);
+  min-width: 0;
+  padding: var(--ls-space-2) var(--ls-space-3);
+  border: 1px solid var(--ls-border-strong);
+  border-radius: var(--ls-radius-lg);
+  background: var(--ls-surface-muted);
+}
+
+.ls-servers-batch__count {
+  flex: none;
+  margin: 0;
+  color: var(--ls-text);
+  font: 600 var(--ls-text-sm) / 1.4 var(--ls-font-sans);
+  white-space: nowrap;
+}
+
+.ls-servers-batch__actions {
+  display: flex;
+  flex: 1 1 12rem;
+  flex-wrap: wrap;
+  gap: var(--ls-space-1);
+  min-width: 0;
+}
+
+.ls-servers-batch__clear {
+  margin-inline-start: auto;
+}
+
+/* ---------- 来自 src/components/servers/ServerBatchResultDialog.vue（样式唯一 owner：本文件） ---------- */
+
+.ls-batch-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-3);
+  min-width: 0;
+}
+
+.ls-batch-result__summary {
+  margin: 0;
+  padding: var(--ls-space-2) var(--ls-space-3);
+  border-radius: var(--ls-radius-md);
+  font: 600 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+}
+
+.ls-batch-result__summary--ok {
+  background: var(--ls-success-soft);
+  color: var(--ls-success);
+}
+
+.ls-batch-result__summary--warn {
+  background: var(--ls-danger-soft);
+  color: var(--ls-danger);
+}
+
+.ls-batch-result__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-1);
+  min-width: 0;
+}
+
+.ls-batch-result__title {
+  margin: 0;
+  font: 600 var(--ls-text-sm) / 1.4 var(--ls-font-sans);
+}
+
+/* 结果可能上百条：容器内滚，不把弹窗撑高 */
+.ls-batch-result__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 12rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.ls-batch-result__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ls-space-2);
+  min-width: 0;
+  padding: var(--ls-space-1) var(--ls-space-2);
+  border-radius: var(--ls-radius-sm);
+}
+
+.ls-batch-result__row--ok {
+  background: var(--ls-surface-muted);
+}
+
+.ls-batch-result__row--failed {
+  align-items: center;
+  background: var(--ls-danger-soft);
+}
+
+.ls-batch-result__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ls-batch-result__name {
+  overflow: hidden;
+  color: var(--ls-text);
+  font: 500 var(--ls-text-sm) / 1.4 var(--ls-font-sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ls-batch-result__error {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ls-danger);
+  font: 400 var(--ls-text-xs) / 1.5 var(--ls-font-mono);
+}
+
+.ls-batch-result__badge {
+  flex: none;
+  padding: 0 var(--ls-space-2);
+  border-radius: var(--ls-radius-full);
+  font: 500 var(--ls-text-2xs) / 1.6 var(--ls-font-sans);
+  white-space: nowrap;
+}
+
+.ls-batch-result__badge--ok {
+  background: var(--ls-success-soft);
+  color: var(--ls-success);
+}
+
+.ls-batch-result__retry {
+  flex: none;
+}
+
+/* ---------- 来自 src/components/server-detail/ServerLoginTab.vue（样式唯一 owner：本文件） ---------- */
+
+.ls-script-editor {
+  min-height: 12rem;
+  font: 400 var(--ls-text-sm) / 1.6 var(--ls-font-mono);
+  tab-size: 2;
+}
+
+.ls-script-samples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-2);
+}
+
+.ls-script-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+}
+
+
+/* ---------- 检测项表单 ---------- */
+
+.ls-check-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-3);
+  min-width: 0;
+}
+
+.ls-check-form__servers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: var(--ls-space-1) var(--ls-space-3);
+  max-height: 12rem;
+  margin-top: var(--ls-space-2);
+  overflow-y: auto;
+}
+
+.ls-check-form__server {
+  display: flex;
+  align-items: center;
+  gap: var(--ls-space-2);
+  min-height: var(--ls-hit-size);
+  padding: 0 var(--ls-space-2);
+  border-radius: var(--ls-radius-sm);
+  cursor: pointer;
+}
+
+.ls-check-form__server:hover {
+  background: var(--ls-surface-muted);
+}
+
+.ls-check-form__server .ls-adminpage__meta {
+  margin-top: 0;
+}
+
+.ls-check-form__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ls-space-2);
+  min-height: var(--ls-hit-size);
+  cursor: pointer;
 }

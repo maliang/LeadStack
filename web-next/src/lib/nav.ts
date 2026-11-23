@@ -115,16 +115,6 @@ export function isNavItemActive(item: NavItem, path: string): boolean {
   return path === item.to || path.startsWith(`${item.to}/`)
 }
 
-/** 当前路径所在的导航项（面包屑兜底用）。 */
-export function activeNavItem(groups: readonly NavGroup[], path: string): NavItem | null {
-  for (const group of groups) {
-    for (const item of group.items) {
-      if (isNavItemActive(item, path)) return item
-    }
-  }
-  return null
-}
-
 const SIMPLE_CRUMBS: Record<string, Crumb> = {
   '/': { labelKey: 'nav.overview' },
   '/servers': { labelKey: 'nav.servers' },
@@ -160,7 +150,6 @@ export function breadcrumbsFor(pathname: string): Crumb[] {
   if (pathname.startsWith('/releases/')) {
     return [{ labelKey: 'nav.releases', to: '/releases' }, { labelKey: 'crumb.releaseDetail' }]
   }
-  if (pathname === '/setup') return [{ labelKey: 'crumb.setup' }]
   const crumb = SIMPLE_CRUMBS[pathname] ?? SIMPLE_CRUMBS['/']
   return [crumb]
 }

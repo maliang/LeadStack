@@ -18,13 +18,8 @@ import { ref } from 'vue'
 
 export type AppearanceMode = 'auto' | 'light' | 'dark'
 export type AppearanceDensity = 'compact' | 'standard'
-/** `mode` 解析后的实际外观：`auto` 由系统 `prefers-color-scheme` 决定。 */
-export type EffectiveMode = 'light' | 'dark'
-
 /** @vean/theme 的持久化键，首屏内联脚本与 provider 必须共用。 */
 export const THEME_STORAGE_KEY = '__VEAN_THEME'
-/** provider 注入主题变量的 style 元素 id，首屏可用 envelope.style 预注入。 */
-export const THEME_STYLE_ID = 'vean-theme'
 /** 密度落到根元素上的属性名：`html[data-density]`。 */
 export const DENSITY_ATTR = 'data-density'
 
@@ -42,12 +37,6 @@ export function isAppearanceMode(value: unknown): value is AppearanceMode {
 
 export function isAppearanceDensity(value: unknown): value is AppearanceDensity {
   return typeof value === 'string' && DENSITIES.some((density) => density === value)
-}
-
-/** 纯函数：按 mode 与系统偏好推导实际外观。 */
-export function resolveEffectiveMode(mode: AppearanceMode, prefersDark: boolean): EffectiveMode {
-  if (mode === 'auto') return prefersDark ? 'dark' : 'light'
-  return mode
 }
 
 /** 纯函数：envelope 里与外观相关的快照（无法解析的字段一律给 null，交由默认值兜底）。 */
@@ -79,32 +68,6 @@ export function parseThemeEnvelope(raw: string | null): PersistedAppearance | nu
     mode: isAppearanceMode(envelope.mode) ? envelope.mode : null,
     density: extra && isAppearanceDensity(extra.density) ? extra.density : null,
     style,
-  }
-}
-
-/** 纯函数：`leadstack.appearance` 兜底格式（当前实现不使用，保留给降级路径与测试）。 */
-export interface StoredAppearance {
-  language: string | null
-  density: AppearanceDensity
-}
-
-export function serializeAppearance(value: StoredAppearance): string {
-  return JSON.stringify({ v: 1, language: value.language, density: value.density })
-}
-
-export function parseAppearance(raw: string | null): StoredAppearance | null {
-  if (!raw) return null
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return null
-  }
-  const record = asRecord(parsed)
-  if (!record) return null
-  return {
-    language: typeof record.language === 'string' ? record.language : null,
-    density: isAppearanceDensity(record.density) ? record.density : DEFAULT_APPEARANCE.density,
   }
 }
 

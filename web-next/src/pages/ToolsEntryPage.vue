@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
+import AppIcon from '@/components/AppIcon.vue'
 import { useCan } from '@/composables/useCan'
 import {
   emptyServerFilters,
@@ -57,7 +58,7 @@ const titleKey = computed(() => TITLE_KEYS[kind.value])
 const descKey = computed(() => DESC_KEYS[kind.value])
 const canUse = computed(() => can('terminal.use'))
 
-const { servers, status, error, loaded, refresh } = useServers({
+const { servers, status, error, loaded, refreshing, refresh } = useServers({
   enabled: () => canUse.value,
 })
 
@@ -82,6 +83,20 @@ function lastSeenText(server: Server): string {
         <div class="ls-toolspage__heading">
           <h1 class="ls-toolspage__title">{{ t(titleKey) }}</h1>
           <p class="ls-toolspage__subtitle">{{ t(descKey) }}</p>
+        </div>
+        <div class="ls-adminpage__head-actions">
+          <button
+            id="tools-refresh"
+            class="ls-btn"
+            type="button"
+            :disabled="refreshing"
+            :aria-busy="refreshing"
+            @click="refresh"
+          >
+            <span v-if="refreshing" class="ls-spinner" aria-hidden="true" />
+            <AppIcon v-else name="refresh" size="0.875rem" />
+            {{ t('common.refresh') }}
+          </button>
         </div>
       </header>
 

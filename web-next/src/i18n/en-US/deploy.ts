@@ -348,6 +348,9 @@ const deploy: Record<string, string> = {
   'releaseDetail.showLogs': 'Show logs',
   'releaseDetail.hideLogs': 'Hide logs',
   'releaseDetail.noLogs': 'No log output yet',
+  'apps.envKeysSeparator': ', ',
+  'apps.envKeysTruncated': ' (truncated)',
+  'apps.envKeysLead': ': ',
   'apps.releaseForm.stepCount': '{count} steps',
 }
 

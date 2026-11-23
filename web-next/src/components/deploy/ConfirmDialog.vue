@@ -39,8 +39,8 @@ const { t } = useI18n()
     :test-id="testId"
     @close="emit('close')"
   >
-    <ul v-if="details.length > 0" class="ls-dialog__details">
-      <li v-for="detail in details" :key="detail" class="ls-dialog__detail">{{ detail }}</li>
+    <ul v-if="details.length > 0" class="ls-modal__details">
+      <li v-for="detail in details" :key="detail" class="ls-modal__detail">{{ detail }}</li>
     </ul>
     <p v-if="error" class="ls-inline-error" role="alert">{{ error }}</p>
     <template #footer>

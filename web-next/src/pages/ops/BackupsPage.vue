@@ -144,7 +144,7 @@ const verifyRows = computed(() =>
 )
 
 function verifyChipLabel(ok: boolean): string {
-  return ok ? 'ok=true' : 'ok=false'
+  return ok ? t('backups.verifyOk') : t('backups.verifyFailedShort')
 }
 
 /** manifest → 摘要行（纯函数，模板只负责排版）。 */
@@ -323,8 +323,8 @@ async function submitRestore(): Promise<void> {
     clearRestoreFile()
     startRestorePolling()
   } catch (caught) {
+    // 失败时弹窗不关：错误就贴在弹窗里，用户可以直接重试，不用重新选文件。
     restoreError.value = errorMessage(caught, t('backups.restoreFailed'))
-    restoreConfirmOpen.value = false
   } finally {
     restoreStaging.value = false
   }
@@ -356,7 +356,8 @@ const retentionValid = computed(() => {
 function settingsSummary(value: BackupSettings | null): string {
   if (!value) return ''
   return t('backups.settingsEffectiveValue', {
-    interval: value.interval,
+    // 后端回填的是 Go duration（24h0m0s），展示与输入框保持同一种短串形态。
+    interval: toEditableInterval(value.interval),
     retention: String(value.retention),
     state: value.enabled ? t('backups.settingsOn') : t('backups.settingsOff'),
   })
@@ -509,7 +510,7 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <div v-if="actionNotice" id="backups-action-notice" class="ls-notice" role="status">
+      <div v-if="actionNotice" id="backups-action-notice" class="ls-notice ls-notice--success" role="status">
         <p class="ls-notice__title">{{ actionNotice }}</p>
         <button class="ls-notice__action" type="button" @click="actionNotice = null">
           {{ t('common.close') }}
@@ -595,7 +596,13 @@ onBeforeUnmount(() => {
               {{ restoreStagedParts.join(' · ') }}
             </p>
             <p id="backups-restore-restart" class="ls-backups__restart">
-              <span>{{ t('backups.restoreRestartFlag', { value: restoreStaged.restart_required ? 'true' : 'false' }) }}</span>
+              <span>
+                {{
+                  t('backups.restoreRestartFlag', {
+                    value: restoreStaged.restart_required ? t('common.yes') : t('common.no'),
+                  })
+                }}
+              </span>
               <span v-if="restoreStaged.restart_required">
                 {{ t('backups.restoreRestartRequired') }}
                 <code class="ls-backups__command">{{ restoreStatus?.hint || t('backups.restoreCommand') }}</code>
@@ -737,7 +744,12 @@ onBeforeUnmount(() => {
             <p v-if="settingsFormError" id="backups-settings-error" class="ls-adminpage__form-error" role="alert">
               {{ settingsFormError }}
             </p>
-            <p v-if="settingsNotice" id="backups-settings-notice" class="ls-notice" role="status">
+            <p
+              v-if="settingsNotice"
+              id="backups-settings-notice"
+              class="ls-notice ls-notice--success"
+              role="status"
+            >
               {{ settingsNotice }}
             </p>
 
@@ -781,6 +793,16 @@ onBeforeUnmount(() => {
       <div v-else-if="backups.length === 0" id="backups-empty" class="ls-notice">
         <p class="ls-notice__title">{{ t('ops.backups.emptyTitle') }}</p>
         <p class="ls-notice__text">{{ t('ops.backups.emptyDescription') }}</p>
+        <button
+          v-if="canCreate"
+          id="backups-empty-create"
+          class="ls-notice__action"
+          type="button"
+          :disabled="creating"
+          @click="createBackup()"
+        >
+          {{ t('ops.backups.create') }}
+        </button>
       </div>
 
       <div v-else class="ls-adminpage__scroll">
@@ -843,7 +865,7 @@ onBeforeUnmount(() => {
                   </button>
                   <button
                     v-if="canDelete"
-                    class="ls-btn ls-btn--small ls-adminpage__danger ls-backupspage__delete"
+                    class="ls-btn ls-btn--small ls-btn--danger ls-backupspage__delete"
                     type="button"
                     :disabled="deleting"
                     @click="openDelete(row.backup)"
@@ -916,7 +938,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           id="backups-delete-confirm-submit"
-          class="ls-btn ls-btn--primary ls-adminpage__danger"
+          class="ls-btn ls-btn--danger"
           type="button"
           :disabled="deleting"
           @click="submitDelete"
@@ -950,7 +972,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           id="backups-restore-confirm"
-          class="ls-btn ls-btn--primary ls-adminpage__danger"
+          class="ls-btn ls-btn--danger"
           type="button"
           :disabled="restoreStaging"
           @click="submitRestore"

@@ -86,25 +86,25 @@ function submit(): void {
     test-id="rollback-dialog"
     @close="emit('close')"
   >
-    <p class="ls-dialog__text">{{ t('release.rollbackTargetDescription') }}</p>
-    <p v-if="loading" class="ls-dialog__hint">{{ t('release.rollbackTargetsLoading') }}</p>
+    <p class="ls-modal__text">{{ t('release.rollbackTargetDescription') }}</p>
+    <p v-if="loading" class="ls-modal__hint">{{ t('release.rollbackTargetsLoading') }}</p>
     <div v-else-if="loadError" class="ls-inline-error" role="alert">
       {{ t('release.rollbackTargetsFailed') }}：{{ loadError }}
       <button type="button" class="ls-btn ls-btn--small" @click="load">{{ t('common.retry') }}</button>
     </div>
-    <p v-else-if="targets.length === 0" class="ls-dialog__hint">{{ t('release.rollbackTargetsEmpty') }}</p>
-    <fieldset v-else class="ls-dialog__choices">
+    <p v-else-if="targets.length === 0" class="ls-modal__hint">{{ t('release.rollbackTargetsEmpty') }}</p>
+    <fieldset v-else class="ls-modal__choices">
       <legend class="ls-visually-hidden">{{ t('release.rollbackTargetTitle') }}</legend>
-      <label v-for="target in targets" :key="target.release_id" class="ls-dialog__choice">
+      <label v-for="target in targets" :key="target.release_id" class="ls-modal__choice">
         <input v-model="selectedId" type="radio" name="rollback-target" :value="target.release_id" />
-        <span class="ls-dialog__choice-main">v{{ target.version }}</span>
-        <span class="ls-dialog__choice-meta">
+        <span class="ls-modal__choice-main">v{{ target.version }}</span>
+        <span class="ls-modal__choice-meta">
           {{ formatDateTime(target.finished_at ?? target.created_at) }} · {{ target.server_ids.length }}
         </span>
       </label>
     </fieldset>
-    <ul v-if="selected" class="ls-dialog__details">
-      <li v-for="detail in details" :key="detail" class="ls-dialog__detail">{{ detail }}</li>
+    <ul v-if="selected" class="ls-modal__details">
+      <li v-for="detail in details" :key="detail" class="ls-modal__detail">{{ detail }}</li>
     </ul>
     <p v-if="error" class="ls-inline-error" role="alert">{{ error }}</p>
     <template #footer>
