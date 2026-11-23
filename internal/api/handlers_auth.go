@@ -26,6 +26,10 @@ type userPayload struct {
 	Disabled  bool   `json:"disabled,omitempty"`
 	CreatedAt int64  `json:"created_at,omitempty"`
 	IsSelf    bool   `json:"is_self,omitempty"`
+	// 用户资料（迁移 0016）：姓名 / 电话 / 备注。
+	DisplayName string `json:"display_name"`
+	Phone       string `json:"phone"`
+	Notes       string `json:"notes"`
 	// 登录保护状态（契约 §54）。
 	Locked         bool  `json:"locked"`
 	LockedUntil    int64 `json:"locked_until"`
@@ -177,6 +181,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 func userPayloadWithAuthz(user *store.UserRecord, az *authz) userPayload {
 	out := userPayload{
 		ID: user.ID, Username: user.Username, Role: user.Role,
+		DisplayName: user.DisplayName, Phone: user.Phone, Notes: user.Notes,
 		RoleName: az.RoleName, Permissions: nonNilStrings(az.Permissions),
 	}
 	if az != nil {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
@@ -318,17 +319,17 @@ onMounted(() => {
         </label>
         <label class="ls-field">
           <span class="ls-field__label">{{ t('users.role') }}</span>
-          <select id="tokens-create-role" v-model="createForm.role" class="ls-input" :disabled="createBusy">
+          <AppSelect id="tokens-create-role" v-model="createForm.role" class="ls-input" :disabled="createBusy">
             <option v-for="role in ROLES" :key="role" :value="role">{{ t(`role.${role}`) }}</option>
-          </select>
+          </AppSelect>
         </label>
         <label class="ls-field">
           <span class="ls-field__label">{{ t('ops.tokens.expiry') }}</span>
-          <select id="tokens-create-expiry" v-model="createForm.expiry" class="ls-input" :disabled="createBusy">
+          <AppSelect id="tokens-create-expiry" v-model="createForm.expiry" class="ls-input" :disabled="createBusy">
             <option v-for="option in EXPIRY_OPTIONS" :key="option.value" :value="option.value">
               {{ t(option.labelKey) }}
             </option>
-          </select>
+          </AppSelect>
           <span class="ls-adminpage__hint">{{ t('ops.tokens.expiryHint') }}</span>
         </label>
         <p v-if="createError" id="tokens-create-error" class="ls-adminpage__form-error" role="alert">

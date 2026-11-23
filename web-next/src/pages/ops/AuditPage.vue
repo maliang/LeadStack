@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import { useCan } from '@/composables/useCan'
@@ -222,7 +223,7 @@ onBeforeUnmount(() => {
           :value="actorFilter"
           @input="actorFilter = ($event.target as HTMLInputElement).value"
         />
-        <select
+        <AppSelect
           id="audit-action"
           class="ls-input"
           :aria-label="t('audit.filterAction')"
@@ -231,8 +232,8 @@ onBeforeUnmount(() => {
         >
           <option value="">{{ t('audit.allActions') }}</option>
           <option v-for="action in ACTION_OPTIONS" :key="action" :value="action">{{ action }}</option>
-        </select>
-        <select
+        </AppSelect>
+        <AppSelect
           id="audit-range"
           class="ls-input"
           :aria-label="t('audit.filterTime')"
@@ -242,7 +243,7 @@ onBeforeUnmount(() => {
           <option v-for="range in RANGES" :key="range.value" :value="range.value">
             {{ t(range.labelKey) }}
           </option>
-        </select>
+        </AppSelect>
         <span id="audit-count" class="ls-adminpage__count" aria-live="polite">
           {{ t('audit.count', { count: entries.length }) }}
         </span>

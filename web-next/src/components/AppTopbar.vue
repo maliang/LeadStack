@@ -1,21 +1,23 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import AppIcon from './AppIcon.vue'
+import AppModal from './AppModal.vue'
 import type { Crumb } from '@/lib/nav'
 import { useShellCopy } from '@/composables/useShellCopy'
 import { useI18n } from '@/i18n'
 import type { AuthStatus } from '@/composables/useAuth'
+import { api, type User } from '@/lib/api'
+import { errorMessage } from '@/lib/errors'
 
 /**
- * 顶栏：抽屉开关、面包屑、会话区（加载 / 未登录+重试 / 已登录）。
- * 不持状态：开关与登出都通过事件交给 AppShell / useAuth。
+ * 顶栏：抽屉开关、面包屑、账号下拉（资料 / 改密 / 退出）。
+ * 不持会话状态：用户资料来自 props.user，登出交给 AppShell/useAuth。
  */
 const props = defineProps<{
   crumbs: Crumb[]
   status: AuthStatus
-  userName: string | null
-  roleName: string | null
+  user: User | null
   sessionError: string | null
   mobileOpen: boolean
 }>()
@@ -30,19 +32,145 @@ const copy = useShellCopy()
 const { t, language } = useI18n()
 
 const menuButton = ref<HTMLButtonElement | null>(null)
+const accountButton = ref<HTMLButtonElement | null>(null)
+const menuOpen = ref(false)
 
 function label(key: string): string {
   void language.value
   return t(key)
 }
 
-const initial = computed(() => {
-  const name = props.userName?.trim() ?? ''
-  return name ? name.slice(0, 1).toUpperCase() : '·'
+const displayName = computed(() => props.user?.display_name?.trim() || props.user?.username || '')
+const roleLabel = computed(() => {
+  const current = props.user
+  if (!current) return copy.value.roleFallback
+  const key = `role.${current.role}`
+  const translated = label(key)
+  if (translated !== key) return translated
+  return current.role_name || current.role || copy.value.roleFallback
 })
+const initial = computed(() => (displayName.value ? displayName.value.slice(0, 1).toUpperCase() : '·'))
 
 const isLoading = computed(() => props.status === 'loading')
 const isAnonymous = computed(() => props.status === 'anonymous')
+
+/* ---------- account menu ---------- */
+
+function toggleMenu(): void {
+  menuOpen.value = !menuOpen.value
+  if (menuOpen.value) document.addEventListener('click', onDocumentClick, true)
+  else document.removeEventListener('click', onDocumentClick, true)
+}
+
+function closeMenu(restoreFocus = false): void {
+  if (!menuOpen.value) return
+  menuOpen.value = false
+  document.removeEventListener('click', onDocumentClick, true)
+  if (restoreFocus) accountButton.value?.focus()
+}
+
+function onDocumentClick(event: MouseEvent): void {
+  const target = event.target as Node | null
+  const root = accountButton.value?.closest('.ls-topbar-account')
+  if (target && root?.contains(target)) return
+  closeMenu()
+}
+
+function onMenuKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeMenu(true)
+  }
+}
+
+/* ---------- profile ---------- */
+
+const profileOpen = ref(false)
+const profileBusy = ref(false)
+const profileError = ref<string | null>(null)
+const profileNotice = ref<string | null>(null)
+const profileForm = ref({ display_name: '', phone: '', notes: '' })
+
+function openProfile(): void {
+  closeMenu()
+  profileForm.value = {
+    display_name: props.user?.display_name ?? '',
+    phone: props.user?.phone ?? '',
+    notes: props.user?.notes ?? '',
+  }
+  profileError.value = null
+  profileNotice.value = null
+  profileOpen.value = true
+}
+
+async function saveProfile(): Promise<void> {
+  if (profileBusy.value) return
+  profileBusy.value = true
+  profileError.value = null
+  profileNotice.value = null
+  try {
+    await api.updateMyProfile({
+      display_name: profileForm.value.display_name.trim(),
+      phone: profileForm.value.phone.trim(),
+      notes: profileForm.value.notes.trim(),
+    })
+    profileNotice.value = t('user.profileSaved')
+    // 通知 AppShell/useAuth 重新拉取 /auth/me，顶栏与页面立即用新资料。
+    window.dispatchEvent(new CustomEvent('leadstack:profile-updated'))
+  } catch (caught) {
+    profileError.value = errorMessage(caught, t('user.profileSaveFailed'))
+  } finally {
+    profileBusy.value = false
+  }
+}
+
+/* ---------- change password ---------- */
+
+const passwordOpen = ref(false)
+const passwordBusy = ref(false)
+const passwordError = ref<string | null>(null)
+const passwordNotice = ref<string | null>(null)
+const passwordForm = ref({ old: '', next: '', confirm: '' })
+
+function openPassword(): void {
+  closeMenu()
+  passwordForm.value = { old: '', next: '', confirm: '' }
+  passwordError.value = null
+  passwordNotice.value = null
+  passwordOpen.value = true
+}
+
+async function savePassword(): Promise<void> {
+  if (passwordBusy.value) return
+  passwordError.value = null
+  passwordNotice.value = null
+  if (passwordForm.value.next.length < 6) {
+    passwordError.value = t('users.errorPassword')
+    return
+  }
+  if (passwordForm.value.next !== passwordForm.value.confirm) {
+    passwordError.value = t('settings.passwordMismatch')
+    return
+  }
+  passwordBusy.value = true
+  try {
+    await api.changeMyPassword({
+      old_password: passwordForm.value.old,
+      new_password: passwordForm.value.next,
+    })
+    passwordForm.value = { old: '', next: '', confirm: '' }
+    passwordNotice.value = t('users.ownPasswordChanged')
+  } catch (caught) {
+    passwordError.value = errorMessage(caught, t('common.error'))
+  } finally {
+    passwordBusy.value = false
+  }
+}
+
+function handleLogout(): void {
+  closeMenu()
+  emit('logout')
+}
 
 /** 抽屉关闭后把焦点还给触发按钮（AppShell 调用）。 */
 function focusMenuButton(): void {
@@ -50,6 +178,10 @@ function focusMenuButton(): void {
 }
 
 defineExpose({ focusMenuButton })
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocumentClick, true)
+})
 </script>
 
 <template>
@@ -100,17 +232,113 @@ defineExpose({ focusMenuButton })
       </template>
 
       <template v-else>
-        <div class="ls-user">
-          <span class="ls-user__avatar" aria-hidden="true">{{ initial }}</span>
-          <span class="ls-user__meta">
-            <span class="ls-user__name" :title="userName ?? undefined">{{ userName }}</span>
-            <span class="ls-user__role">{{ roleName ?? copy.roleFallback }}</span>
-          </span>
+        <div class="ls-topbar-account" @keydown="onMenuKeydown">
+          <button
+            ref="accountButton"
+            id="topbar-account"
+            class="ls-topbar-account__trigger"
+            type="button"
+            aria-haspopup="menu"
+            :aria-expanded="menuOpen"
+            :aria-label="t('user.menuLabel')"
+            @click.stop="toggleMenu"
+          >
+            <span class="ls-user__avatar" aria-hidden="true">{{ initial }}</span>
+            <span class="ls-user__meta">
+              <span class="ls-user__name" :title="displayName">{{ displayName }}</span>
+              <span class="ls-user__role">{{ roleLabel }}</span>
+            </span>
+            <AppIcon name="chevron-right" size="0.875rem" class="ls-topbar-account__caret" />
+          </button>
+          <div v-if="menuOpen" class="ls-topbar-account__menu" role="menu" aria-labelledby="topbar-account">
+            <button class="ls-topbar-account__item" type="button" role="menuitem" @click="openProfile">
+              <AppIcon name="users" size="0.875rem" />
+              {{ t('user.profile') }}
+            </button>
+            <button class="ls-topbar-account__item" type="button" role="menuitem" @click="openPassword">
+              <AppIcon name="key-round" size="0.875rem" />
+              {{ t('user.changePassword') }}
+            </button>
+            <div class="ls-topbar-account__sep" role="separator" />
+            <button class="ls-topbar-account__item ls-topbar-account__item--danger" type="button" role="menuitem" @click="handleLogout">
+              <AppIcon name="logout" size="0.875rem" />
+              {{ copy.logout }}
+            </button>
+          </div>
         </div>
-        <button class="ls-icon-btn" type="button" :aria-label="copy.logout" :title="copy.logout" @click="emit('logout')">
-          <AppIcon name="logout" size="1rem" />
-        </button>
       </template>
     </div>
+
+    <AppModal
+      v-if="profileOpen"
+      :title="t('user.profileTitle')"
+      :description="t('user.profileHint')"
+      size="md"
+      @close="profileOpen = false"
+    >
+      <div class="ls-adminpage__form">
+        <div class="ls-form__row">
+          <label class="ls-field">
+            <span class="ls-field__label">{{ t('users.username') }}</span>
+            <input class="ls-input" type="text" :value="user?.username ?? ''" readonly />
+          </label>
+          <label class="ls-field">
+            <span class="ls-field__label">{{ t('users.role') }}</span>
+            <input class="ls-input" type="text" :value="roleLabel" readonly />
+          </label>
+        </div>
+        <label class="ls-field" for="profile-display-name">
+          <span class="ls-field__label">{{ t('user.displayName') }}</span>
+          <input id="profile-display-name" v-model="profileForm.display_name" class="ls-input" type="text" autocomplete="name" />
+        </label>
+        <label class="ls-field" for="profile-phone">
+          <span class="ls-field__label">{{ t('user.phone') }}</span>
+          <input id="profile-phone" v-model="profileForm.phone" class="ls-input" type="tel" autocomplete="tel" />
+        </label>
+        <label class="ls-field" for="profile-notes">
+          <span class="ls-field__label">{{ t('user.notes') }}</span>
+          <textarea id="profile-notes" v-model="profileForm.notes" class="ls-input ls-textarea" rows="3" />
+        </label>
+        <p v-if="profileError" class="ls-inline-error" role="alert">{{ profileError }}</p>
+        <p v-if="profileNotice" class="ls-ok-hint" role="status">{{ profileNotice }}</p>
+      </div>
+      <template #footer>
+        <button class="ls-btn" type="button" :disabled="profileBusy" @click="profileOpen = false">{{ t('common.close') }}</button>
+        <button class="ls-btn ls-btn--primary" type="button" :disabled="profileBusy" :aria-busy="profileBusy" @click="saveProfile">
+          {{ profileBusy ? t('common.loading') : t('common.save') }}
+        </button>
+      </template>
+    </AppModal>
+
+    <AppModal
+      v-if="passwordOpen"
+      :title="t('users.changePassword')"
+      :description="t('user.passwordHint')"
+      size="sm"
+      @close="passwordOpen = false"
+    >
+      <div class="ls-adminpage__form">
+        <label class="ls-field" for="profile-old-password">
+          <span class="ls-field__label">{{ t('users.oldPassword') }}</span>
+          <input id="profile-old-password" v-model="passwordForm.old" class="ls-input" type="password" autocomplete="current-password" />
+        </label>
+        <label class="ls-field" for="profile-new-password">
+          <span class="ls-field__label">{{ t('users.newPassword') }}</span>
+          <input id="profile-new-password" v-model="passwordForm.next" class="ls-input" type="password" autocomplete="new-password" />
+        </label>
+        <label class="ls-field" for="profile-confirm-password">
+          <span class="ls-field__label">{{ t('settings.confirmPassword') }}</span>
+          <input id="profile-confirm-password" v-model="passwordForm.confirm" class="ls-input" type="password" autocomplete="new-password" />
+        </label>
+        <p v-if="passwordError" class="ls-inline-error" role="alert">{{ passwordError }}</p>
+        <p v-if="passwordNotice" class="ls-ok-hint" role="status">{{ passwordNotice }}</p>
+      </div>
+      <template #footer>
+        <button class="ls-btn" type="button" :disabled="passwordBusy" @click="passwordOpen = false">{{ t('common.close') }}</button>
+        <button class="ls-btn ls-btn--primary" type="button" :disabled="passwordBusy" :aria-busy="passwordBusy" @click="savePassword">
+          {{ passwordBusy ? t('common.loading') : t('common.save') }}
+        </button>
+      </template>
+    </AppModal>
   </header>
 </template>

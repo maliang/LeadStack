@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import { RouterLink } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
@@ -419,7 +420,7 @@ watch(
 
         <label v-if="form.mode === 'ssh'" class="ls-field" for="server-form-credential">
           <span class="ls-field__label">{{ t('server.form.credential') }}</span>
-          <select
+          <AppSelect
             id="server-form-credential"
             v-model="form.credentialId"
             class="ls-input"
@@ -430,7 +431,7 @@ watch(
             <option v-for="credential in sshCredentials" :key="credential.id" :value="credential.id">
               {{ credential.name }}（{{ credential.username || credential.kind }}）
             </option>
-          </select>
+          </AppSelect>
           <span class="ls-field__hint">{{ t('server.form.credentialHint') }}</span>
           <span v-if="fieldErrors.credential" class="ls-field__error" role="alert">
             {{ fieldErrors.credential }}
@@ -449,11 +450,11 @@ watch(
 
         <label v-if="form.mode === 'ssh'" class="ls-field" for="server-form-policy">
           <span class="ls-field__label">{{ t('server.form.hostKeyPolicy') }}</span>
-          <select id="server-form-policy" v-model="form.hostKeyPolicy" class="ls-input">
+          <AppSelect id="server-form-policy" v-model="form.hostKeyPolicy" class="ls-input">
             <option value="accept-new">{{ t('server.form.policyAcceptNew') }}</option>
             <option value="strict">{{ t('server.form.policyStrict') }}</option>
             <option value="insecure">{{ t('server.form.policyInsecure') }}</option>
-          </select>
+          </AppSelect>
           <span class="ls-field__hint">{{ t('server.form.policyHint') }}</span>
         </label>
       </fieldset>
@@ -461,13 +462,13 @@ watch(
       <div class="ls-form__row">
         <label class="ls-field" for="server-form-group">
           <span class="ls-field__label">{{ t('server.form.group') }}</span>
-          <select id="server-form-group" v-model="form.groupChoice" class="ls-input">
+          <AppSelect id="server-form-group" v-model="form.groupChoice" class="ls-input">
             <option value="">{{ t('server.form.groupNone') }}</option>
             <option v-for="group in serverGroups" :key="group.id" :value="group.id">
               {{ group.name }}（{{ group.member_count }}）
             </option>
             <option :value="CUSTOM_GROUP">{{ t('server.form.groupCustom') }}</option>
-          </select>
+          </AppSelect>
           <input
             v-if="form.groupChoice === CUSTOM_GROUP"
             v-model="form.customGroup"
@@ -513,7 +514,7 @@ watch(
 
       <label class="ls-field" for="server-form-panel">
         <span class="ls-field__label">{{ t('server.form.panelCredential') }}</span>
-        <select
+        <AppSelect
           id="server-form-panel"
           v-model="form.panelCredentialId"
           class="ls-input"
@@ -529,7 +530,7 @@ watch(
           >
             {{ form.panelCredentialId }}
           </option>
-        </select>
+        </AppSelect>
         <span class="ls-field__hint">{{ t('server.form.panelCredentialHint') }}</span>
         <span v-if="credentialsState === 'ready' && baotaCredentials.length === 0" class="ls-field__hint">
           {{ t('server.form.noPanelCredentials') }}

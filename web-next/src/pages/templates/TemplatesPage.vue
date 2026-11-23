@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
@@ -12,6 +13,7 @@ import {
   emptyTemplateForm,
   filterTemplates,
   TEMPLATE_KINDS,
+  TEMPLATE_SAMPLES,
   templateFormFromItem,
   templateKindLabelKey,
   templatePatchFromForm,
@@ -212,6 +214,16 @@ async function confirmDelete(): Promise<void> {
   deleting.value = null
 }
 
+function applySample(sample: (typeof TEMPLATE_SAMPLES)[number]): void {
+  form.value = {
+    name: t(sample.nameKey),
+    kind: sample.kind,
+    content: sample.content,
+  }
+  formErrors.value = {}
+  formAttempted.value = false
+}
+
 function firstLine(content: string): string {
   const line = content.split('\n').find((entry) => entry.trim() !== '')
   return line ? line.trim() : ''
@@ -389,12 +401,28 @@ function firstLine(content: string): string {
 
         <label class="ls-field" for="template-form-kind">
           <span class="ls-field__label">{{ t('templates.form.kind') }}</span>
-          <select id="template-form-kind" v-model="form.kind" class="ls-input">
+          <AppSelect id="template-form-kind" v-model="form.kind" class="ls-input">
             <option v-for="kind in TEMPLATE_KINDS" :key="kind" :value="kind">
               {{ t(templateKindLabelKey(kind)) }}
             </option>
-          </select>
+          </AppSelect>
+          <span class="ls-field__hint">{{ t(`templates.kind.${form.kind}Hint`) }}</span>
         </label>
+
+        <div class="ls-templates__samples">
+          <span class="ls-field__label">{{ t('templates.form.samples') }}</span>
+          <div class="ls-chip-group">
+            <button
+              v-for="sample in TEMPLATE_SAMPLES"
+              :key="sample.key"
+              class="ls-chip ls-chip--button"
+              type="button"
+              @click="applySample(sample)"
+            >
+              {{ t(sample.nameKey) }}
+            </button>
+          </div>
+        </div>
 
         <label class="ls-field" for="template-form-content">
           <span class="ls-field__label">{{ t('templates.form.content') }}</span>
@@ -402,7 +430,7 @@ function firstLine(content: string): string {
             id="template-form-content"
             ref="contentEl"
             v-model="form.content"
-            class="ls-textarea ls-templates__code"
+            class="ls-input ls-textarea ls-templates__code"
             spellcheck="false"
             :aria-invalid="Boolean(formErrors.content)"
             :aria-describedby="formErrors.content ? undefined : 'template-form-content-hint'"

@@ -46,6 +46,13 @@ const templates: Record<string, string> = {
   'templates.form.content': '模板内容',
   'templates.form.contentRequired': '请填写模板内容',
   'templates.form.placeholders': '可用占位符（点击插入）',
+  'templates.kind.composeHint': 'docker compose 文件：适合容器化服务，发布时渲染后执行 docker compose up -d。',
+  'templates.kind.systemdHint': 'systemd unit 文件：适合裸二进制常驻服务，发布时写到 /etc/systemd/system 后 reload/restart。',
+  'templates.kind.binaryHint': '发布脚本：适合自有流程（解包、切 symlink、重启服务），脚本在目标机执行。',
+  'templates.form.samples': '示例模板',
+  'templates.sample.composeNginx': 'Compose · Nginx',
+  'templates.sample.systemdBinary': 'Systemd · 裸二进制',
+  'templates.sample.scriptBinary': '脚本 · 解包并重启',
   'templates.form.contentHint': '支持 {{APP_SLUG}} 这类占位符；渲染预览不会执行任何命令。',
   'templates.form.invalid': '请先修正表单中的错误',
 

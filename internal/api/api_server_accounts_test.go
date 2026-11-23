@@ -20,7 +20,7 @@ func TestServerAccounts(t *testing.T) {
 	jwt := env.login()
 	srv := env.createServerVia(jwt, map[string]any{"name": "acct-srv", "host": "10.20.30.40", "mode": "agent"})
 
-	const password = "{{SECRET_kr3iznga}}"
+	const password = "test-account-pass"
 	const script = "#!/bin/sh\nprintf '{\"url\":\"https://panel.example.com/abc\"}'\n"
 	status, raw := env.request(http.MethodPost, "/api/v1/servers/"+srv.ID+"/accounts", jwt, map[string]any{
 		"name": "宝塔面板", "address": "https://10.20.30.40:8888", "username": "admin",

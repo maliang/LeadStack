@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import { RouterLink, useRoute } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import ReleaseFormDialog from '@/components/deploy/ReleaseFormDialog.vue'
@@ -153,18 +154,18 @@ function resetFilters(): void {
       </label>
       <label class="ls-field ls-deploy__select" for="releases-status">
         <span class="ls-visually-hidden">{{ t('common.status') }}</span>
-        <select id="releases-status" v-model="statusFilter" class="ls-input">
+        <AppSelect id="releases-status" v-model="statusFilter" class="ls-input">
           <option v-for="option in statusOptions" :key="option.value" :value="option.value">
             {{ t(option.key) }}
           </option>
-        </select>
+        </AppSelect>
       </label>
       <label class="ls-field ls-deploy__select" for="releases-app">
         <span class="ls-visually-hidden">{{ t('releases.app') }}</span>
-        <select id="releases-app" v-model="appFilter" class="ls-input">
+        <AppSelect id="releases-app" v-model="appFilter" class="ls-input">
           <option value="">{{ t('releases.allApps') }}</option>
           <option v-for="app in apps" :key="app.id" :value="app.id">{{ app.name }}</option>
-        </select>
+        </AppSelect>
       </label>
       <button v-if="filtersActive" id="releases-filter-reset" type="button" class="ls-btn ls-btn--small" @click="resetFilters">
         {{ t('releases.clearFilters') }}

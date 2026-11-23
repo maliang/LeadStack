@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import { RouterLink } from 'vue-router'
-import { SThemeModeSelect } from '@vean/ui'
+import { useTheme } from '@vean/ui'
 
 import AppIcon from '@/components/AppIcon.vue'
 import { useAuth } from '@/composables/useAuth'
@@ -14,6 +15,7 @@ import { parsePort, validateListenAddress, validatePublicUrl } from '@/lib/netwo
 import UpgradeCard from '@/components/system/UpgradeCard.vue'
 
 const { t, language } = useI18n()
+const { mode: themeMode } = useTheme()
 const { can } = useCan()
 const { user, scope } = useAuth()
 
@@ -48,6 +50,22 @@ const densityOptions = computed<{ value: AppearanceDensity; label: string }[]>((
 const densityModel = computed<AppearanceDensity>({
   get: () => appearanceDensity.value,
   set: (value) => setDensity(value),
+})
+
+const themeModeOptions = computed(() => {
+  void language.value
+  return [
+    { value: 'auto', label: t('appearance.theme.system') },
+    { value: 'light', label: t('appearance.theme.light') },
+    { value: 'dark', label: t('appearance.theme.dark') },
+  ]
+})
+
+const themeModeModel = computed({
+  get: () => themeMode.value,
+  set: (value: string) => {
+    if (value === 'auto' || value === 'light' || value === 'dark') themeMode.value = value
+  },
 })
 
 const canManage = computed(() => can('system.manage'))
@@ -462,10 +480,16 @@ onMounted(() => {
               <span class="ls-appearance__hint">{{ t('appearance.themeHint') }}</span>
             </div>
             <div class="ls-appearance__control">
-              <SThemeModeSelect
-                :show-icon="false"
-                aria-labelledby="settings-appearance-theme-label"
-              />
+              <AppSelect
+                id="settings-appearance-theme"
+                v-model="themeModeModel"
+                class="ls-input ls-appearance__select"
+                :aria-label="t('appearance.theme')"
+              >
+                <option v-for="option in themeModeOptions" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </AppSelect>
             </div>
           </div>
 
@@ -475,7 +499,7 @@ onMounted(() => {
               <span class="ls-appearance__hint">{{ t('appearance.languageHint') }}</span>
             </label>
             <div class="ls-appearance__control">
-              <select
+              <AppSelect
                 id="settings-appearance-language"
                 v-model="languageModel"
                 class="ls-input ls-appearance__select"
@@ -483,7 +507,7 @@ onMounted(() => {
                 <option v-for="item in SUPPORTED_LANGUAGES" :key="item.value" :value="item.value">
                   {{ item.label }}
                 </option>
-              </select>
+              </AppSelect>
             </div>
           </div>
 
@@ -493,7 +517,7 @@ onMounted(() => {
               <span class="ls-appearance__hint">{{ t('appearance.densityHint') }}</span>
             </label>
             <div class="ls-appearance__control">
-              <select
+              <AppSelect
                 id="settings-appearance-density"
                 v-model="densityModel"
                 class="ls-input ls-appearance__select"
@@ -501,7 +525,7 @@ onMounted(() => {
                 <option v-for="item in densityOptions" :key="item.value" :value="item.value">
                   {{ item.label }}
                 </option>
-              </select>
+              </AppSelect>
             </div>
           </div>
         </div>

@@ -15,8 +15,11 @@ import (
 
 // 用户管理字段约束。
 const (
-	maxUsernameRunes = 64
-	minPasswordBytes = 8
+	maxUsernameRunes    = 64
+	minPasswordBytes    = 8
+	maxDisplayNameRunes = 64
+	maxPhoneRunes       = 32
+	maxUserNotesRunes   = 500
 )
 
 // handleListUsers 处理 GET /api/v1/users（admin）。
@@ -37,6 +40,7 @@ func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	for _, u := range users {
 		out = append(out, userPayload{
 			ID: u.ID, Username: u.Username, Role: u.Role, RoleName: roleNames[u.Role],
+			DisplayName: u.DisplayName, Phone: u.Phone, Notes: u.Notes,
 			Disabled: u.Disabled, CreatedAt: u.CreatedAt, IsSelf: u.ID == self,
 			Locked:         u.LockedUntil > nowMS,
 			LockedUntil:    u.LockedUntil,
@@ -49,9 +53,12 @@ func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 // handleCreateUser 处理 POST /api/v1/users（admin）。
 func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Role     string `json:"role"`
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		Role        string `json:"role"`
+		DisplayName string `json:"display_name"`
+		Phone       string `json:"phone"`
+		Notes       string `json:"notes"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
@@ -65,6 +72,21 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if len(req.Password) < minPasswordBytes {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument,
 			fmt.Sprintf("密码长度不能少于 %d 个字符", minPasswordBytes))
+		return
+	}
+	displayName := strings.TrimSpace(req.DisplayName)
+	if err := validateText("display_name", displayName, maxDisplayNameRunes, false); err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+		return
+	}
+	phone := strings.TrimSpace(req.Phone)
+	if err := validateText("phone", phone, maxPhoneRunes, false); err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+		return
+	}
+	notes := strings.TrimSpace(req.Notes)
+	if err := validateText("notes", notes, maxUserNotesRunes, false); err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
 		return
 	}
 	role := strings.TrimSpace(req.Role)
@@ -86,8 +108,8 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := &store.User{
-		ID: uuid.NewString(), Username: username, PasswordHash: hash,
-		Role: role, CreatedAt: a.nowMS(),
+		ID: uuid.NewString(), Username: username, PasswordHash: hash, Role: role,
+		DisplayName: displayName, Phone: phone, Notes: notes, CreatedAt: a.nowMS(),
 	}
 	if err := a.st.CreateUser(r.Context(), user); err != nil {
 		a.writeStoreError(w, r, err)
@@ -95,7 +117,9 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	a.logger.Info("创建用户", "user_id", user.ID, "username", user.Username, "role", user.Role)
 	writeData(w, http.StatusCreated, userPayload{
-		ID: user.ID, Username: user.Username, Role: user.Role, CreatedAt: user.CreatedAt,
+		ID: user.ID, Username: user.Username, Role: user.Role,
+		DisplayName: user.DisplayName, Phone: user.Phone, Notes: user.Notes,
+		CreatedAt: user.CreatedAt,
 	})
 }
 
@@ -106,19 +130,48 @@ func (a *API) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Role     *string `json:"role"`
-		Disabled *bool   `json:"disabled"`
-		Password *string `json:"password"`
+		Role        *string `json:"role"`
+		Disabled    *bool   `json:"disabled"`
+		Password    *string `json:"password"`
+		DisplayName *string `json:"display_name"`
+		Phone       *string `json:"phone"`
+		Notes       *string `json:"notes"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
 		return
 	}
-	if req.Role == nil && req.Disabled == nil && req.Password == nil {
-		writeError(w, http.StatusBadRequest, codeInvalidArgument, "至少需要提供 role/disabled/password 之一")
+	if req.Role == nil && req.Disabled == nil && req.Password == nil &&
+		req.DisplayName == nil && req.Phone == nil && req.Notes == nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument,
+			"至少需要提供 role/disabled/password/display_name/phone/notes 之一")
 		return
 	}
 	upd := store.UserUpdate{}
+	if req.DisplayName != nil {
+		v := strings.TrimSpace(*req.DisplayName)
+		if err := validateText("display_name", v, maxDisplayNameRunes, false); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		upd.DisplayName = &v
+	}
+	if req.Phone != nil {
+		v := strings.TrimSpace(*req.Phone)
+		if err := validateText("phone", v, maxPhoneRunes, false); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		upd.Phone = &v
+	}
+	if req.Notes != nil {
+		v := strings.TrimSpace(*req.Notes)
+		if err := validateText("notes", v, maxUserNotesRunes, false); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		upd.Notes = &v
+	}
 	if req.Role != nil {
 		role := strings.TrimSpace(*req.Role)
 		exists, rerr := a.roleExists(r.Context(), role)
@@ -185,6 +238,7 @@ func (a *API) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 	roleNames := a.roleDisplayNames(r.Context(), []string{updated.Role})
 	writeData(w, http.StatusOK, userPayload{
 		ID: updated.ID, Username: updated.Username, Role: updated.Role, RoleName: roleNames[updated.Role],
+		DisplayName: updated.DisplayName, Phone: updated.Phone, Notes: updated.Notes,
 		Disabled: updated.Disabled, CreatedAt: updated.CreatedAt,
 		Locked:         updated.LockedUntil > a.nowMS(),
 		LockedUntil:    updated.LockedUntil,
@@ -218,6 +272,10 @@ func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if target.ID == actorID(r) {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "不能删除自己的账号")
+		return
+	}
+	if target.Username == "admin" {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "内置超级管理员 admin 不能删除")
 		return
 	}
 	if target.Role == roleAdmin {
@@ -309,4 +367,65 @@ func ensureAdminRemains(activeAdmins int, message string) error {
 		return fmt.Errorf("%s: %w", message, store.ErrConflict)
 	}
 	return nil
+}
+
+// handlePatchOwnProfile 处理 PATCH /api/v1/users/me（所有登录用户）：
+// 只允许修改自己的姓名 / 电话 / 备注，不能改角色、密码或用户名。
+func (a *API) handlePatchOwnProfile(w http.ResponseWriter, r *http.Request) {
+	actor, ok := actorFromRequest(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, codeUnauthorized, "缺少有效的登录凭证")
+		return
+	}
+	var req struct {
+		DisplayName *string `json:"display_name"`
+		Phone       *string `json:"phone"`
+		Notes       *string `json:"notes"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
+		return
+	}
+	if req.DisplayName == nil && req.Phone == nil && req.Notes == nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument,
+			"至少需要提供 display_name/phone/notes 之一")
+		return
+	}
+	upd := store.UserUpdate{}
+	if req.DisplayName != nil {
+		v := strings.TrimSpace(*req.DisplayName)
+		if err := validateText("display_name", v, maxDisplayNameRunes, false); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		upd.DisplayName = &v
+	}
+	if req.Phone != nil {
+		v := strings.TrimSpace(*req.Phone)
+		if err := validateText("phone", v, maxPhoneRunes, false); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		upd.Phone = &v
+	}
+	if req.Notes != nil {
+		v := strings.TrimSpace(*req.Notes)
+		if err := validateText("notes", v, maxUserNotesRunes, false); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+			return
+		}
+		upd.Notes = &v
+	}
+	updated, err := a.st.UpdateUser(r.Context(), actor.ID, upd, a.nowMS())
+	if err != nil {
+		a.writeStoreError(w, r, err)
+		return
+	}
+	a.logger.Info("更新个人资料", "user_id", updated.ID, "username", updated.Username)
+	roleNames := a.roleDisplayNames(r.Context(), []string{updated.Role})
+	writeData(w, http.StatusOK, userPayload{
+		ID: updated.ID, Username: updated.Username, Role: updated.Role, RoleName: roleNames[updated.Role],
+		DisplayName: updated.DisplayName, Phone: updated.Phone, Notes: updated.Notes,
+		CreatedAt: updated.CreatedAt,
+	})
 }

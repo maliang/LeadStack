@@ -246,8 +246,8 @@ async function readAppearance(page) {
 }
 
 const THEME_LABELS = {
-  'zh-CN': { auto: '自动', light: '浅色', dark: '深色' },
-  en: { auto: 'auto', light: 'light', dark: 'dark' },
+  'zh-CN': { auto: '跟随系统', light: '浅色', dark: '深色' },
+  en: { auto: 'System', light: 'Light', dark: 'Dark' },
 }
 
 /** 用 provider 自带的 SThemeModeSelect 选模式（不手写 light/dark 逻辑）。 */

@@ -81,7 +81,7 @@ export function filterUsers(users: ManagedUser[], keyword: string): ManagedUser[
   const query = keyword.trim().toLowerCase()
   if (query === '') return users
   return users.filter((user) =>
-    [user.username, user.role, user.role_name ?? '', user.id].some((field) =>
+    [user.username, user.role, user.role_name ?? '', user.display_name, user.phone, user.notes, user.id].some((field) =>
       field.toLowerCase().includes(query),
     ),
   )

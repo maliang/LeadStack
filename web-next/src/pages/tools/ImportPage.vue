@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import { RouterLink } from 'vue-router'
 import { useCan } from '@/composables/useCan'
 import { useI18n } from '@/i18n'
@@ -272,19 +273,19 @@ onMounted(() => {
             </label>
             <label class="ls-field">
               <span class="ls-field__label">{{ t('import.mode') }}</span>
-              <select id="import-mode" v-model="mode" class="ls-input">
+              <AppSelect id="import-mode" v-model="mode" class="ls-input">
                 <option value="ssh">{{ t('hostimport.modeSsh') }}</option>
                 <option value="agent">{{ t('hostimport.modeAgent') }}</option>
-              </select>
+              </AppSelect>
             </label>
             <label class="ls-field">
               <span class="ls-field__label">{{ t('import.credential') }}</span>
-              <select id="import-credential" v-model="credentialId" class="ls-input">
+              <AppSelect id="import-credential" v-model="credentialId" class="ls-input">
                 <option value="">{{ t('import.selectCredential') }}</option>
                 <option v-for="credential in credentials" :key="credential.id" :value="credential.id">
                   {{ credential.name }}
                 </option>
-              </select>
+              </AppSelect>
             </label>
             <label class="ls-field">
               <span class="ls-field__label">{{ t('import.group') }}</span>

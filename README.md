@@ -54,7 +54,7 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量 agent，跨平台、开箱即用
 <details>
 <summary>展开其余界面</summary>
 
-**服务器列表** —— 状态、CPU / 内存 / 磁盘快照、标签与分组筛选、批量操作；绑定宝塔面板 API 密钥的机器直接显示「宝塔登录」。编辑弹窗里标签按逗号/空格/换行转成可删除标签块，分组支持下拉选择或自定义输入，顶部「分组管理」可增量删改分组。
+**服务器列表** —— 状态、CPU / 内存 / 磁盘快照、标签与分组筛选、批量操作；绑定宝塔面板 API 密钥的机器直接显示「宝塔登录」。编辑弹窗里标签按逗号/空格/换行转成可删除标签块，分组支持下拉选择或自定义输入，顶部「分组管理」可增量删改分组。右上角账号菜单提供「用户信息（姓名 / 电话 / 备注）」与「修改密码」，退出登录也收在菜单里。
 
 **服务器详情** —— 基础信息、面板入口、SSH 登录信息、访问账号（多条登录信息 + 一键登录脚本）、一键登录与服务器档案；检测 / 终端 / 文件 / 日志各是独立标签页。
 
@@ -403,8 +403,8 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 ### 6. 部署第一个应用
 
-1. **应用**：「应用 → 新建应用」，部署路径 `<部署根>/<slug>`；
-2. **模板**：`binary`（下载解压落位）/ `compose`（容器编排）/ `systemd`（服务单元），支持 `{{ROOT}}`、`{{VERSION}}`、
+1. **应用**：「应用 → 新建应用」，部署路径 `<部署根>/<slug>`；发布模式（制品发布 / 原地更新 / 自定义脚本）在弹窗内有逐项解释；
+2. **模板**：`binary`（下载解压落位）/ `compose`（容器编排）/ `systemd`（服务单元），类型下拉带说明；新建时可一键套用 Compose·Nginx / Systemd·裸二进制 / 脚本·解包并重启三个示例，支持 `{{ROOT}}`、`{{VERSION}}`、
    `{{RELEASE_DIR}}`、`{{ARTIFACT_URL}}`、`{{ARTIFACT_SHA256}}` 等占位符，可「渲染预览」；
 3. **制品**：填 URL（**必须给 sha256**）或上传文件（服务端自动算）；
 4. **发布**：选应用 → 模板 → 版本 → 制品 → 目标服务器（可按分组/标签全选）→ 向导里可先「预览」步骤与风险 → 确认；
@@ -865,7 +865,7 @@ make dev               # 开发模式（另开 make web-dev 走前端热更新�
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check      # Docker 构建 + 容器内健康检查 + 备份校验
 node scripts/capture-screenshots.mjs   # 重采 README 截图（需带演示数据的控制端）
-node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3212 校验总数）
+node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3243 校验总数）
 ```
 
 > **内嵌前端 = `web-next/`**：`make build` 先构建 `web-next/dist/`，再由 `make web-embed` 复制到 `internal/webui/dist/`、经 `go:embed` 打进二进制。

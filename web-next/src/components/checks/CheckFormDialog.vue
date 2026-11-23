@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import AppModal from '@/components/AppModal.vue'
 import { useCan } from '@/composables/useCan'
 import { useI18n } from '@/i18n'
@@ -203,9 +204,9 @@ onMounted(() => {
 
         <label class="ls-field" for="check-form-kind">
           <span class="ls-field__label">{{ t('checks.form.kind') }}</span>
-          <select id="check-form-kind" v-model="form.kind" class="ls-input" :disabled="editing">
+          <AppSelect id="check-form-kind" v-model="form.kind" class="ls-input" :disabled="editing">
             <option v-for="kind in KINDS" :key="kind" :value="kind">{{ checkKindLabel(kind) }}</option>
-          </select>
+          </AppSelect>
           <span v-if="editing" class="ls-field__hint">{{ t('checks.form.kindLocked') }}</span>
         </label>
       </div>
@@ -257,10 +258,10 @@ onMounted(() => {
 
       <label v-if="supportsProbe" class="ls-field" for="check-form-probe">
         <span class="ls-field__label">{{ t('checks.probeChannel') }}</span>
-        <select id="check-form-probe" v-model="form.probeVia" class="ls-input">
+        <AppSelect id="check-form-probe" v-model="form.probeVia" class="ls-input">
           <option value="control">{{ t('checks.probeControl') }}</option>
           <option value="agent">{{ t('checks.probeAgent') }}</option>
-        </select>
+        </AppSelect>
         <span class="ls-field__hint">
           {{ form.probeVia === 'agent' ? t('checks.probeAgentNote') : t('checks.probeControlHint') }}
         </span>

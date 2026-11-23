@@ -13,8 +13,9 @@ func (s *Store) CreateUser(ctx context.Context, u *User) error {
 		return errors.New("创建用户: 参数为空")
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)`,
-		u.ID, u.Username, u.PasswordHash, u.Role, u.CreatedAt,
+		`INSERT INTO users (id, username, password_hash, role, display_name, phone, notes, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Username, u.PasswordHash, u.Role, u.DisplayName, u.Phone, u.Notes, u.CreatedAt,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -28,7 +29,7 @@ func (s *Store) CreateUser(ctx context.Context, u *User) error {
 // GetUserByUsername 按用户名查询用户。
 func (s *Store) GetUserByUsername(ctx context.Context, username string) (*User, error) {
 	return s.scanUser(s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?`,
+		`SELECT id, username, password_hash, role, display_name, phone, notes, created_at FROM users WHERE username = ?`,
 		username,
 	))
 }
@@ -36,7 +37,7 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (*User, 
 // GetUserByID 按主键查询用户。
 func (s *Store) GetUserByID(ctx context.Context, id string) (*User, error) {
 	return s.scanUser(s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, role, created_at FROM users WHERE id = ?`,
+		`SELECT id, username, password_hash, role, display_name, phone, notes, created_at FROM users WHERE id = ?`,
 		id,
 	))
 }
@@ -70,7 +71,7 @@ func (s *Store) UpdateUserPassword(ctx context.Context, id, passwordHash string)
 // scanUser 把一行查询结果映射为 User。
 func (s *Store) scanUser(row *sql.Row) (*User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.DisplayName, &u.Phone, &u.Notes, &u.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询用户: %w", ErrNotFound)

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
@@ -946,7 +947,7 @@ watch(
       <template v-if="tab === 'events'">
       <div class="ls-alertspage__toolbar">
         <div class="ls-alertspage__filters">
-          <select
+          <AppSelect
             id="alerts-filter-status"
             class="ls-input ls-alertspage__select"
             :aria-label="t('alerts.colStatus')"
@@ -957,9 +958,9 @@ watch(
             <option v-for="status in ALERT_STATUSES" :key="status" :value="status">
               {{ t(statusLabelKey(status)) }}
             </option>
-          </select>
+          </AppSelect>
 
-          <select
+          <AppSelect
             id="alerts-filter-severity"
             class="ls-input ls-alertspage__select"
             :aria-label="t('alerts.colSeverity')"
@@ -970,9 +971,9 @@ watch(
             <option v-for="severity in ALERT_SEVERITIES" :key="severity" :value="severity">
               {{ t(severityLabelKey(severity)) }}
             </option>
-          </select>
+          </AppSelect>
 
-          <select
+          <AppSelect
             id="alerts-filter-server"
             class="ls-input ls-alertspage__select"
             :aria-label="t('alerts.colServer')"
@@ -984,7 +985,7 @@ watch(
             <option v-for="server in serverOptions" :key="server.id" :value="server.id">
               {{ server.label }}
             </option>
-          </select>
+          </AppSelect>
 
           <button
             v-if="filtersActive"
@@ -1526,19 +1527,19 @@ watch(
         <div class="ls-form__row">
           <label class="ls-field">
             <span class="ls-field__label">{{ t('alerts.rules.fieldSource') }}</span>
-            <select id="alerts-rule-source" v-model="ruleForm.source" class="ls-input">
+            <AppSelect id="alerts-rule-source" v-model="ruleForm.source" class="ls-input">
               <option v-for="source in RULE_SOURCES" :key="source" :value="source">
                 {{ t(ruleSourceLabelKey(source)) }}
               </option>
-            </select>
+            </AppSelect>
           </label>
           <label class="ls-field">
             <span class="ls-field__label">{{ t('alerts.rules.fieldSeverity') }}</span>
-            <select id="alerts-rule-severity" v-model="ruleForm.severity" class="ls-input">
+            <AppSelect id="alerts-rule-severity" v-model="ruleForm.severity" class="ls-input">
               <option v-for="severity in ALERT_SEVERITIES" :key="severity" :value="severity">
                 {{ t(severityLabelKey(severity)) }}
               </option>
-            </select>
+            </AppSelect>
           </label>
         </div>
 
@@ -1583,11 +1584,11 @@ watch(
           <div class="ls-form__row">
             <label class="ls-field">
               <span class="ls-field__label">{{ t('alerts.rules.fieldComparator') }}</span>
-              <select id="alerts-rule-comparator" v-model="ruleForm.comparator" class="ls-input">
+              <AppSelect id="alerts-rule-comparator" v-model="ruleForm.comparator" class="ls-input">
                 <option v-for="comparator in ALERT_COMPARATORS" :key="comparator" :value="comparator">
                   {{ comparator }}
                 </option>
-              </select>
+              </AppSelect>
             </label>
             <label class="ls-field">
               <span class="ls-field__label">{{ t('alerts.rules.fieldThreshold') }}</span>
@@ -1759,11 +1760,11 @@ watch(
           </label>
           <label class="ls-field">
             <span class="ls-field__label">{{ t('alerts.channels.fieldKind') }}</span>
-            <select id="alerts-channel-kind" v-model="channelForm.kind" class="ls-input">
+            <AppSelect id="alerts-channel-kind" v-model="channelForm.kind" class="ls-input">
               <option v-for="kind in CHANNEL_KINDS" :key="kind" :value="kind">
                 {{ t(channelKindLabelKey(kind)) }}
               </option>
-            </select>
+            </AppSelect>
           </label>
         </div>
 

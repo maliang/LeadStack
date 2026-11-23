@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { api } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
@@ -157,19 +158,19 @@ onBeforeUnmount(() => {
       </div>
       <div class="ls-field ls-logs__preset">
         <label class="ls-field__label" for="server-logs-preset">{{ t('logs.preset') }}</label>
-        <select id="server-logs-preset" class="ls-input" :value="path" @change="path = ($event.target as HTMLSelectElement).value; selectSource()">
+        <AppSelect id="server-logs-preset" class="ls-input" :value="path" @change="path = ($event.target as HTMLSelectElement).value; selectSource()">
           <option v-for="option in sourceOptions" :key="option.value" :value="option.value">
             {{ t(option.labelKey) }}
           </option>
-        </select>
+        </AppSelect>
       </div>
       <div class="ls-field ls-logs__lines">
         <label class="ls-field__label" for="server-logs-lines">{{ t('logs.lines') }}</label>
-        <select id="server-logs-lines" v-model="lines" class="ls-input">
+        <AppSelect id="server-logs-lines" v-model="lines" class="ls-input">
           <option v-for="option in ['100', '200', '500', '1000']" :key="option" :value="option">
             {{ option }}
           </option>
-        </select>
+        </AppSelect>
       </div>
       <div class="ls-field ls-logs__grep">
         <label class="ls-field__label" for="server-logs-grep">grep</label>

@@ -1821,7 +1821,14 @@ tail -n 3 /var/lib/leadstack/data/upgrade/upgrade-history.jsonl | jq -c .
 - 过滤位置：`/releases`、`/alerts` 已下沉到 SQL（必须排在 `LIMIT` 之前，见 §66）；`/servers`、`/checks` 的查询本身不含 `LIMIT`，查出后在内存过滤；`/scheduled-tasks` 不分页；
 - 分页语义：**先过滤后分页**——两种实现下分页都作用在「范围过滤之后的集合」上，只有最后一页会少于 `limit`（旧文档写的「受限用户单页恒少」已不成立）。
 
-## 54. 登录限流与失败锁定
+## 54. 登录限流与失败锁定、用户资料
+
+- 用户资料字段（迁移 0016）：`display_name`（≤64）、`phone`（≤32）、`notes`（≤500），
+  管理端创建/编辑与右上角「用户信息」共用；`/auth/me` 会返回当前账号的资料。
+- 自助修改走 `PATCH /users/me`（只接受 display_name/phone/notes），不能借该接口改角色或密码。
+- 内置 `admin` 账号禁止删除（后端 400，前端隐藏删除按钮）；其它用户可查看/编辑/删除/重置密码，
+  仍受「不能删除自己」「不能删除最后一个 admin」约束。
+
 
 - **账号维度（持久化）**：连续失败达到 `login_max_attempts`（默认 **5**）→ 锁定 `login_lock_duration`（默认 **15m**）；锁定期内即使密码正确也拒绝；成功登录清零；管理员改密码同时清零；
 - **IP 维度（进程内滑动窗口）**：`login_ip_window`（默认 60s）内最多 `login_ip_limit`（默认 20）次登录请求，超出 → 429；
@@ -3097,9 +3104,10 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 自定义字段沿用服务器档案的 32 键 / 键 40 字 / 值 200 字 / 8KB 限制；脚本 ≤8192
 字（码点）且禁止 NUL。跨服务器访问账号一律 404，不泄露存在性。
 
-schema 版本 14 → 15：`internal/api/handlers_backup.go` 的 `defaultMaxSchemaVersion`
-与 `cmd/leadstack/backup_cmd.go` 的 `currentSchemaVersion` 必须同步改成 15，
-否则本版本备份会被自己的 CLI 当成「来自未来版本」拒绝恢复。
+schema 版本 14 → 15（访问账号）→ 16（用户资料）：`internal/api/handlers_backup.go`
+的 `defaultMaxSchemaVersion` 与 `cmd/leadstack/backup_cmd.go` 的
+`currentSchemaVersion` 必须同步改成 16，否则本版本备份会被自己的 CLI 当成
+「来自未来版本」拒绝恢复。
 
 ### 70.4 一键登录与列表项
 

@@ -86,8 +86,13 @@ watch(mobileOpen, async (open) => {
   document.body.classList.remove('ls-scroll-locked')
 })
 
+function onProfileUpdated(): void {
+  void refreshSession()
+}
+
 onMounted(() => {
   void ensureSession()
+  window.addEventListener('leadstack:profile-updated', onProfileUpdated)
 })
 
 /**
@@ -107,6 +112,7 @@ watch(status, (value) => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('leadstack:profile-updated', onProfileUpdated)
   if (typeof document === 'undefined') return
   document.removeEventListener('keydown', onKeydown)
   document.body.classList.remove('ls-scroll-locked')
@@ -151,8 +157,7 @@ async function handleLogout(): Promise<void> {
         ref="topbar"
         :crumbs="crumbs"
         :status="status"
-        :user-name="user?.username ?? null"
-        :role-name="user?.role_name ?? null"
+        :user="user"
         :session-error="error"
         :mobile-open="mobileOpen"
         @toggle-nav="openDrawer"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
 import CheckDetailDrawer from '@/components/checks/CheckDetailDrawer.vue'
@@ -264,7 +265,7 @@ function dismissRunFeedback(): void {
             @input="patchFilters({ keyword: ($event.target as HTMLInputElement).value })"
           />
 
-          <select
+          <AppSelect
             id="checks-filter-kind"
             class="ls-input ls-checkspage__select"
             :aria-label="t('checks.colKind')"
@@ -275,9 +276,9 @@ function dismissRunFeedback(): void {
             <option v-for="kind in kindOptions" :key="kind" :value="kind">
               {{ checkKindLabel(kind) }}
             </option>
-          </select>
+          </AppSelect>
 
-          <select
+          <AppSelect
             id="checks-filter-state"
             class="ls-input ls-checkspage__select"
             :aria-label="t('checks.colState')"
@@ -287,7 +288,7 @@ function dismissRunFeedback(): void {
             <option v-for="option in stateOptions" :key="option.value" :value="option.value">
               {{ t(option.labelKey) }}
             </option>
-          </select>
+          </AppSelect>
 
           <button
             v-if="filtersActive"

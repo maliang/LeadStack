@@ -47,6 +47,13 @@ const templates: Record<string, string> = {
   'templates.form.content': 'Template content',
   'templates.form.contentRequired': 'Template content is required',
   'templates.form.placeholders': 'Available placeholders (click to insert)',
+  'templates.kind.composeHint': 'docker compose file: for containerised services; rendered and applied with docker compose up -d.',
+  'templates.kind.systemdHint': 'systemd unit: for long-running binaries; written to /etc/systemd/system then reloaded/restarted.',
+  'templates.kind.binaryHint': 'Deploy script: for custom flows (unpack, switch symlink, restart); runs on the target.',
+  'templates.form.samples': 'Example templates',
+  'templates.sample.composeNginx': 'Compose · Nginx',
+  'templates.sample.systemdBinary': 'Systemd · binary',
+  'templates.sample.scriptBinary': 'Script · unpack and restart',
   'templates.form.contentHint': 'Supports placeholders such as {{APP_SLUG}}; rendering a preview runs no commands.',
   'templates.form.invalid': 'Fix the form errors first',
 

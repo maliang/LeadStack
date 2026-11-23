@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import type { AppItem, CreateAppPayload } from '@/lib/api'
 import {
   appFormFromItem,
@@ -56,10 +57,15 @@ function submit(): void {
 }
 
 const modeOptions = [
-  { value: 'release', key: 'apps.mode.release' },
-  { value: 'inplace', key: 'apps.mode.inplace' },
-  { value: 'script', key: 'apps.mode.script' },
+  { value: 'release', key: 'apps.mode.release', hintKey: 'apps.modeReleaseHint' },
+  { value: 'inplace', key: 'apps.mode.inplace', hintKey: 'apps.modeInplaceHint' },
+  { value: 'script', key: 'apps.mode.script', hintKey: 'apps.modeScriptHint' },
 ]
+
+const modeHint = computed(() => {
+  const option = modeOptions.find((item) => item.value === form.deployMode) ?? modeOptions[0]
+  return t(option.hintKey)
+})
 </script>
 
 <template>
@@ -79,6 +85,7 @@ const modeOptions = [
           class="ls-input"
           type="text"
           autocomplete="off"
+          :placeholder="t('apps.form.namePlaceholder')"
           :aria-invalid="Boolean(errors.name)"
         />
         <span v-if="errors.name" class="ls-field__error" role="alert">{{ t(errors.name) }}</span>
@@ -91,6 +98,7 @@ const modeOptions = [
           class="ls-input"
           type="text"
           autocomplete="off"
+          :placeholder="t('apps.form.slugPlaceholder')"
           :aria-invalid="Boolean(errors.slug)"
         />
         <span v-if="errors.slug" class="ls-field__error" role="alert">{{ t(errors.slug) }}</span>
@@ -98,20 +106,21 @@ const modeOptions = [
       </label>
       <label class="ls-field" for="app-form-root">
         <span class="ls-field__label">{{ t('apps.form.root') }}</span>
-        <input id="app-form-root" v-model="form.root" class="ls-input" type="text" autocomplete="off" />
+        <input id="app-form-root" v-model="form.root" class="ls-input" type="text" autocomplete="off" :placeholder="t('apps.form.rootPlaceholder')" />
         <span class="ls-field__hint">{{ t('apps.form.rootHint') }}</span>
       </label>
       <label class="ls-field" for="app-form-mode">
         <span class="ls-field__label">{{ t('apps.form.deployMode') }}</span>
-        <select id="app-form-mode" v-model="form.deployMode" class="ls-input">
+        <AppSelect id="app-form-mode" v-model="form.deployMode" class="ls-input">
           <option v-for="option in modeOptions" :key="option.value" :value="option.value">
             {{ t(option.key) }}
           </option>
-        </select>
+        </AppSelect>
+        <span class="ls-field__hint">{{ modeHint }}</span>
       </label>
       <label class="ls-field" for="app-form-restart">
         <span class="ls-field__label">{{ t('apps.form.restartCmd') }}</span>
-        <input id="app-form-restart" v-model="form.restartCmd" class="ls-input" type="text" autocomplete="off" />
+        <input id="app-form-restart" v-model="form.restartCmd" class="ls-input" type="text" autocomplete="off" :placeholder="t('apps.form.restartCmdPlaceholder')" />
         <span class="ls-field__hint">{{ t('apps.form.restartCmdHint') }}</span>
       </label>
       <div class="ls-field__row">
@@ -128,7 +137,7 @@ const modeOptions = [
       </div>
       <label class="ls-field" for="app-form-env">
         <span class="ls-field__label">{{ t('apps.form.envJson') }}</span>
-        <textarea id="app-form-env" v-model="form.envJson" class="ls-textarea" rows="3" spellcheck="false" />
+        <textarea id="app-form-env" v-model="form.envJson" class="ls-input ls-textarea" rows="4" spellcheck="false" :placeholder="t('apps.form.envPlaceholder')" />
         <span class="ls-field__hint">{{ t('apps.envKeysOnly') }}</span>
       </label>
       <p v-if="app && app.redacted" class="ls-field__hint" data-app-env-keys>
@@ -140,7 +149,8 @@ const modeOptions = [
       </p>
       <label class="ls-field" for="app-form-description">
         <span class="ls-field__label">{{ t('apps.form.note') }}</span>
-        <textarea id="app-form-description" v-model="form.description" class="ls-textarea" rows="2" />
+        <textarea id="app-form-description" v-model="form.description" class="ls-input ls-textarea" rows="2" :placeholder="t('apps.form.notePlaceholder')" />
+        <span class="ls-field__hint">{{ t('apps.form.noteHint') }}</span>
       </label>
       <p v-if="error" class="ls-inline-error" role="alert">{{ error }}</p>
       <p v-if="attempted && Object.keys(errors).length > 0" class="ls-inline-error" role="alert">

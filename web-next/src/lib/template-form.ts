@@ -22,6 +22,63 @@ export type TemplateFormErrors = Partial<Record<keyof TemplateFormValues, string
 
 export const TEMPLATE_NAME_MAX = 64
 
+/** 内置示例模板：新增时一键填充，降低「不知道 compose/systemd 怎么写」的门槛。 */
+export interface TemplateSample {
+  key: string
+  nameKey: string
+  kind: TemplateKind
+  content: string
+}
+
+export const TEMPLATE_SAMPLES: readonly TemplateSample[] = [
+  {
+    key: 'compose-nginx',
+    nameKey: 'templates.sample.composeNginx',
+    kind: 'compose',
+    content: `services:
+  web:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - {{ROOT}}/html:/usr/share/nginx/html:ro
+`,
+  },
+  {
+    key: 'systemd-binary',
+    nameKey: 'templates.sample.systemdBinary',
+    kind: 'systemd',
+    content: `[Unit]
+Description={{APP_SLUG}}
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={{ROOT}}/current
+ExecStart={{ROOT}}/current/bin/{{APP_SLUG}}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+`,
+  },
+  {
+    key: 'script-binary',
+    nameKey: 'templates.sample.scriptBinary',
+    kind: 'binary',
+    content: `#!/usr/bin/env sh
+set -eu
+mkdir -p "{{ROOT}}/releases/{{RELEASE_ID}}"
+curl -fsSL "{{ARTIFACT_URL}}" -o /tmp/{{APP_SLUG}}.tar.gz
+tar -xzf /tmp/{{APP_SLUG}}.tar.gz -C "{{ROOT}}/releases/{{RELEASE_ID}}"
+ln -sfn "{{ROOT}}/releases/{{RELEASE_ID}}" "{{ROOT}}/current"
+systemctl restart "{{APP_SLUG}}"
+`,
+  },
+]
+
 export function emptyTemplateForm(): TemplateFormValues {
   return { name: '', kind: 'compose', content: '' }
 }

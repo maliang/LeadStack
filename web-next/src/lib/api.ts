@@ -14,7 +14,7 @@ import { pushToast } from './toast'
  */
 
 const API_PREFIX = '/api/v1'
-const TOKEN_STORAGE_KEY = 'leadstack_token'
+const TOKEN_STORAGE_KEY = 'leadstack.token'
 
 export class ApiError extends Error {
   readonly status: number
@@ -339,6 +339,10 @@ export interface User {
   username: string
   role: string
   role_name: string | null
+  /** 用户资料（迁移 0016） */
+  display_name: string
+  phone: string
+  notes: string
   permissions: string[]
   scope: RoleScope
 }
@@ -1287,6 +1291,9 @@ export interface ManagedUser {
   username: string
   role: string
   role_name: string | null
+  display_name: string
+  phone: string
+  notes: string
   disabled: boolean
   locked: boolean
   locked_until: number | null
@@ -2229,6 +2236,9 @@ export function normalizeUser(input: unknown): User {
     username: toText(raw.username) ?? '',
     role: toText(raw.role) ?? 'viewer',
     role_name: toText(raw.role_name ?? raw.roleName),
+    display_name: toText(raw.display_name) ?? '',
+    phone: toText(raw.phone) ?? '',
+    notes: toText(raw.notes) ?? '',
     permissions: toStringArray(raw.permissions),
     scope: normalizeRoleScope(raw.scope),
   }
@@ -2278,6 +2288,9 @@ export function normalizeManagedUser(input: unknown): ManagedUser {
     username: toText(raw.username) ?? '',
     role: toText(raw.role) ?? 'viewer',
     role_name: toText(raw.role_name ?? raw.roleName),
+    display_name: toText(raw.display_name) ?? '',
+    phone: toText(raw.phone) ?? '',
+    notes: toText(raw.notes) ?? '',
     disabled: toBool(raw.disabled),
     locked: toBool(raw.locked),
     locked_until: toNumber(raw.locked_until),
@@ -3789,13 +3802,27 @@ export const api = {
     )
   },
 
-  createUser(payload: { username: string; password: string; role: string }): Promise<ManagedUser> {
+  createUser(payload: {
+    username: string
+    password: string
+    role: string
+    display_name?: string
+    phone?: string
+    notes?: string
+  }): Promise<ManagedUser> {
     return request<unknown>('/users', { method: 'POST', body: payload }).then(normalizeManagedUser)
   },
 
   updateUser(
     id: string,
-    payload: { role?: string; disabled?: boolean; password?: string },
+    payload: {
+      role?: string
+      disabled?: boolean
+      password?: string
+      display_name?: string
+      phone?: string
+      notes?: string
+    },
   ): Promise<ManagedUser> {
     return request<unknown>(`/users/${encodeURIComponent(id)}`, {
       method: 'PATCH',
@@ -3809,6 +3836,14 @@ export const api = {
 
   changeMyPassword(payload: { old_password: string; new_password: string }): Promise<unknown> {
     return request<unknown>('/users/me/password', { method: 'POST', body: payload })
+  },
+
+  updateMyProfile(payload: {
+    display_name?: string
+    phone?: string
+    notes?: string
+  }): Promise<User> {
+    return request<unknown>('/users/me', { method: 'PATCH', body: payload }).then(normalizeUser)
   },
 
   apiTokens(): Promise<ApiToken[]> {

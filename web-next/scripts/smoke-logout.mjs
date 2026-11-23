@@ -267,12 +267,12 @@ async function inspectLogoutButton(page) {
       iconCount: button.querySelectorAll('svg.ls-icon').length,
       isLastOfType: button === end.querySelector('button:last-of-type'),
     }))
-    const picked = end.querySelector('.ls-icon-btn:last-of-type')
+    const trigger = end.querySelector('#topbar-account')
     return {
       endHtml: end.innerHTML.slice(0, 400),
       buttons,
-      pickedAriaLabel: picked ? picked.getAttribute('aria-label') || '' : null,
-      pickedTag: picked ? picked.tagName : null,
+      triggerAriaLabel: trigger ? trigger.getAttribute('aria-label') || '' : null,
+      triggerExpanded: trigger ? trigger.getAttribute('aria-expanded') : null,
     }
   })
   return snapshot
@@ -334,19 +334,20 @@ async function run() {
     const buttonCount = snapshot ? snapshot.buttons.length : -1
     const labels = snapshot ? snapshot.buttons.map((item) => item.ariaLabel).join(' / ') : ''
     console.log(`  [dom] .ls-topbar__end buttons=${buttonCount} aria-labels=[${labels}]`)
-    console.log(`  [dom] picked tag=${snapshot ? snapshot.pickedTag : 'null'} aria-label=${snapshot ? snapshot.pickedAriaLabel : 'null'}`)
-    check('.ls-topbar__end 只有一个按钮（登出）', buttonCount === 1, `实际 ${buttonCount} 个：${labels}`)
+    check('.ls-topbar__end 只有一个账号菜单按钮', buttonCount === 1, `实际 ${buttonCount} 个：${labels}`)
     check(
-      '冒烟选择器命中的就是登出按钮（aria-label / last-of-type）',
-      Boolean(snapshot) &&
-        snapshot.pickedTag === 'BUTTON' &&
-        snapshot.buttons.length === 1 &&
-        snapshot.buttons[0].isLastOfType === true &&
-        /退出登录|sign ?out|log ?out/i.test(snapshot.pickedAriaLabel || ''),
-      snapshot ? `${snapshot.pickedTag} aria-label=${snapshot.pickedAriaLabel}` : '未找到 .ls-topbar__end',
+      '账号菜单按钮可展开',
+      Boolean(snapshot) && snapshot.triggerExpanded === 'false' && Boolean(snapshot.triggerAriaLabel),
+      snapshot ? `aria-expanded=${snapshot.triggerExpanded} label=${snapshot.triggerAriaLabel}` : '未找到账号菜单',
     )
 
-    await page.click('.ls-topbar__end .ls-icon-btn:last-of-type')
+    await page.click('#topbar-account')
+    await page.waitForSelector('.ls-topbar-account__menu', { timeout: 5000 })
+    check(
+      '下拉菜单包含用户信息 / 修改密码 / 退出登录',
+      (await page.locator('.ls-topbar-account__menu .ls-topbar-account__item').count()) === 3,
+    )
+    await page.click('.ls-topbar-account__menu .ls-topbar-account__item--danger')
     await page.waitForSelector('#login-username', { timeout: 15000 })
     check('内页登出后回到登录页', page.url().includes('#/login'), hashOf(page))
     check('内页登出后 token 已清除', (await tokenKeys(page)).length === 0, (await tokenKeys(page)).join(',') || '空')
@@ -364,10 +365,12 @@ async function run() {
     await page.waitForSelector('.ls-shell', { timeout: 15000 })
     await page.waitForSelector('.ls-user__name', { timeout: 15000 })
     check('停在 /forbidden 且外壳仍在（public 路由）', hashOf(page).startsWith('/forbidden'), hashOf(page))
-    check('public 路由上仍有登出按钮', (await page.locator('.ls-topbar__end .ls-icon-btn:last-of-type').count()) === 1)
+    check('public 路由上仍有账号菜单', (await page.locator('#topbar-account').count()) === 1)
     check('public 路由上 token 仍在（已登录态）', (await tokenKeys(page)).length > 0)
 
-    await page.click('.ls-topbar__end .ls-icon-btn:last-of-type')
+    await page.click('#topbar-account')
+    await page.waitForSelector('.ls-topbar-account__menu', { timeout: 5000 })
+    await page.click('.ls-topbar-account__menu .ls-topbar-account__item--danger')
     await page.waitForSelector('#login-username', { timeout: 15000 })
     check('public 路由登出后回到登录页', page.url().includes('#/login'), hashOf(page))
     check('public 路由登出后 token 已清除', (await tokenKeys(page)).length === 0)

@@ -338,7 +338,9 @@ async function run() {
     check('刷新后确实复验了会话', apiCalls.includes('GET /api/v1/auth/me'))
 
     // 5) 登出 → 清 token 并回到登录页；刷新后仍停在登录页（不靠内存态兜底）
-    await page.click('.ls-topbar__end .ls-icon-btn:last-of-type')
+    await page.click('#topbar-account')
+    await page.waitForSelector('.ls-topbar-account__menu', { timeout: 5000 })
+    await page.click('.ls-topbar-account__menu .ls-topbar-account__item--danger')
     await page.waitForSelector('#login-username', { timeout: 15000 })
     check('登出后回到登录页', page.url().includes('#/login'))
     check('登出后 token 已清除', (await tokenKeys(page)).length === 0)

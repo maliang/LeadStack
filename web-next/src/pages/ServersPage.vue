@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
 import ServerBatchBar from '@/components/servers/ServerBatchBar.vue'
@@ -532,7 +533,7 @@ async function handleFormSaved(saved: Server): Promise<void> {
           <label class="ls-field__label" for="servers-batch-group">
             {{ t('serversBatch.dialog.setGroup.label') }}
           </label>
-          <select
+          <AppSelect
             id="servers-batch-group"
             v-model="batchDraft.group"
             class="ls-input"
@@ -542,7 +543,7 @@ async function handleFormSaved(saved: Server): Promise<void> {
             <option :value="CUSTOM_GROUP_VALUE">
               {{ t('serversBatch.dialog.setGroup.custom') }}
             </option>
-          </select>
+          </AppSelect>
           <template v-if="useCustomGroup">
             <label class="ls-field__label" for="servers-batch-group-custom">
               {{ t('serversBatch.dialog.setGroup.newLabel') }}

@@ -9,7 +9,11 @@ type User struct {
 	Username     string `json:"username"`
 	PasswordHash string `json:"-"`
 	Role         string `json:"role"`
-	CreatedAt    int64  `json:"created_at"`
+	// DisplayName / Phone / Notes 是用户资料（迁移 0016），空串表示未填写。
+	DisplayName string `json:"display_name"`
+	Phone       string `json:"phone"`
+	Notes       string `json:"notes"`
+	CreatedAt   int64  `json:"created_at"`
 }
 
 // Server 是被纳管的服务器。

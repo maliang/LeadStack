@@ -154,6 +154,9 @@ type UserRecord struct {
 	Username     string
 	PasswordHash string
 	Role         string
+	DisplayName  string
+	Phone        string
+	Notes        string
 	Disabled     bool
 	CreatedAt    int64
 	UpdatedAt    *int64
@@ -166,7 +169,7 @@ type UserRecord struct {
 // ListUsers 返回全部用户（按创建时间升序）。
 func (s *Store) ListUsers(ctx context.Context) ([]UserRecord, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, role, disabled, created_at, updated_at, failed_attempts, locked_until, last_failed_at
+		`SELECT id, username, password_hash, role, display_name, phone, notes, disabled, created_at, updated_at, failed_attempts, locked_until, last_failed_at
 		   FROM users ORDER BY created_at ASC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询用户列表: %w", err)
@@ -180,7 +183,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]UserRecord, error) {
 			disabled int
 			updated  sql.NullInt64
 		)
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &disabled, &u.CreatedAt, &updated, &u.FailedAttempts, &u.LockedUntil, &u.LastFailedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.DisplayName, &u.Phone, &u.Notes, &disabled, &u.CreatedAt, &updated, &u.FailedAttempts, &u.LockedUntil, &u.LastFailedAt); err != nil {
 			return nil, fmt.Errorf("扫描用户: %w", err)
 		}
 		u.Disabled = disabled != 0
@@ -201,8 +204,8 @@ func (s *Store) GetUserRecord(ctx context.Context, id string) (*UserRecord, erro
 		updated  sql.NullInt64
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, role, disabled, created_at, updated_at, failed_attempts, locked_until, last_failed_at FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &disabled, &u.CreatedAt, &updated, &u.FailedAttempts, &u.LockedUntil, &u.LastFailedAt)
+		`SELECT id, username, password_hash, role, display_name, phone, notes, disabled, created_at, updated_at, failed_attempts, locked_until, last_failed_at FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.DisplayName, &u.Phone, &u.Notes, &disabled, &u.CreatedAt, &updated, &u.FailedAttempts, &u.LockedUntil, &u.LastFailedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询用户: %w", ErrNotFound)
@@ -222,8 +225,8 @@ func (s *Store) GetUserRecordByUsername(ctx context.Context, username string) (*
 		updated  sql.NullInt64
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, role, disabled, created_at, updated_at, failed_attempts, locked_until, last_failed_at FROM users WHERE username = ?`, username).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &disabled, &u.CreatedAt, &updated, &u.FailedAttempts, &u.LockedUntil, &u.LastFailedAt)
+		`SELECT id, username, password_hash, role, display_name, phone, notes, disabled, created_at, updated_at, failed_attempts, locked_until, last_failed_at FROM users WHERE username = ?`, username).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.DisplayName, &u.Phone, &u.Notes, &disabled, &u.CreatedAt, &updated, &u.FailedAttempts, &u.LockedUntil, &u.LastFailedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询用户: %w", ErrNotFound)
@@ -240,6 +243,9 @@ type UserUpdate struct {
 	Role         *string
 	Disabled     *bool
 	PasswordHash *string
+	DisplayName  *string
+	Phone        *string
+	Notes        *string
 }
 
 // UpdateUser 更新用户角色/禁用状态/密码。
@@ -258,6 +264,18 @@ func (s *Store) UpdateUser(ctx context.Context, id string, upd UserUpdate, nowMS
 		if upd.PasswordHash != nil {
 			sets = append(sets, "password_hash = ?")
 			args = append(args, *upd.PasswordHash)
+		}
+		if upd.DisplayName != nil {
+			sets = append(sets, "display_name = ?")
+			args = append(args, *upd.DisplayName)
+		}
+		if upd.Phone != nil {
+			sets = append(sets, "phone = ?")
+			args = append(args, *upd.Phone)
+		}
+		if upd.Notes != nil {
+			sets = append(sets, "notes = ?")
+			args = append(args, *upd.Notes)
 		}
 		if len(sets) == 0 {
 			return nil

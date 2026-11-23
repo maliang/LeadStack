@@ -7475,6 +7475,7 @@ body.ls-scroll-locked {
   overflow: auto;
 }
 
+.ls-templates__samples,
 .ls-templates__placeholders {
   display: flex;
   flex-direction: column;
@@ -8079,14 +8080,14 @@ body.ls-scroll-locked {
 
 /* ---------- 服务器访问账号 ---------- */
 
-.ls-accounts {
+.ls-topbar-accounts {
   display: flex;
   flex-direction: column;
   gap: var(--ls-space-3);
   min-width: 0;
 }
 
-.ls-accounts__loading {
+.ls-topbar-accounts__loading {
   display: flex;
   align-items: center;
   gap: var(--ls-space-2);
@@ -8094,7 +8095,7 @@ body.ls-scroll-locked {
   font: 400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
 }
 
-.ls-accounts__list {
+.ls-topbar-accounts__list {
   display: flex;
   flex-direction: column;
   gap: var(--ls-space-3);
@@ -8103,7 +8104,7 @@ body.ls-scroll-locked {
   list-style: none;
 }
 
-.ls-account {
+.ls-topbar-account {
   display: flex;
   flex-direction: column;
   gap: var(--ls-space-2);
@@ -8114,7 +8115,7 @@ body.ls-scroll-locked {
   background: var(--ls-surface-muted);
 }
 
-.ls-account__head {
+.ls-topbar-account__head {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -8123,7 +8124,7 @@ body.ls-scroll-locked {
   min-width: 0;
 }
 
-.ls-account__heading {
+.ls-topbar-account__heading {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -8131,30 +8132,30 @@ body.ls-scroll-locked {
   min-width: 0;
 }
 
-.ls-account__name {
+.ls-topbar-account__name {
   margin: 0;
   color: var(--ls-text);
   font: 600 var(--ls-text-md) / 1.4 var(--ls-font-sans);
   overflow-wrap: anywhere;
 }
 
-.ls-account__chips {
+.ls-topbar-account__chips {
   display: flex;
   flex-wrap: wrap;
   gap: var(--ls-space-1);
 }
 
-.ls-account__actions {
+.ls-topbar-account__actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--ls-space-1);
 }
 
-.ls-account__kv {
+.ls-topbar-account__kv {
   margin: 0;
 }
 
-.ls-account__fields {
+.ls-topbar-account__fields {
   display: flex;
   flex-direction: column;
   gap: var(--ls-space-1);
@@ -8165,7 +8166,7 @@ body.ls-scroll-locked {
   list-style: none;
 }
 
-.ls-account__field {
+.ls-topbar-account__field {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -8173,19 +8174,19 @@ body.ls-scroll-locked {
   min-width: 0;
 }
 
-.ls-account__field-key {
+.ls-topbar-account__field-key {
   color: var(--ls-text-subtle);
   font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
 }
 
-.ls-account__field-value {
+.ls-topbar-account__field-value {
   min-width: 0;
   color: var(--ls-text);
   font: 400 var(--ls-text-xs) / 1.5 var(--ls-font-mono);
   overflow-wrap: anywhere;
 }
 
-.ls-account__result {
+.ls-topbar-account__result {
   display: flex;
   flex-direction: column;
   gap: var(--ls-space-2);
@@ -8195,20 +8196,20 @@ body.ls-scroll-locked {
   background: var(--ls-surface);
 }
 
-.ls-account__result .ls-card__head {
+.ls-topbar-account__result .ls-card__head {
   margin: 0;
 }
 
 /* ---------- 访问账号表单 ---------- */
 
-.ls-account-form {
+.ls-topbar-account-form {
   display: flex;
   flex-direction: column;
   gap: var(--ls-space-3);
   min-width: 0;
 }
 
-.ls-account-form__fields {
+.ls-topbar-account-form__fields {
   display: flex;
   flex-direction: column;
   gap: var(--ls-space-2);
@@ -8217,7 +8218,7 @@ body.ls-scroll-locked {
   list-style: none;
 }
 
-.ls-account-form__field {
+.ls-topbar-account-form__field {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
   gap: var(--ls-space-2);
@@ -8448,4 +8449,124 @@ body.ls-scroll-locked {
   display: flex;
   flex-wrap: wrap;
   gap: var(--ls-space-1);
+}
+
+
+/* ---------- 顶栏账号下拉 ---------- */
+
+.ls-topbar-account {
+  position: relative;
+  min-width: 0;
+}
+
+.ls-topbar-account__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--ls-space-2);
+  max-width: 14rem;
+  min-height: var(--ls-hit-size);
+  padding: var(--ls-space-1) var(--ls-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--ls-radius-md);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ls-topbar-account__trigger:hover,
+.ls-topbar-account__trigger[aria-expanded='true'] {
+  border-color: var(--ls-border);
+  background: var(--ls-surface-muted);
+}
+
+.ls-topbar-account__trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--ls-focus-ring);
+}
+
+.ls-topbar-account__caret {
+  flex: none;
+  transform: rotate(90deg);
+  color: var(--ls-text-subtle);
+  transition: transform var(--ls-duration) ease;
+}
+
+.ls-topbar-account__trigger[aria-expanded='true'] .ls-topbar-account__caret {
+  transform: rotate(-90deg);
+}
+
+.ls-topbar-account__menu {
+  position: absolute;
+  top: calc(100% + var(--ls-space-1));
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 12rem;
+  padding: var(--ls-space-1);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-surface);
+  box-shadow: var(--ls-shadow-lg);
+}
+
+.ls-topbar-account__item {
+  display: flex;
+  align-items: center;
+  gap: var(--ls-space-2);
+  width: 100%;
+  min-height: var(--ls-hit-size);
+  padding: 0 var(--ls-space-2);
+  border: 0;
+  border-radius: var(--ls-radius-sm);
+  background: transparent;
+  color: var(--ls-text);
+  font: 400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ls-topbar-account__item:hover,
+.ls-topbar-account__item:focus-visible {
+  background: var(--ls-surface-muted);
+}
+
+.ls-topbar-account__item:focus-visible {
+  outline: none;
+}
+
+.ls-topbar-account__item--danger {
+  color: var(--ls-danger);
+}
+
+.ls-topbar-account__item--danger:hover {
+  background: var(--ls-danger-soft);
+}
+
+.ls-topbar-account__sep {
+  height: 1px;
+  margin: var(--ls-space-1) 0;
+  background: var(--ls-border);
+}
+
+
+/* ---------- 统一下拉组件（AppSelect） ---------- */
+
+.ls-select {
+  display: contents;
+}
+
+.ls-select__native {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
 }

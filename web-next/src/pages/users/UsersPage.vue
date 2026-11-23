@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
 import { useAuth } from '@/composables/useAuth'
@@ -138,11 +139,18 @@ async function unlockUser(target: ManagedUser): Promise<void> {
 const createOpen = ref(false)
 const createBusy = ref(false)
 const createError = ref<string | null>(null)
-const createForm = ref({ username: '', password: '', role: '' })
+const createForm = ref({ username: '', password: '', role: '', display_name: '', phone: '', notes: '' })
 
 function openCreate(): void {
   const fallback = roleOptions.value.find((role) => role.key === 'viewer') ?? roleOptions.value[0]
-  createForm.value = { username: '', password: '', role: fallback?.key ?? 'viewer' }
+  createForm.value = {
+    username: '',
+    password: '',
+    role: fallback?.key ?? 'viewer',
+    display_name: '',
+    phone: '',
+    notes: '',
+  }
   createError.value = null
   createOpen.value = true
 }
@@ -150,7 +158,14 @@ function openCreate(): void {
 function closeCreate(): void {
   if (createBusy.value) return
   createOpen.value = false
-  createForm.value = { username: '', password: '', role: '' }
+  createForm.value = {
+    username: '',
+    password: '',
+    role: '',
+    display_name: '',
+    phone: '',
+    notes: '',
+  }
   createError.value = null
 }
 
@@ -171,15 +186,76 @@ async function submitCreate(): Promise<void> {
       username,
       password: createForm.value.password,
       role: createForm.value.role,
+      display_name: createForm.value.display_name.trim(),
+      phone: createForm.value.phone.trim(),
+      notes: createForm.value.notes.trim(),
     })
     actionNotice.value = t('users.created', { name: created.username })
     createOpen.value = false
-    createForm.value = { username: '', password: '', role: '' }
+    createForm.value = {
+      username: '',
+      password: '',
+      role: '',
+      display_name: '',
+      phone: '',
+      notes: '',
+    }
     await load(true)
   } catch (caught) {
     createError.value = errorMessage(caught, t('users.actionFailed'))
   } finally {
     createBusy.value = false
+  }
+}
+
+/* ---------- 查看 / 编辑用户 ---------- */
+
+const viewTarget = ref<ManagedUser | null>(null)
+const editTarget = ref<ManagedUser | null>(null)
+const editBusy = ref(false)
+const editError = ref<string | null>(null)
+const editForm = ref({ display_name: '', phone: '', notes: '', role: '' })
+
+function openView(target: ManagedUser): void {
+  viewTarget.value = target
+}
+
+function openEdit(target: ManagedUser): void {
+  editTarget.value = target
+  editForm.value = {
+    display_name: target.display_name ?? '',
+    phone: target.phone ?? '',
+    notes: target.notes ?? '',
+    role: target.role,
+  }
+  editError.value = null
+}
+
+function closeEdit(): void {
+  if (editBusy.value) return
+  editTarget.value = null
+  editError.value = null
+}
+
+async function submitEdit(): Promise<void> {
+  const target = editTarget.value
+  if (!target || editBusy.value) return
+  editBusy.value = true
+  editError.value = null
+  try {
+    const updated = await api.updateUser(target.id, {
+      display_name: editForm.value.display_name.trim(),
+      phone: editForm.value.phone.trim(),
+      notes: editForm.value.notes.trim(),
+      role: editForm.value.role,
+    })
+    actionNotice.value = t('users.profileUpdated', { name: updated.username })
+    editTarget.value = null
+    await load(true)
+  } catch (caught) {
+    editError.value = errorMessage(caught, t('users.actionFailed'))
+  } finally {
+    editBusy.value = false
   }
 }
 
@@ -234,7 +310,7 @@ const deleteBusy = ref(false)
 const deleteError = ref<string | null>(null)
 
 function openDelete(target: ManagedUser): void {
-  if (isSelf(target)) return
+  if (isSelf(target) || target.username === 'admin') return
   deleteTarget.value = target
   deleteError.value = null
 }
@@ -401,6 +477,8 @@ onMounted(() => {
                     <span class="ls-userspage__username">{{ target.username }}</span>
                     <span v-if="isSelf(target)" class="ls-chip ls-chip--muted">{{ t('users.you') }}</span>
                   </div>
+                  <div v-if="target.display_name" class="ls-adminpage__meta">{{ target.display_name }}</div>
+                  <div v-if="target.phone" class="ls-adminpage__meta">{{ target.phone }}</div>
                   <div class="ls-adminpage__meta">{{ target.id }}</div>
                 </td>
                 <td :data-label="t('users.role')">{{ roleLabel(target) }}</td>
@@ -421,6 +499,20 @@ onMounted(() => {
                 <td :data-label="t('common.actions')" class="ls-adminpage__cell-actions">
                   <span v-if="isSelf(target)" class="ls-adminpage__hint">{{ t('users.selfHint') }}</span>
                   <template v-else>
+                    <button
+                      class="ls-btn ls-btn--small"
+                      type="button"
+                      @click="openView(target)"
+                    >
+                      {{ t('users.view') }}
+                    </button>
+                    <button
+                      class="ls-btn ls-btn--small"
+                      type="button"
+                      @click="openEdit(target)"
+                    >
+                      {{ t('common.edit') }}
+                    </button>
                     <button
                       v-if="target.locked"
                       class="ls-btn ls-btn--small ls-userspage__unlock"
@@ -447,6 +539,7 @@ onMounted(() => {
                       {{ target.disabled ? t('users.enable') : t('users.disable') }}
                     </button>
                     <button
+                      v-if="target.username !== 'admin'"
                       class="ls-btn ls-btn--small ls-userspage__delete"
                       type="button"
                       :disabled="busyId !== null"
@@ -454,6 +547,7 @@ onMounted(() => {
                     >
                       {{ t('common.delete') }}
                     </button>
+                    <span v-else class="ls-adminpage__hint">{{ t('users.superAdminProtected') }}</span>
                   </template>
                 </td>
               </tr>
@@ -508,6 +602,16 @@ onMounted(() => {
             :disabled="createBusy"
           />
         </label>
+        <div class="ls-form__row">
+          <label class="ls-field">
+            <span class="ls-field__label">{{ t('user.displayName') }}</span>
+            <input id="users-create-display-name" v-model="createForm.display_name" class="ls-input" type="text" autocomplete="name" :disabled="createBusy" />
+          </label>
+          <label class="ls-field">
+            <span class="ls-field__label">{{ t('user.phone') }}</span>
+            <input id="users-create-phone" v-model="createForm.phone" class="ls-input" type="tel" autocomplete="tel" :disabled="createBusy" />
+          </label>
+        </div>
         <label class="ls-field">
           <span class="ls-field__label">{{ t('users.password') }}</span>
           <input
@@ -521,11 +625,15 @@ onMounted(() => {
         </label>
         <label class="ls-field">
           <span class="ls-field__label">{{ t('users.role') }}</span>
-          <select id="users-create-role" v-model="createForm.role" class="ls-input" :disabled="createBusy">
+          <AppSelect id="users-create-role" v-model="createForm.role" class="ls-input" :disabled="createBusy">
             <option v-for="role in roleOptions" :key="role.key" :value="role.key">
               {{ role.name }}
             </option>
-          </select>
+          </AppSelect>
+        </label>
+        <label class="ls-field">
+          <span class="ls-field__label">{{ t('user.notes') }}</span>
+          <textarea id="users-create-notes" v-model="createForm.notes" class="ls-input ls-textarea" rows="2" :disabled="createBusy" />
         </label>
         <p v-if="createError" id="users-create-error" class="ls-adminpage__form-error" role="alert">
           {{ createError }}
@@ -543,6 +651,64 @@ onMounted(() => {
           :disabled="createBusy"
         >
           {{ t('common.create') }}
+        </button>
+      </template>
+    </AppModal>
+
+    <AppModal
+      v-if="viewTarget"
+      :title="t('users.viewTitle')"
+      :description="viewTarget.username"
+      size="sm"
+      @close="viewTarget = null"
+    >
+      <dl class="ls-kv">
+        <div class="ls-kv__row"><dt>{{ t('users.username') }}</dt><dd>{{ viewTarget.username }}</dd></div>
+        <div class="ls-kv__row"><dt>{{ t('user.displayName') }}</dt><dd>{{ viewTarget.display_name || t('common.na') }}</dd></div>
+        <div class="ls-kv__row"><dt>{{ t('user.phone') }}</dt><dd>{{ viewTarget.phone || t('common.na') }}</dd></div>
+        <div class="ls-kv__row"><dt>{{ t('users.role') }}</dt><dd>{{ roleLabel(viewTarget) }}</dd></div>
+        <div class="ls-kv__row"><dt>{{ t('user.notes') }}</dt><dd>{{ viewTarget.notes || t('common.na') }}</dd></div>
+        <div class="ls-kv__row"><dt>{{ t('common.status') }}</dt><dd>{{ t(userStatusLabelKey(userStatus(viewTarget))) }}</dd></div>
+      </dl>
+      <template #footer>
+        <button class="ls-btn" type="button" @click="viewTarget = null">{{ t('common.close') }}</button>
+      </template>
+    </AppModal>
+
+    <AppModal
+      v-if="editTarget"
+      :title="t('users.editTitle')"
+      :description="t('users.editHint', { name: editTarget.username })"
+      size="md"
+      @close="closeEdit"
+    >
+      <form id="users-edit-form" class="ls-adminpage__form" @submit.prevent="submitEdit">
+        <div class="ls-form__row">
+          <label class="ls-field">
+            <span class="ls-field__label">{{ t('user.displayName') }}</span>
+            <input id="users-edit-display-name" v-model="editForm.display_name" class="ls-input" type="text" autocomplete="name" :disabled="editBusy" />
+          </label>
+          <label class="ls-field">
+            <span class="ls-field__label">{{ t('user.phone') }}</span>
+            <input id="users-edit-phone" v-model="editForm.phone" class="ls-input" type="tel" autocomplete="tel" :disabled="editBusy" />
+          </label>
+        </div>
+        <label class="ls-field">
+          <span class="ls-field__label">{{ t('users.role') }}</span>
+          <AppSelect id="users-edit-role" v-model="editForm.role" class="ls-input" :disabled="editBusy">
+            <option v-for="role in roleOptions" :key="role.key" :value="role.key">{{ role.name }}</option>
+          </AppSelect>
+        </label>
+        <label class="ls-field">
+          <span class="ls-field__label">{{ t('user.notes') }}</span>
+          <textarea id="users-edit-notes" v-model="editForm.notes" class="ls-input ls-textarea" rows="3" :disabled="editBusy" />
+        </label>
+        <p v-if="editError" class="ls-adminpage__form-error" role="alert">{{ editError }}</p>
+      </form>
+      <template #footer>
+        <button class="ls-btn" type="button" :disabled="editBusy" @click="closeEdit">{{ t('common.cancel') }}</button>
+        <button class="ls-btn ls-btn--primary" type="submit" form="users-edit-form" :disabled="editBusy" :aria-busy="editBusy">
+          {{ editBusy ? t('common.loading') : t('common.save') }}
         </button>
       </template>
     </AppModal>

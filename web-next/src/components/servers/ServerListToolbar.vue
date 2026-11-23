@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from '@/i18n'
+import AppSelect from '@/components/AppSelect.vue'
 import type { ServerStatus } from '@/lib/api'
 import {
   hasActiveServerFilters,
@@ -50,7 +51,7 @@ function selectStatus(event: Event): void {
 <template>
   <div class="ls-servers-toolbar">
     <div class="ls-servers-toolbar__filters">
-      <select
+      <AppSelect
         id="servers-filter-group"
         class="ls-input ls-servers-toolbar__select"
         :aria-label="t('s.0517')"
@@ -59,9 +60,9 @@ function selectStatus(event: Event): void {
       >
         <option value="">{{ t('s.0376') }}</option>
         <option v-for="group in groups" :key="group" :value="group">{{ group }}</option>
-      </select>
+      </AppSelect>
 
-      <select
+      <AppSelect
         id="servers-filter-status"
         class="ls-input ls-servers-toolbar__select"
         :aria-label="t('s.0519')"
@@ -71,9 +72,9 @@ function selectStatus(event: Event): void {
         <option v-for="option in statusOptions" :key="option.value" :value="option.value">
           {{ t(option.labelKey) }}
         </option>
-      </select>
+      </AppSelect>
 
-      <select
+      <AppSelect
         id="servers-filter-tag"
         class="ls-input ls-servers-toolbar__select"
         :aria-label="t('s.0518')"
@@ -82,7 +83,7 @@ function selectStatus(event: Event): void {
       >
         <option value="">{{ t('s.0378') }}</option>
         <option v-for="tag in tags" :key="tag" :value="tag">{{ tag }}</option>
-      </select>
+      </AppSelect>
 
       <input
         id="servers-search-input"

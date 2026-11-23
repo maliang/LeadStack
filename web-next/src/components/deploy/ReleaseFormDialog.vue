@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import AppSelect from '@/components/AppSelect.vue'
 import { api, type AppItem, type DeployTemplate, type ReleasePreview, type Server } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import {
@@ -114,10 +115,10 @@ function submit(): void {
     <form class="ls-form" novalidate @submit.prevent="submit">
       <label class="ls-field" for="release-form-app">
         <span class="ls-field__label">{{ t('apps.releaseForm.app') }}</span>
-        <select id="release-form-app" v-model="form.appId" class="ls-input">
+        <AppSelect id="release-form-app" v-model="form.appId" class="ls-input">
           <option value="">{{ t('apps.releaseForm.appPlaceholder') }}</option>
           <option v-for="app in apps" :key="app.id" :value="app.id">{{ app.name }}</option>
-        </select>
+        </AppSelect>
         <span v-if="errors.appId" class="ls-field__error" role="alert">{{ t(errors.appId) }}</span>
       </label>
       <div class="ls-form__row">
@@ -128,12 +129,12 @@ function submit(): void {
         </label>
         <label class="ls-field" for="release-form-template">
           <span class="ls-field__label">{{ t('apps.releaseForm.template') }}</span>
-          <select id="release-form-template" v-model="form.templateId" class="ls-input">
+          <AppSelect id="release-form-template" v-model="form.templateId" class="ls-input">
             <option value="">{{ t('apps.releaseForm.templatePlaceholder') }}</option>
             <option v-for="template in templates" :key="template.id" :value="template.id">
               {{ template.name }}（{{ template.kind }}）
             </option>
-          </select>
+          </AppSelect>
           <span v-if="errors.templateId" class="ls-field__error" role="alert">{{ t(errors.templateId) }}</span>
         </label>
       </div>

@@ -47,6 +47,7 @@ func (a *API) Router() http.Handler {
 			r.Get("/auth/me", a.handleMe)
 			r.Post("/auth/logout", a.handleLogout)
 			r.Post("/users/me/password", a.handleChangeOwnPassword)
+			r.Patch("/users/me", a.handlePatchOwnProfile)
 			r.Get("/system/info", a.handleSystemInfo)
 			r.Get("/system/onboarding", a.handleOnboarding)
 
