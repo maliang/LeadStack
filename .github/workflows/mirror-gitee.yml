@@ -33,7 +33,7 @@ jobs:
   mirror:
     name: 同步到 Gitee
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: 检查 GITEE_TOKEN
         id: token
@@ -135,6 +135,7 @@ jobs:
           api="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${RELEASE_ID}"
           curl -fsS -H "Authorization: token ${GITEE_TOKEN}" "${api}" > /tmp/gitee-current.json
           jq -r '.assets[].name' /tmp/gitee-current.json > /tmp/gitee-existing.txt
+          missing=()
           for f in dist/*; do
             name="$(basename "${f}")"
             case "${name}" in
@@ -145,18 +146,32 @@ jobs:
               echo "跳过已存在：${name}"
               continue
             fi
-            echo "上传：${name}（$(du -h "${f}" | awk '{print $1}')）"
-            code=$(curl -sS --connect-timeout 20 --max-time 600 --retry 2 --retry-delay 2 \
-              -o /tmp/gitee-attach.json -w '%{http_code}' \
-              -X POST "${api}/attach_files" \
-              -H "Authorization: token ${GITEE_TOKEN}" \
-              -F "file=@${f}")
-            if [ "${code}" != "201" ] && [ "${code}" != "200" ]; then
-              echo "::error::上传 ${name} 失败（HTTP ${code}）：$(cat /tmp/gitee-attach.json)"
-              exit 1
-            fi
-            echo "已上传：${name}"
+            missing+=("${f}")
           done
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "所有资产已存在，无需上传"
+            exit 0
+          fi
+          # Gitee 单文件上传较慢（实测约 1-3 分钟）：3 路并发，失败由 xargs 汇总。
+          cat > /tmp/gitee-upload-one.sh <<'UPLOAD'
+          set -euo pipefail
+          f="$1"
+          name="$(basename "${f}")"
+          echo "上传：${name}（$(du -h "${f}" | awk '{print $1}')）"
+          code=$(curl -sS --connect-timeout 20 --max-time 900 --retry 2 --retry-delay 2 \
+            -o "/tmp/gitee-attach-$$.json" -w '%{http_code}' \
+            -X POST "${API}/attach_files" \
+            -H "Authorization: token ${GITEE_TOKEN}" \
+            -F "file=@${f}")
+          if [ "${code}" != "201" ] && [ "${code}" != "200" ]; then
+            echo "::error::上传 ${name} 失败（HTTP ${code}）：$(cat "/tmp/gitee-attach-$$.json")"
+            exit 1
+          fi
+          echo "已上传：${name}"
+          UPLOAD
+          chmod +x /tmp/gitee-upload-one.sh
+          export API="${api}"
+          printf '%s\n' "${missing[@]}" | xargs -P 3 -n 1 /tmp/gitee-upload-one.sh
 
       - name: 校验 Gitee 发行版资产
         if: steps.token.outputs.enabled == 'true'
