@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import AppSelect from '@/components/AppSelect.vue'
 import { RouterLink } from 'vue-router'
 import { useTheme } from '@vean/ui'
@@ -9,8 +9,15 @@ import { useAuth } from '@/composables/useAuth'
 import { useCan } from '@/composables/useCan'
 import { SUPPORTED_LANGUAGES, switchLanguage, useI18n } from '@/i18n'
 import { api, type NetworkConfig, type NetworkUpdatePayload, type SystemInfo } from '@/lib/api'
-import { appearanceDensity, setDensity, type AppearanceDensity } from '@/lib/appearance'
+import {
+  appearanceBrand,
+  appearanceDensity,
+  setBrandColor,
+  setDensity,
+  type AppearanceDensity,
+} from '@/lib/appearance'
 import { errorMessage } from '@/lib/errors'
+import { BRAND_PRESETS, normalizeBrandColor } from '@/theme/palette'
 import { parsePort, validateListenAddress, validatePublicUrl } from '@/lib/network'
 import UpgradeCard from '@/components/system/UpgradeCard.vue'
 
@@ -62,6 +69,41 @@ const themeModeModel = computed({
     if (value === 'auto' || value === 'light' || value === 'dark') themeMode.value = value
   },
 })
+
+/* ---------- 品牌色（预设 + 自定义） ---------- */
+
+const brandDraft = ref(appearanceBrand.value)
+const brandError = ref<string | null>(null)
+const brandPresets = computed(() => {
+  void language.value
+  return BRAND_PRESETS.map((preset) => ({
+    ...preset,
+    label: t(preset.labelKey),
+    selected: preset.color === appearanceBrand.value,
+  }))
+})
+
+watch(appearanceBrand, (value) => {
+  brandDraft.value = value
+})
+
+function pickBrand(color: string): void {
+  if (!setBrandColor(color)) {
+    brandError.value = t('appearance.brandInvalid')
+    return
+  }
+  brandError.value = null
+}
+
+function applyCustomBrand(): void {
+  const normalized = normalizeBrandColor(brandDraft.value)
+  if (!normalized) {
+    brandError.value = t('appearance.brandInvalid')
+    return
+  }
+  brandDraft.value = normalized
+  pickBrand(normalized)
+}
 
 const canManage = computed(() => can('system.manage'))
 const canNetwork = computed(() => canManage.value && scope.value.mode === 'all')
@@ -400,6 +442,51 @@ onMounted(() => {
               </AppSelect>
             </div>
           </div>
+
+          <div class="ls-appearance__row">
+            <div class="ls-appearance__copy">
+              <span class="ls-appearance__label">{{ t('appearance.brand') }}</span>
+              <span class="ls-appearance__hint">{{ t('appearance.brandHint') }}</span>
+            </div>
+            <div class="ls-appearance__control ls-appearance__control--brand">
+              <div class="ls-brand-swatches" role="group" :aria-label="t('appearance.brand')">
+                <button
+                  v-for="preset in brandPresets"
+                  :key="preset.color"
+                  class="ls-brand-swatch"
+                  :class="{ 'ls-brand-swatch--active': preset.selected }"
+                  type="button"
+                  :style="{ '--swatch': preset.color }"
+                  :aria-label="preset.label"
+                  :aria-pressed="preset.selected"
+                  :title="preset.label"
+                  @click="pickBrand(preset.color)"
+                />
+              </div>
+              <label class="ls-brand-custom">
+                <span>{{ t('appearance.brandCustom') }}</span>
+                <input
+                  id="settings-appearance-brand"
+                  type="color"
+                  :value="appearanceBrand"
+                  :aria-label="t('appearance.brandCustom')"
+                  @input="pickBrand(($event.target as HTMLInputElement).value)"
+                />
+                <input
+                  id="settings-appearance-brand-hex"
+                  v-model="brandDraft"
+                  class="ls-input ls-brand-custom__hex"
+                  type="text"
+                  maxlength="7"
+                  spellcheck="false"
+                  placeholder="#15803d"
+                  :aria-label="t('appearance.brandHex')"
+                  @change="applyCustomBrand"
+                />
+              </label>
+            </div>
+          </div>
+          <p v-if="brandError" class="ls-adminpage__form-error" role="alert">{{ brandError }}</p>
         </div>
         <p
           v-if="languageError"

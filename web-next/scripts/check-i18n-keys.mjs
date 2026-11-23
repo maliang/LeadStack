@@ -16,7 +16,7 @@
  *
  * 用法：
  *   node scripts/check-i18n-keys.mjs
- *   node scripts/check-i18n-keys.mjs --expect 3309
+ *   node scripts/check-i18n-keys.mjs --expect 3335
  */
 import { existsSync, readdirSync } from 'node:fs'
 import { registerHooks } from 'node:module'

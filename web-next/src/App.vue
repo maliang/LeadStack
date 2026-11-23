@@ -6,35 +6,36 @@ import type { ConfigProviderThemeOptions } from '@vean/ui'
 
 import AppShell from '@/components/AppShell.vue'
 import AppToaster from '@/components/AppToaster.vue'
-import { BRAND_PRESET } from '@/theme/brand'
+import { applyBrandVars } from '@/theme/palette'
 import { setLanguage, useI18n } from '@/i18n'
 import { applyDocumentTitle } from '@/router'
 import {
   appearanceDensity,
   DEFAULT_APPEARANCE,
+  appearanceBrandPreset,
+  appearanceBrandScale,
   isAppearanceDensity,
   readStoredMode,
   setDensity,
 } from '@/lib/appearance'
 
 /**
- * 品牌主题（唯一来源：@/theme/brand）。
- * `primary` 只接受 Vean 的 26 个内置调色板名，品牌色靠 `preset` 精确到语义 token；
- * 主色 #16a34a（green.600），hover 等价阶 #22c55e（green.500），深色降亮一阶 #15803d。
- * 不要把 hex 写回这个文件——色阶与对比度说明都在 theme/brand.ts。
+ * 品牌主题：默认绿色来自 @/theme/brand，用户可选预设或自定义色。
+ * 色阶生成、对比度兜底与深色映射都在 @/theme/palette；
+ * 这里只把当前色阶转成 Vean 的 preset，并交给 BrandThemeBridge 写根 CSS 变量。
  */
 const route = useRoute()
 /** 登录页等不打外壳（无侧栏 / 顶栏），其余页面统一进 AppShell。 */
 const blankLayout = computed(() => route.meta.layout === 'blank')
 
-const theme: ConfigProviderThemeOptions = {
+const theme = computed<ConfigProviderThemeOptions>(() => ({
   base: 'gray',
   primary: 'green',
-  preset: BRAND_PRESET,
+  preset: appearanceBrandPreset.value,
   feedback: 'classic',
   radius: '0.625rem',
   size: 'md',
-}
+}))
 
 /**
  * 默认主题为「跟随系统」。
@@ -48,6 +49,20 @@ const AppearanceDefaultMode = defineComponent({
   setup() {
     const { mode } = useTheme()
     if (readStoredMode() === null) mode.value = DEFAULT_APPEARANCE.mode
+    return () => null
+  },
+})
+
+/** 主题色桥：provider 解析出 effectiveMode 后，把品牌色阶写到根 CSS 变量。 */
+const BrandThemeBridge = defineComponent({
+  name: 'BrandThemeBridge',
+  setup() {
+    const { effectiveMode } = useTheme()
+    watch(
+      [effectiveMode, appearanceBrandScale],
+      ([mode, scale]) => applyBrandVars(scale, mode === 'dark' ? 'dark' : 'light'),
+      { immediate: true },
+    )
     return () => null
   },
 })
@@ -90,6 +105,7 @@ function onExtraThemeChange(extra: Record<string, unknown>): void {
     persist-theme
   >
     <AppearanceDefaultMode />
+    <BrandThemeBridge />
     <RouterView v-slot="{ Component }">
       <component :is="Component" v-if="blankLayout" />
       <AppShell v-else>

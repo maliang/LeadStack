@@ -44,28 +44,59 @@ export const UPGRADE_STEPS = [
   { phase: 'exec', labelKey: 'upgrade.phase.exec' },
 ] as const
 
-/** 各阶段对应的进度百分比（阶段结束时到达该值）。 */
-const PHASE_PROGRESS: Record<string, number> = {
-  validating: 4,
-  backup: 18,
-  download: 38,
-  verify_checksum: 52,
-  extract: 64,
-  prepare: 76,
-  swap: 88,
-  spawn_watchdog: 94,
-  exec: 98,
-  restarting: 99,
+/**
+ * 各阶段的进度窗口与「预计耗时」。
+ *
+ * 后端只在阶段切换时更新 phase，若直接映射成固定百分比，进度条会在阶段内
+ * 一动不动（原子替换/等新进程接管时尤其明显）。这里用 phase_elapsed_s 做
+ * 渐近插值：随着耗时增长缓慢逼近窗口上限，切换阶段时再抬到下一窗口。
+ * 预计耗时只影响观感，不参与任何超时判断。
+ */
+const PHASE_WINDOWS: Record<string, { start: number; end: number; expectedS: number }> = {
+  validating: { start: 0, end: 5, expectedS: 2 },
+  backup: { start: 5, end: 20, expectedS: 25 },
+  download: { start: 20, end: 48, expectedS: 45 },
+  verify_checksum: { start: 48, end: 58, expectedS: 8 },
+  extract: { start: 58, end: 70, expectedS: 8 },
+  prepare: { start: 70, end: 80, expectedS: 3 },
+  swap: { start: 80, end: 90, expectedS: 6 },
+  spawn_watchdog: { start: 90, end: 95, expectedS: 3 },
+  exec: { start: 95, end: 99, expectedS: 6 },
+  restarting: { start: 99, end: 100, expectedS: 15 },
+}
+
+const TERMINAL_PROGRESS: Record<string, number> = {
   success: 100,
   failed: 100,
   rolled_back: 100,
   stalled: 100,
 }
 
-/** 当前阶段 → 进度百分比；未知/空阶段给 0。 */
-export function phaseProgress(phase: UpdatePhase | null | undefined): number {
+const PHASE_ALIASES: Record<string, string> = {
+  backing_up: 'backup',
+  downloading: 'download',
+  replacing: 'swap',
+}
+
+function canonicalPhase(phase: string): string {
+  return PHASE_ALIASES[phase] ?? phase
+}
+
+/** 当前阶段 → 进度百分比；传入耗时后在该阶段窗口内平滑增长。 */
+export function phaseProgress(
+  phase: UpdatePhase | null | undefined,
+  elapsedS = 0,
+): number {
   if (!phase) return 0
-  return PHASE_PROGRESS[phase] ?? 0
+  const key = canonicalPhase(phase)
+  if (TERMINAL_PROGRESS[key] !== undefined) return TERMINAL_PROGRESS[key]
+  const window = PHASE_WINDOWS[key]
+  if (!window) return 0
+  const elapsed = Number.isFinite(elapsedS) ? Math.max(0, elapsedS) : 0
+  if (elapsed <= 0) return window.start
+  // elapsed/(elapsed+expected)：0→0、expected→50%、3×expected→75%，永不越过窗口上限。
+  const ratio = elapsed / (elapsed + window.expectedS)
+  return Math.min(window.end, Math.round(window.start + (window.end - window.start) * ratio))
 }
 
 /** 当前阶段在步骤列表中的索引；终态时返回最后一步。 */
@@ -74,7 +105,12 @@ export function phaseStepIndex(phase: UpdatePhase | null | undefined): number {
   if (phase === 'success' || phase === 'failed' || phase === 'rolled_back' || phase === 'stalled') {
     return UPGRADE_STEPS.length - 1
   }
-  return UPGRADE_STEPS.findIndex((step) => step.phase === phase)
+  return UPGRADE_STEPS.findIndex((step) => step.phase === canonicalPhase(phase))
+}
+
+/** 原子替换/等新进程接管的阶段：界面要明确提示「服务会短暂无响应」。 */
+export function isHandoffPhase(phase: UpdatePhase | null | undefined): boolean {
+  return phase === 'swap' || phase === 'spawn_watchdog' || phase === 'exec' || phase === 'restarting'
 }
 
 export function isTerminalPhase(phase: UpdatePhase | null | undefined): boolean {

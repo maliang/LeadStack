@@ -319,6 +319,41 @@ async function main() {
       detail: `--ls-bg=${light.lsBg} cls=${JSON.stringify(light.cls)} color-scheme=${light.colorScheme}`,
     })
 
+    /* 品牌色预设：点第二个色块应改根变量与主按钮填充，再点回经典绿。 */
+    const brandBefore = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue('--ls-brand-700').trim(),
+    )
+    await page.locator('.ls-brand-swatch').nth(1).click()
+    await page.waitForFunction(
+      () => getComputedStyle(document.documentElement).getPropertyValue('--ls-brand-700').trim() === '#1d4ed8',
+      null,
+      { timeout: 5000 },
+    )
+    await page.waitForTimeout(400)
+    const brandAfter = await page.evaluate(() => {
+      const button = document.querySelector('.ls-btn--primary')
+      return {
+        brand: getComputedStyle(document.documentElement).getPropertyValue('--ls-brand-700').trim(),
+        fill: getComputedStyle(document.documentElement).getPropertyValue('--ls-primary-fill').trim(),
+        buttonBg: button ? getComputedStyle(button).backgroundColor : '',
+      }
+    })
+    verify({
+      check: '品牌色预设即时生效：--ls-brand-700 与主按钮填充同步为所选色',
+      ok:
+        brandAfter.brand === '#1d4ed8' &&
+        brandAfter.fill === '#1d4ed8' &&
+        (brandAfter.buttonBg === '' || brandAfter.buttonBg === 'rgb(29, 78, 216)') &&
+        brandBefore === '#15803d',
+      detail: `${brandBefore} → ${brandAfter.brand} / fill=${brandAfter.fill} / button=${brandAfter.buttonBg}`,
+    })
+    await page.locator('.ls-brand-swatch').nth(0).click()
+    await page.waitForFunction(
+      () => getComputedStyle(document.documentElement).getPropertyValue('--ls-brand-700').trim() === '#15803d',
+      null,
+      { timeout: 5000 },
+    )
+
     await chooseThemeMode(page, 'dark')
     await page.waitForFunction(() => document.documentElement.classList.contains('dark'), null, {
       timeout: 5000,

@@ -14,7 +14,13 @@
  *   `index.html` 的内联脚本读 envelope 的 `extra.density` 提前落到 `<html>`。
  */
 
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import {
+  BRAND_PRESETS,
+  brandPreset,
+  normalizeBrandColor,
+  resolveBrandScale,
+} from '@/theme/palette'
 
 export type AppearanceMode = 'auto' | 'light' | 'dark'
 export type AppearanceDensity = 'compact' | 'standard'
@@ -107,4 +113,36 @@ export function setDensity(value: AppearanceDensity): void {
   const next = isAppearanceDensity(value) ? value : DEFAULT_APPEARANCE.density
   appearanceDensity.value = next
   applyDensity(next)
+}
+
+
+/* ---------- 品牌色（预设 / 自定义） ---------- */
+
+/** 品牌色独立存储：与主题 envelope 解耦，避免 provider 的 extra 回填覆盖。 */
+export const BRAND_STORAGE_KEY = 'leadstack.brand'
+
+function readStoredBrand(): string {
+  if (typeof window === 'undefined') return BRAND_PRESETS[0].color
+  try {
+    return normalizeBrandColor(window.localStorage.getItem(BRAND_STORAGE_KEY) ?? '') ?? BRAND_PRESETS[0].color
+  } catch {
+    return BRAND_PRESETS[0].color
+  }
+}
+
+export const appearanceBrand = ref<string>(readStoredBrand())
+export const appearanceBrandScale = computed(() => resolveBrandScale(appearanceBrand.value))
+export const appearanceBrandPreset = computed(() => brandPreset(appearanceBrandScale.value))
+
+/** 设置品牌色；返回 false 表示不是合法 #RRGGBB。 */
+export function setBrandColor(input: string): boolean {
+  const normalized = normalizeBrandColor(input)
+  if (!normalized) return false
+  appearanceBrand.value = normalized
+  try {
+    window.localStorage.setItem(BRAND_STORAGE_KEY, normalized)
+  } catch {
+    /* ignore */
+  }
+  return true
 }

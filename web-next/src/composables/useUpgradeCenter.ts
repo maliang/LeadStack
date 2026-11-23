@@ -19,6 +19,8 @@ const error = ref<string | null>(null)
 const loaded = ref(false)
 
 let statusTimer: ReturnType<typeof setInterval> | null = null
+let statusAbort: AbortController | null = null
+let statusInFlight = false
 let started = false
 
 export function useUpgradeCenter() {
@@ -33,7 +35,7 @@ export function useUpgradeCenter() {
       info.value?.upgradable !== false &&
       info.value?.upgrade_enabled !== false,
   )
-  const progress = computed(() => phaseProgress(status.value?.phase))
+  const progress = computed(() => phaseProgress(status.value?.phase, status.value?.phase_elapsed_s ?? 0))
   const phaseLabel = computed(() => t(phaseLabelKey(status.value?.phase)))
 
   async function loadInfo(force = false): Promise<void> {
@@ -49,9 +51,13 @@ export function useUpgradeCenter() {
   }
 
   async function loadStatus(): Promise<void> {
-    if (!allowed.value) return
+    if (!allowed.value || statusInFlight) return
+    statusInFlight = true
+    const controller = new AbortController()
+    statusAbort = controller
+    const timeout = setTimeout(() => controller.abort(), 6_000)
     try {
-      const data = await api.updateStatus()
+      const data = await api.updateStatus({ signal: controller.signal })
       status.value = data
       if (active.value && isTerminalPhase(data.phase)) {
         active.value = false
@@ -64,6 +70,11 @@ export function useUpgradeCenter() {
       }
     } catch {
       // 重启期间状态接口短暂不可达：保持上一帧进度，不把升级误判为失败。
+      // 主动 6 秒超时，避免卡住的 fetch 让 statusInFlight 永久为 true。
+    } finally {
+      clearTimeout(timeout)
+      statusAbort = null
+      statusInFlight = false
     }
   }
 
@@ -77,6 +88,8 @@ export function useUpgradeCenter() {
       clearInterval(statusTimer)
       statusTimer = null
     }
+    statusAbort?.abort()
+    statusAbort = null
   }
 
   async function checkNow(): Promise<void> {

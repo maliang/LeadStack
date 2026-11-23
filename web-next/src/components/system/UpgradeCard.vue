@@ -15,6 +15,7 @@ import {
   phaseProgress,
   phaseStepIndex,
   phaseTone,
+  isHandoffPhase,
   UPGRADE_STEPS,
   resolveLostJobOutcome,
   validateUpdateFile,
@@ -58,6 +59,7 @@ const uploadNotice = ref<string | null>(null)
 
 let pollTimer: number | null = null
 let pollInFlight = false
+let pollAbort: AbortController | null = null
 /**
  * 本次提交的目标版本。自升级重启后进程内存里的 job 会丢失，
  * GET /status 只回 {current_version, running:false, history:[…]}，
@@ -81,10 +83,14 @@ const jobBusy = computed(() => jobStarted.value && !jobTerminal.value)
 const uploadBlocked = computed(() => uploading.value || jobBusy.value)
 const phaseText = computed(() => t(phaseLabelKey(job.value?.phase)))
 const phaseModifier = computed(() => `ls-upgrade__phase--${phaseTone(job.value?.phase)}`)
-const progressPct = computed(() => phaseProgress(job.value?.phase))
+const progressPct = computed(() => phaseProgress(job.value?.phase, job.value?.phase_elapsed_s ?? 0))
 const stepIndex = computed(() => phaseStepIndex(job.value?.phase))
+const stepNumber = computed(() => (stepIndex.value >= 0 ? `${stepIndex.value + 1}/${UPGRADE_STEPS.length}` : ''))
+const recentHistory = computed(() => (job.value?.history ?? []).slice(0, 3))
 const progressTone = computed(() => (job.value?.phase === 'failed' || job.value?.phase === 'stalled' ? 'danger' : job.value?.phase === 'rolled_back' ? 'warning' : 'normal'))
 const showStallWarning = computed(() => Boolean(job.value?.stalled) && !jobTerminal.value)
+const handoff = computed(() => isHandoffPhase(job.value?.phase) && !jobTerminal.value)
+const handoffLong = computed(() => handoff.value && (job.value?.phase_elapsed_s ?? 0) >= 8)
 const canApply = computed(() => hasUpdate.value && upgradable.value && serverUpgradeEnabled.value)
 const applyDisabled = computed(() => !canApply.value || jobBusy.value || applying.value)
 const elapsedText = computed(() => {
@@ -94,6 +100,10 @@ const elapsedText = computed(() => {
     : null
 })
 const uploadPctText = computed(() => t('upgrade.uploading', { pct: uploadPct.value ?? 0 }))
+
+function reloadPage(): void {
+  window.location.reload()
+}
 
 async function loadInfo(force = false): Promise<void> {
   if (!allowed.value) return
@@ -119,6 +129,8 @@ function stopPolling(): void {
     window.clearInterval(pollTimer)
     pollTimer = null
   }
+  pollAbort?.abort()
+  pollAbort = null
 }
 
 function settleTerminal(status: UpdateStatus): void {
@@ -133,10 +145,13 @@ function settleTerminal(status: UpdateStatus): void {
 async function pollStatus(): Promise<void> {
   if (pollInFlight) return
   pollInFlight = true
+  const controller = new AbortController()
+  pollAbort = controller
+  const timeout = window.setTimeout(() => controller.abort(), 6_000)
   try {
     // 先记下这次提交的目标：下一轮 status 可能已经没有 job，只剩 history。
     const target = job.value?.target_version ?? pendingTarget
-    const status = await api.updateStatus()
+    const status = await api.updateStatus({ signal: controller.signal })
     // 重启后 job 丢失：后端不再返回 job，phase 会归一成 idle。若本次目标已知，
     // 用持久化的 history 判定终态，否则轮询永不停止、版本不刷新、上传永久禁用。
     if (status.phase === 'idle' && target) {
@@ -168,8 +183,14 @@ async function pollStatus(): Promise<void> {
     }
   } catch (caught) {
     // 重启期间 /system/update/status 可能短暂不可达：显示错误但继续轮询，不静默。
-    pollError.value = errorMessage(caught, t('upgrade.pollRetry'))
+    // 超时必须主动中断，否则浏览器连接可能挂住，pollInFlight 会永久为 true。
+    pollError.value =
+      caught instanceof DOMException && caught.name === 'AbortError'
+        ? t('upgrade.statusTimeout')
+        : errorMessage(caught, t('upgrade.pollRetry'))
   } finally {
+    window.clearTimeout(timeout)
+    pollAbort = null
     pollInFlight = false
   }
 }
@@ -425,6 +446,7 @@ onBeforeUnmount(() => {
         <div
           id="upgrade-progress"
           class="ls-upgrade__bar"
+          :class="{ 'ls-upgrade__bar--handoff': handoff }"
           role="progressbar"
           aria-valuemin="0"
           aria-valuemax="100"
@@ -450,6 +472,13 @@ onBeforeUnmount(() => {
         </ol>
         <p v-if="job?.target_version" class="ls-upgrade__hint">
           {{ t('upgrade.target', { version: job.target_version }) }}
+          <span v-if="stepNumber" class="ls-upgrade__step-number">· {{ t('upgrade.stepNumber', { step: stepNumber }) }}</span>
+        </p>
+        <p v-if="handoff" id="upgrade-handoff-hint" class="ls-upgrade__hint" role="status">
+          {{ handoffLong ? t('upgrade.handoffLongHint') : t('upgrade.handoffHint') }}
+          <button v-if="handoffLong" class="ls-btn ls-btn--small ls-upgrade__inline-action" type="button" @click="reloadPage">
+            {{ t('upgrade.refreshPage') }}
+          </button>
         </p>
         <p v-if="jobBusy && job?.phase === 'restarting'" class="ls-upgrade__hint">{{ t('upgrade.restartHint') }}</p>
         <p v-if="showStallWarning" id="upgrade-stalled-warning" class="ls-upgrade__warning" role="status">
@@ -460,6 +489,18 @@ onBeforeUnmount(() => {
         </p>
         <p v-if="job?.phase === 'success'" class="ls-upgrade__hint">{{ t('upgrade.successHint') }}</p>
         <p v-if="job?.phase === 'failed'" class="ls-upgrade__hint">{{ t('upgrade.failedHint') }}</p>
+        <div v-if="recentHistory.length > 0" class="ls-upgrade__history">
+          <p class="ls-upgrade__history-title">{{ t('upgrade.history') }}</p>
+          <ul>
+            <li v-for="entry in recentHistory" :key="`${entry.ts}-${entry.target_version}`" class="ls-upgrade__history-row">
+              <span class="ls-upgrade__history-outcome" :class="`ls-upgrade__history-outcome--${entry.outcome}`">
+                {{ t(`upgrade.outcome.${entry.outcome}`) }}
+              </span>
+              <span class="ls-upgrade__history-version">{{ entry.from_version }} → {{ entry.target_version }}</span>
+              <span class="ls-upgrade__history-time">{{ formatDateTime(entry.ts) }}</span>
+            </li>
+          </ul>
+        </div>
         <div v-if="job?.phase === 'stalled'" class="ls-upgrade__actions">
           <button id="upgrade-retry" class="ls-btn ls-btn--small ls-btn--primary" type="button" @click="openConfirm">
             {{ t('upgrade.retry') }}

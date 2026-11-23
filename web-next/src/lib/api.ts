@@ -2866,9 +2866,9 @@ export const api = {
     })
   },
 
-  /** GET /system/update/status —— 升级进度（2s 轮询） */
-  updateStatus(): Promise<UpdateStatus> {
-    return request<unknown>('/system/update/status').then(normalizeUpdateStatus)
+  /** GET /system/update/status —— 升级进度（2s 轮询；重启窗口需可中断） */
+  updateStatus(options?: { signal?: AbortSignal }): Promise<UpdateStatus> {
+    return request<unknown>('/system/update/status', { signal: options?.signal }).then(normalizeUpdateStatus)
   },
 
   /**

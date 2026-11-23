@@ -260,7 +260,7 @@ data/
 - **发布**：应用 / 发布记录
 - **系统**：用户 / API Token / 审计 / 设置
 
-外观在「设置 → 外观」里切换：主题（浅色 / 深色 / 跟随系统）、主题色、界面密度（舒适 / 紧凑）与界面语言（简体中文 / English），
+外观在「设置 → 外观」里切换：主题（浅色 / 深色 / 跟随系统）、主题色（11 个预设 + 任意 #RRGGBB 自定义，深色自动调明暗）、界面密度（舒适 / 紧凑）与界面语言（简体中文 / English），
 选择会持久化保存，刷新或重开后仍保持。
 
 ### 3. 接入服务器（三选一）
@@ -619,7 +619,7 @@ leadstack network --show
 **检查 → 自动备份 → 下载校验 → A/B 替换 → 重启**，入口为 `/api/v1/system/update/check`、`/apply`、`/status`；
 新版本起不来时**独立 watchdog 自动回退**（含数据恢复到升级前）。`web-next` 控制台已在**设置页**提供「版本与升级」面板：
 可在面板里检查更新、一键升级，或在离网环境上传本地升级包（上传入口只收解压后的裸二进制）；需要排查时也可直接调接口。
-自升级重启后页面会依据状态接口里持久化的 `history` 收口：当前版本刷新、阶段落到终态并停止轮询。
+自升级重启后页面会依据状态接口里持久化的 `history` 收口：当前版本刷新、阶段落到终态并停止轮询；状态查询带 6 秒超时，避免重启窗口的连接把轮询卡死。
 可关掉：`LEADSTACK_UPGRADE_ENABLED=false`。自动升级只在触发后发生，不会后台偷跑；Windows 不支持进程内自升级。
 
 **卡住不动**：每个阶段超过 `LEADSTACK_UPGRADE_STALL_TIMEOUT`（默认 `10m`）没有推进，控制端会自己判失败并释放升级锁（不会一直 409）。
@@ -865,7 +865,7 @@ make dev               # 开发模式（另开 make web-dev 走前端热更新�
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check      # Docker 构建 + 容器内健康检查 + 备份校验
 node scripts/capture-screenshots.mjs   # 重采 README 截图（需带演示数据的控制端）
-node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3309 校验总数）
+node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3335 校验总数）
 ```
 
 > **内嵌前端 = `web-next/`**：`make build` 先构建 `web-next/dist/`，再由 `make web-embed` 复制到 `internal/webui/dist/`、经 `go:embed` 打进二进制。

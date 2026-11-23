@@ -8903,7 +8903,13 @@ body.ls-scroll-locked {
   height: 100%;
   border-radius: inherit;
   background: var(--ls-primary-fill);
-  transition: width var(--ls-duration) ease;
+  transition: width 1.2s linear;
+}
+
+.ls-upgrade-pill--busy .ls-upgrade-pill__fill {
+  background-image: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.35), transparent);
+  background-size: 200% 100%;
+  animation: ls-upgrade-shimmer 1.6s linear infinite;
 }
 
 @media (max-width: 760px) {
@@ -9049,4 +9055,134 @@ body.ls-scroll-locked {
 .ls-chip--danger {
   background: var(--ls-danger-soft);
   color: var(--ls-danger);
+}
+
+/* ---------- 外观：品牌色预设 / 自定义 ---------- */
+
+.ls-appearance__control--brand {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+}
+
+.ls-brand-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-1);
+}
+
+.ls-brand-swatch {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--ls-radius-full);
+  background: var(--swatch, var(--ls-brand-700));
+  cursor: pointer;
+  transition:
+    transform var(--ls-duration) ease,
+    box-shadow var(--ls-duration) ease;
+}
+
+.ls-brand-swatch:hover {
+  transform: scale(1.08);
+}
+
+.ls-brand-swatch--active {
+  border-color: var(--ls-surface);
+  box-shadow: 0 0 0 2px var(--swatch, var(--ls-brand-700));
+}
+
+.ls-brand-swatch:focus-visible {
+  outline: none;
+  box-shadow: var(--ls-focus-ring);
+}
+
+.ls-brand-custom {
+  display: flex;
+  align-items: center;
+  gap: var(--ls-space-1);
+  color: var(--ls-text-subtle);
+  font: 500 var(--ls-text-2xs) / 1.4 var(--ls-font-sans);
+}
+
+.ls-brand-custom input[type='color'] {
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.ls-brand-custom__hex {
+  width: 6.5rem;
+  min-height: var(--ls-hit-size);
+  font-family: var(--ls-font-mono);
+  text-transform: lowercase;
+}
+
+.ls-upgrade__inline-action {
+  margin-left: var(--ls-space-2);
+  vertical-align: middle;
+}
+
+.ls-upgrade__step-number {
+  margin-left: var(--ls-space-1);
+  color: var(--ls-text-subtle);
+}
+
+.ls-upgrade__history {
+  margin-top: var(--ls-space-3);
+  padding-top: var(--ls-space-2);
+  border-top: 1px solid var(--ls-border);
+}
+
+.ls-upgrade__history-title {
+  margin: 0 0 var(--ls-space-1);
+  color: var(--ls-text-subtle);
+  font: 600 var(--ls-text-2xs) / 1.4 var(--ls-font-sans);
+}
+
+.ls-upgrade__history ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ls-upgrade__history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+  color: var(--ls-text-muted);
+  font: 400 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+}
+
+.ls-upgrade__history-outcome {
+  min-width: 4rem;
+  color: var(--ls-text-subtle);
+}
+
+.ls-upgrade__history-outcome--success {
+  color: var(--ls-success);
+}
+
+.ls-upgrade__history-outcome--rollback {
+  color: var(--ls-warning);
+}
+
+.ls-upgrade__history-version {
+  font-family: var(--ls-font-mono);
+}
+
+.ls-upgrade__history-time {
+  margin-left: auto;
+  color: var(--ls-text-subtle);
 }
