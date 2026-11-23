@@ -633,6 +633,25 @@ async function run() {
     })
     await page.click('#upgrade-cancel')
 
+    /* ============ ⑧.5 失败但 done=true：phase 仍是 swap，必须收口为 failed ============ */
+    state.info = infoFixture()
+    queueStatus(
+      state,
+      [{ phase: 'swap', done: true, error: '替换可执行文件失败（已回滚）', target_version: '2.0.0' }],
+      '1.8.0',
+    )
+    await page.click('#upgrade-apply')
+    await page.waitForSelector('#upgrade-confirm', { timeout: 5000 })
+    await page.click('#upgrade-confirm')
+    await waitPhase(page, '升级失败')
+    verify({
+      check: 'phase=swap 但 done=true 时收口为「升级失败」并展示后端错误',
+      ok:
+        (await page.locator('#upgrade-phase').innerText()).trim() === '升级失败' &&
+        (await page.locator('#upgrade-job-error').innerText()).includes('替换可执行文件失败'),
+    })
+    await expectPollingStopped(verify, page, state, 'swap-done')
+
     /* ============ ⑨ 本地上传 1024 字节：multipart + 进度百分比 + 202 切轮询 ============ */
     /* 后端只收解压后的裸二进制；选择器必须留 * / *，否则 macOS 会把无扩展名二进制灰掉。 */
     const acceptHint = (await page.locator('#upgrade-accept-hint').innerText()).trim()

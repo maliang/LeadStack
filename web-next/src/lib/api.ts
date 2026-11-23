@@ -455,6 +455,8 @@ export interface UpdatePendingState {
 export interface UpdateStatus {
   job_id: string | null
   phase: UpdatePhase
+  /** 后端 job.done：失败时 phase 仍是失败发生阶段（如 swap），必须靠它收口。 */
+  done: boolean
   target_version: string | null
   current_version: string | null
   message: string | null
@@ -2467,7 +2469,17 @@ export function normalizeUpdateStatus(input: unknown): UpdateStatus {
   //  - POST /system/update/{apply,upload} 的 202 → {job_id, status:{job_id,phase,…}}
   // 不先拆这一层时 phase 恒为空 → 归一成 idle，进度面板永远停在第一步（真实缺陷，非理论问题）。
   const raw = toRecord(payload.job) ?? toRecord(payload.status) ?? payload
-  const phase = normalizeUpdatePhase(raw.phase ?? raw.stage ?? raw.state)
+  let phase = normalizeUpdatePhase(raw.phase ?? raw.stage ?? raw.state)
+  const done = toBool(raw.done)
+  // 失败时后端保留失败发生阶段（phase=swap/replacing）并置 done=true；只按 phase
+  // 判终态会永远轮询「正在替换二进制」，这正是用户看到的卡死。done 后收口到终态。
+  if (done && phase !== 'success' && phase !== 'failed' && phase !== 'rolled_back' && phase !== 'stalled') {
+    phase = toBool(raw.rolled_back)
+      ? 'rolled_back'
+      : toText(raw.error)
+        ? 'failed'
+        : 'success'
+  }
   // history / pending_state 只存在于 GET /status 的顶层；202 响应（{job_id,status:{…}}）里没有。
   const history = extractList(payload.history ?? raw.history, ['history'])
     .map(normalizeUpdateHistory)
@@ -2477,6 +2489,7 @@ export function normalizeUpdateStatus(input: unknown): UpdateStatus {
   return {
     job_id: toText(raw.job_id ?? raw.jobId),
     phase,
+    done,
     target_version: toText(raw.target_version),
     current_version: toText(raw.current_version) ?? toText(payload.current_version),
     message: toText(raw.message),

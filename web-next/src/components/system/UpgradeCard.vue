@@ -489,6 +489,9 @@ onBeforeUnmount(() => {
         </p>
         <p v-if="job?.phase === 'success'" class="ls-upgrade__hint">{{ t('upgrade.successHint') }}</p>
         <p v-if="job?.phase === 'failed'" class="ls-upgrade__hint">{{ t('upgrade.failedHint') }}</p>
+        <p v-if="job?.error" id="upgrade-job-error" class="ls-notice ls-notice--error" role="alert">
+          {{ job.error }}
+        </p>
         <div v-if="recentHistory.length > 0" class="ls-upgrade__history">
           <p class="ls-upgrade__history-title">{{ t('upgrade.history') }}</p>
           <ul>
