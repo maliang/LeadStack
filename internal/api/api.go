@@ -182,7 +182,7 @@ func New(opts Options) (*API, error) {
 		fallbackReason:   opts.FallbackReason,
 		maxSchemaVersion: resolvedMaxSchemaVersion(opts.MaxSchemaVersion),
 		updates: newUpdateChecker(cfgUpdateRepo(opts.Config), cfgUpdateAPIBase(opts.Config),
-			version, cfgUpdateInterval(opts.Config), logger),
+			version, cfgUpdateInterval(opts.Config), logger, cfgUpdateAPIBaseFallback(opts.Config)),
 		upgrader:   newUpgrader(opts.Config),
 		backupWake: make(chan struct{}, 1),
 		login: newLoginThrottle(loginPolicy{
@@ -341,12 +341,20 @@ func cfgUpdateRepo(cfg *config.Config) string {
 	return cfg.UpdateRepo
 }
 
-// cfgUpdateAPIBase 返回 GitHub API 基址。
+// cfgUpdateAPIBase 返回主更新源 API 基址。
 func cfgUpdateAPIBase(cfg *config.Config) string {
 	if cfg == nil || cfg.UpdateAPIBase == "" {
 		return config.DefaultUpdateAPIBase
 	}
 	return cfg.UpdateAPIBase
+}
+
+// cfgUpdateAPIBaseFallback 返回备用更新源基址（默认配置为 Gitee）。
+func cfgUpdateAPIBaseFallback(cfg *config.Config) string {
+	if cfg == nil {
+		return config.DefaultUpdateAPIBaseGitee
+	}
+	return cfg.UpdateAPIBaseFallback
 }
 
 // cfgUpdateInterval 返回自动检查间隔。

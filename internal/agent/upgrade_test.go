@@ -578,3 +578,42 @@ func TestPerformUpgradeArchiveMissingAgent(t *testing.T) {
 		})
 	}
 }
+
+// TestPerformUpgradeFallsBackToMirror 验证主地址 5xx 时自动换备用镜像，
+// 且半截响应不会污染备用源的 sha256 计算。
+func TestPerformUpgradeFallsBackToMirror(t *testing.T) {
+	exePath := makeTestExe(t, "OLD-VERSION")
+	newContent := []byte("MIRROR-NEW-BINARY")
+
+	var primaryHits atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryHits.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("partial"))
+	}))
+	defer primary.Close()
+
+	var fallbackHits atomic.Int32
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackHits.Add(1)
+		_, _ = w.Write(newContent)
+	}))
+	defer fallback.Close()
+
+	u := newUpgradeTestUpgrader(exePath, fallback.Client())
+	_, err := u.perform(context.Background(), "v1", protocol.AgentUpgrade{
+		Version:     "v2",
+		URL:         primary.URL,
+		FallbackURL: fallback.URL,
+		SHA256:      sha256Hex(newContent),
+	})
+	if err != nil {
+		t.Fatalf("主地址失败时应回退镜像: %v", err)
+	}
+	if got := readFileString(t, exePath); got != string(newContent) {
+		t.Fatalf("正式文件 = %q，期望镜像内容", got)
+	}
+	if primaryHits.Load() != 1 || fallbackHits.Load() != 1 {
+		t.Fatalf("下载次数不符: primary=%d fallback=%d", primaryHits.Load(), fallbackHits.Load())
+	}
+}

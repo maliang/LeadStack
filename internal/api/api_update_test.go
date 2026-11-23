@@ -216,7 +216,7 @@ func TestApplyAbortsWhenBackupFails(t *testing.T) {
 	}))
 	defer mock.Close()
 	env.api.updates = &updateChecker{
-		repo: "maliang/leadstack", apiBase: mock.URL, currentVersion: "v0.0.1",
+		repo: "maliang/leadstack", apiBases: []string{mock.URL}, currentVersion: "v0.0.1",
 		client: mock.Client(), logger: noopLogger{},
 		cached: &UpdateInfo{
 			Current: "v0.0.1", Latest: "v0.9.9", HasUpdate: true, Upgradable: true,
@@ -377,5 +377,19 @@ func TestUpgradeStateRoundTrip(t *testing.T) {
 	}
 	if got, _ := ReadUpgradeState(path); got != nil {
 		t.Fatal("删除后应读不到")
+	}
+}
+
+func TestAlternateAgentUpgradeURL(t *testing.T) {
+	cases := map[string]string{
+		"https://github.com/maliang/leadstack/releases/download/v0.1.15/leadstack-agent_0.1.15_linux_amd64.tar.gz":  "https://gitee.com/maliang47/leadstack/releases/download/v0.1.15/leadstack-agent_0.1.15_linux_amd64.tar.gz",
+		"https://gitee.com/maliang47/leadstack/releases/download/v0.1.15/leadstack-agent_0.1.15_linux_amd64.tar.gz": "https://github.com/maliang/leadstack/releases/download/v0.1.15/leadstack-agent_0.1.15_linux_amd64.tar.gz",
+		"https://mirror.example.com/leadstack-agent_0.1.15_linux_amd64.tar.gz":                                      "",
+		"not-a-url": "",
+	}
+	for input, want := range cases {
+		if got := alternateAgentUpgradeURL(input); got != want {
+			t.Fatalf("alternateAgentUpgradeURL(%q) = %q，期望 %q", input, got, want)
+		}
 	}
 }

@@ -15,7 +15,7 @@ import (
 // updateChecker 负责「检查更新」：带缓存的 GitHub Releases 查询。
 type updateChecker struct {
 	repo           string
-	apiBase        string
+	apiBases       []string
 	currentVersion string
 	interval       time.Duration
 	client         *http.Client
@@ -43,19 +43,43 @@ type githubRelease struct {
 	Body        string `json:"body"`
 	HTMLURL     string `json:"html_url"`
 	PublishedAt string `json:"published_at"`
+	CreatedAt   string `json:"created_at"`
 	Draft       bool   `json:"draft"`
 	Prerelease  bool   `json:"prerelease"`
-	Assets      []struct {
+	// SourceAPI / SourceIsGitee 是本次响应实际来源，用于生成备用镜像地址（不参与 JSON）。
+	SourceAPI     string `json:"-"`
+	SourceIsGitee bool   `json:"-"`
+	Assets        []struct {
 		Name               string `json:"name"`
 		BrowserDownloadURL string `json:"browser_download_url"`
 		Size               int64  `json:"size"`
 	} `json:"assets"`
 }
 
-// newUpdateChecker 构造检查器。
-func newUpdateChecker(repo, apiBase, currentVersion string, interval time.Duration, logger loggerLike) *updateChecker {
+// newUpdateChecker 构造检查器；fallbacks 是主源失败后依次尝试的备用 API 基址。
+//
+// 默认部署把 Gitee 作为 GitHub 的备用源（config.DefaultUpdateAPIBaseGitee）：
+// GitHub 不可达或返回非 200 时自动切换，成功结果照常缓存；全部失败才回错误。
+func newUpdateChecker(repo, apiBase, currentVersion string, interval time.Duration, logger loggerLike, fallbacks ...string) *updateChecker {
+	bases := make([]string, 0, 1+len(fallbacks))
+	add := func(base string) {
+		base = strings.TrimSuffix(strings.TrimSpace(base), "/")
+		if base == "" {
+			return
+		}
+		for _, existing := range bases {
+			if existing == base {
+				return
+			}
+		}
+		bases = append(bases, base)
+	}
+	add(apiBase)
+	for _, base := range fallbacks {
+		add(base)
+	}
 	return &updateChecker{
-		repo: repo, apiBase: strings.TrimSuffix(apiBase, "/"),
+		repo: repo, apiBases: bases,
 		currentVersion: currentVersion, interval: interval,
 		client: &http.Client{Timeout: 20 * time.Second},
 		logger: logger,
@@ -122,6 +146,7 @@ func (c *updateChecker) refresh(ctx context.Context) UpdateInfo {
 		}
 		assets = append(assets, UpdateAsset{
 			OS: osName, Arch: arch, URL: a.BrowserDownloadURL, SizeBytes: a.Size, Name: a.Name,
+			FallbackURL: alternateAssetURL(c.repo, release.SourceIsGitee, release.TagName, a.Name),
 		})
 		if osName == runtime.GOOS && arch == runtime.GOARCH {
 			upgradable = true
@@ -138,6 +163,7 @@ func (c *updateChecker) refresh(ctx context.Context) UpdateInfo {
 		}
 		agentAssets = append(agentAssets, AgentUpdateAsset{
 			OS: osName, Arch: arch, URL: a.BrowserDownloadURL, SizeBytes: a.Size, Name: a.Name,
+			FallbackURL: alternateAssetURL(c.repo, release.SourceIsGitee, release.TagName, a.Name),
 		})
 	}
 	if len(agentAssets) > 0 {
@@ -179,9 +205,28 @@ func (c *updateChecker) refresh(ctx context.Context) UpdateInfo {
 	return info
 }
 
-// fetchLatestRelease 请求 GitHub releases/latest。
+// fetchLatestRelease 依次请求主源与备用源，返回第一个成功结果。
+//
+// 兼容 GitHub 与 Gitee 两套 API：两者都返回 tag_name/name/body/assets，
+// 但 Gitee 没有 html_url/published_at/size，字段缺失时在这里归一化。
 func (c *updateChecker) fetchLatestRelease(ctx context.Context) (*githubRelease, error) {
-	url := fmt.Sprintf("%s/repos/%s/releases/latest", c.apiBase, c.repo)
+	errs := make([]string, 0, len(c.apiBases))
+	for _, base := range c.apiBases {
+		release, err := c.fetchReleaseFrom(ctx, base)
+		if err == nil {
+			return release, nil
+		}
+		errs = append(errs, fmt.Sprintf("%s: %v", base, err))
+		if len(c.apiBases) > 1 {
+			c.logger.Warn("更新源不可用，尝试下一个", "api", base, "err", err)
+		}
+	}
+	return nil, fmt.Errorf("所有更新源均不可用（%s）", strings.Join(errs, "；"))
+}
+
+// fetchReleaseFrom 请求单个源的 releases/latest 并做跨源字段归一化。
+func (c *updateChecker) fetchReleaseFrom(ctx context.Context, apiBase string) (*githubRelease, error) {
+	url := fmt.Sprintf("%s/repos/%s/releases/latest", apiBase, c.repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("构造请求失败: %w", err)
@@ -190,21 +235,58 @@ func (c *updateChecker) fetchLatestRelease(ctx context.Context) (*githubRelease,
 	req.Header.Set("User-Agent", "leadstack-updater")
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("请求 %s 失败: %w", c.apiBase, err)
+		return nil, fmt.Errorf("请求 %s 失败: %w", apiBase, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("GitHub API 返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return nil, fmt.Errorf("API 返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 	var release githubRelease
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&release); err != nil {
-		return nil, fmt.Errorf("解析 GitHub 响应失败: %w", err)
+		return nil, fmt.Errorf("解析更新响应失败: %w", err)
 	}
 	if release.Draft || release.Prerelease || strings.TrimSpace(release.TagName) == "" {
 		return nil, fmt.Errorf("最新发行版不可用（draft/prerelease/无标签）")
 	}
+	// Gitee API 不返回 html_url / published_at，按响应形状与 API 源判定；
+	// 测试用本地 mock 时 apiBase 不含 gitee.com，因此同时看 created_at。
+	isGitee := strings.Contains(apiBase, "gitee.com") ||
+		(strings.TrimSpace(release.HTMLURL) == "" && strings.TrimSpace(release.CreatedAt) != "")
+	release.SourceAPI = apiBase
+	release.SourceIsGitee = isGitee
+	if strings.TrimSpace(release.HTMLURL) == "" {
+		release.HTMLURL = releasePageURL(isGitee, c.repo, release.TagName)
+	}
+	if strings.TrimSpace(release.PublishedAt) == "" {
+		release.PublishedAt = release.CreatedAt
+	}
 	return &release, nil
+}
+
+// alternateAssetURL 返回同名资产在另一个官方镜像源上的下载地址。
+//
+// 只对官方仓库启用：自建镜像 fork 不一定同步到 Gitee，生成错误地址只会掩盖真实错误。
+func alternateAssetURL(repo string, isGitee bool, tag, name string) string {
+	if repo != "maliang/leadstack" || strings.TrimSpace(tag) == "" || strings.TrimSpace(name) == "" {
+		return ""
+	}
+	if isGitee {
+		return fmt.Sprintf("https://github.com/maliang/leadstack/releases/download/%s/%s", tag, name)
+	}
+	return fmt.Sprintf("https://gitee.com/maliang47/leadstack/releases/download/%s/%s", tag, name)
+}
+
+// releasePageURL 按 API 源推导发行版网页地址（Gitee 与 GitHub 路径不同）。
+func releasePageURL(isGitee bool, repo, tag string) string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return ""
+	}
+	if isGitee {
+		return fmt.Sprintf("https://gitee.com/%s/releases/tag/%s", repo, tag)
+	}
+	return fmt.Sprintf("https://github.com/%s/releases/tag/%s", repo, tag)
 }
 
 // versionIsNewer 判断 candidate 是否比 current 新（任一解析失败按 false）。

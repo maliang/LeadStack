@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -202,5 +204,116 @@ func TestAgentAssetsEmptyArrayNotNull(t *testing.T) {
 	}
 	if _, _, ok := classifyAgentAsset("leadstack-agent_0.1.1_windows_amd64.zip"); ok {
 		t.Fatal("agent 的 zip 不在 agent_assets 范围内（只认 tar.gz）")
+	}
+}
+
+// TestRefreshFallsBackToGitee 校验 GitHub 主源失败时自动切到 Gitee，
+// 并把 Gitee 缺失的 html_url/published_at/size 归一化成可用字段。
+func TestRefreshFallsBackToGitee(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "github unavailable", http.StatusBadGateway)
+	}))
+	defer primary.Close()
+
+	var giteeURL string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/maliang/leadstack/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		assets := make([]map[string]any, 0, len(realReleaseAssets))
+		for _, name := range realReleaseAssets {
+			assets = append(assets, map[string]any{
+				"name":                 name,
+				"browser_download_url": giteeURL + "/download/v0.1.15/" + name,
+				// Gitee 不返回 size
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"tag_name":   "v0.1.15",
+			"name":       "v0.1.15",
+			"body":       "<!-- schema_changed: false -->",
+			"created_at": "2026-11-23T10:14:24+08:00",
+			"assets":     assets,
+		})
+	})
+	mux.HandleFunc("/download/v0.1.15/checksums.txt", func(w http.ResponseWriter, r *http.Request) {
+		var b strings.Builder
+		for _, name := range realReleaseAssets {
+			if name == "checksums.txt" {
+				continue
+			}
+			fmt.Fprintf(&b, "%s  %s\n", strings.Repeat("b", 64), name)
+		}
+		_, _ = io.WriteString(w, b.String())
+	})
+	gitee := httptest.NewServer(mux)
+	defer gitee.Close()
+	giteeURL = gitee.URL
+
+	checker := newUpdateChecker("maliang/leadstack", primary.URL, "v0.1.0", time.Hour, noopLogger{}, gitee.URL)
+	info := checker.Get(context.Background(), true)
+	if info.Error != "" {
+		t.Fatalf("主源失败时应回退 Gitee，实际错误: %s", info.Error)
+	}
+	if info.Latest != "v0.1.15" || !info.HasUpdate {
+		t.Fatalf("回退结果不符: %+v", info)
+	}
+	if info.ReleaseURL != "https://gitee.com/maliang/leadstack/releases/tag/v0.1.15" {
+		t.Fatalf("Gitee 发行版地址应按 tag 推导，实际 %q", info.ReleaseURL)
+	}
+	if info.PublishedAt == 0 {
+		t.Fatalf("Gitee created_at 应回填 published_at")
+	}
+	if len(info.Assets) != 5 || len(info.AgentAssets) != 4 {
+		t.Fatalf("资产拆分不符: control=%d agent=%d", len(info.Assets), len(info.AgentAssets))
+	}
+	for _, asset := range info.Assets {
+		if !strings.HasPrefix(asset.FallbackURL, "https://github.com/maliang/leadstack/releases/download/") {
+			t.Fatalf("Gitee 资产应带 GitHub 备用地址，实际 %q", asset.FallbackURL)
+		}
+	}
+	for _, asset := range info.AgentAssets {
+		if asset.SHA256 != strings.Repeat("b", 64) {
+			t.Fatalf("Gitee checksums 未生效: %+v", asset)
+		}
+	}
+}
+
+// TestDownloadReleaseAssetFallsBack 校验主地址 5xx 时自动换备用镜像，
+// 并用「实际成功的 URL」取同源 checksums.txt 完成校验。
+func TestDownloadReleaseAssetFallsBack(t *testing.T) {
+	env := newTestEnv(t)
+	payload := []byte("archive-bytes")
+	sum := sha256.Sum256(payload)
+	name := "leadstack_0.1.15_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "github asset unavailable", http.StatusBadGateway)
+	}))
+	defer primary.Close()
+
+	var fallbackBase string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/download/v0.1.15/"+name, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	})
+	mux.HandleFunc("/download/v0.1.15/checksums.txt", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), name)
+	})
+	fallback := httptest.NewServer(mux)
+	defer fallback.Close()
+	fallbackBase = fallback.URL + "/download/v0.1.15/"
+
+	asset := UpdateAsset{
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Name: name,
+		URL: primary.URL + "/download/v0.1.15/" + name, FallbackURL: fallbackBase + name,
+	}
+	path, usedURL, err := env.api.downloadReleaseAsset(context.Background(), asset, "v0.1.15")
+	if err != nil {
+		t.Fatalf("主地址失败时应回退备用源: %v", err)
+	}
+	if usedURL != asset.FallbackURL {
+		t.Fatalf("应返回实际成功的备用 URL，实际 %q", usedURL)
+	}
+	if err := env.api.verifyAssetChecksum(context.Background(), asset, usedURL, path); err != nil {
+		t.Fatalf("备用源下载后应按同源 checksums 校验通过: %v", err)
 	}
 }

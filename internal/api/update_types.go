@@ -37,6 +37,8 @@ type UpdateAsset struct {
 	URL       string `json:"url"`
 	SizeBytes int64  `json:"size_bytes"`
 	Name      string `json:"name,omitempty"`
+	// FallbackURL 是另一镜像源的同名资产（GitHub ↔ Gitee）；下载失败时自动重试。
+	FallbackURL string `json:"fallback_url,omitempty"`
 }
 
 // AgentUpdateAsset 是 agent 归档产物（供「升级 Agent」一次性拿到 url + sha256）。
@@ -49,6 +51,8 @@ type AgentUpdateAsset struct {
 	SHA256    string `json:"sha256"`
 	SizeBytes int64  `json:"size_bytes"`
 	Name      string `json:"name"`
+	// FallbackURL 是另一镜像源的同名资产，供界面/脚本手工切换时使用。
+	FallbackURL string `json:"fallback_url,omitempty"`
 }
 
 // UpdateInfo 是检查更新的结果（契约 51.2）。

@@ -285,13 +285,13 @@ func (a *API) runUpgrade(job *upgradeJob, asset UpdateAsset, schemaChanged bool,
 
 	// 2) 下载 + 校验 sha256。
 	a.upgrader.setPhase(job, "download")
-	archivePath, err := a.downloadReleaseAsset(ctx, asset, job.TargetVersion)
+	archivePath, usedURL, err := a.downloadReleaseAsset(ctx, asset, job.TargetVersion)
 	if err != nil {
 		fail("download", err)
 		return
 	}
 	a.upgrader.setPhase(job, "verify_checksum")
-	if err := a.verifyAssetChecksum(ctx, asset, archivePath); err != nil {
+	if err := a.verifyAssetChecksum(ctx, asset, usedURL, archivePath); err != nil {
 		fail("verify_checksum", err)
 		return
 	}
@@ -490,31 +490,56 @@ func (a *API) validateTargetVersion(target string, allowMajor bool) error {
 }
 
 // downloadReleaseAsset 下载产物到 <data_dir>/upgrade/<version>.tar.gz（临时文件 + 原子 rename）。
-func (a *API) downloadReleaseAsset(ctx context.Context, asset UpdateAsset, version string) (string, error) {
+//
+// 主地址失败时自动尝试 FallbackURL（GitHub ↔ Gitee 同名资产），
+// 返回实际使用的 URL，后续 checksums.txt 必须从同一源取，避免跨源校验错配。
+func (a *API) downloadReleaseAsset(ctx context.Context, asset UpdateAsset, version string) (string, string, error) {
 	dir := a.cfg.UpgradeDir()
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return "", fmt.Errorf("创建升级目录失败: %w", err)
+		return "", "", fmt.Errorf("创建升级目录失败: %w", err)
 	}
 	safeVersion := strings.NewReplacer("/", "_", "..", "_").Replace(version)
 	dst := filepath.Join(dir, safeVersion+".tar.gz")
-	tmp := dst + ".tmp"
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
+	urls := []string{asset.URL}
+	if fallback := strings.TrimSpace(asset.FallbackURL); fallback != "" && fallback != asset.URL {
+		urls = append(urls, fallback)
+	}
+	var errs []string
+	for _, rawURL := range urls {
+		written, err := a.downloadURLTo(ctx, rawURL, dst)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", rawURL, err))
+			if len(urls) > 1 {
+				a.logger.Warn("升级包下载失败，尝试备用镜像", "url", rawURL, "err", err)
+			}
+			continue
+		}
+		a.logger.Info("升级包已下载", "path", dst, "bytes", written, "url", rawURL)
+		return dst, rawURL, nil
+	}
+	return "", "", fmt.Errorf("下载升级包失败（已尝试 %d 个源）：%s", len(urls), strings.Join(errs, "；"))
+}
+
+// downloadURLTo 下载单个 URL 到目标路径：临时文件 + 原子 rename，失败不留半截文件。
+func (a *API) downloadURLTo(ctx context.Context, rawURL, dst string) (int64, error) {
+	tmp := dst + ".tmp"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("构造下载请求失败: %w", err)
+		return 0, fmt.Errorf("构造下载请求失败: %w", err)
 	}
 	req.Header.Set("User-Agent", "leadstack-updater")
 	resp, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
 	if err != nil {
-		return "", fmt.Errorf("下载升级包失败: %w", err)
+		return 0, fmt.Errorf("下载失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("下载升级包失败：HTTP %d", resp.StatusCode)
+		return 0, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	file, err := os.Create(tmp)
 	if err != nil {
-		return "", fmt.Errorf("创建临时文件失败: %w", err)
+		return 0, fmt.Errorf("创建临时文件失败: %w", err)
 	}
 	defer func() {
 		_ = file.Close()
@@ -522,24 +547,23 @@ func (a *API) downloadReleaseAsset(ctx context.Context, asset UpdateAsset, versi
 	}()
 	written, err := io.Copy(file, resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("写入升级包失败: %w", err)
+		return 0, fmt.Errorf("写入升级包失败: %w", err)
 	}
 	if err := file.Sync(); err != nil {
-		return "", fmt.Errorf("同步升级包失败: %w", err)
+		return 0, fmt.Errorf("同步升级包失败: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return "", fmt.Errorf("关闭升级包失败: %w", err)
+		return 0, fmt.Errorf("关闭升级包失败: %w", err)
 	}
 	if err := os.Rename(tmp, dst); err != nil {
-		return "", fmt.Errorf("落盘升级包失败: %w", err)
+		return 0, fmt.Errorf("落盘升级包失败: %w", err)
 	}
-	a.logger.Info("升级包已下载", "path", dst, "bytes", written)
-	return dst, nil
+	return written, nil
 }
 
 // verifyAssetChecksum 下载 checksums.txt 并校验升级包的 sha256。
-func (a *API) verifyAssetChecksum(ctx context.Context, asset UpdateAsset, archivePath string) error {
-	checksumsURL := checksumsURLFor(asset)
+func (a *API) verifyAssetChecksum(ctx context.Context, asset UpdateAsset, assetURL, archivePath string) error {
+	checksumsURL := checksumsURLFor(UpdateAsset{URL: assetURL})
 	if checksumsURL == "" {
 		return errors.New("发行版缺少 checksums.txt，无法校验升级包完整性（已中止）")
 	}
@@ -561,7 +585,7 @@ func (a *API) verifyAssetChecksum(ctx context.Context, asset UpdateAsset, archiv
 	if err != nil {
 		return fmt.Errorf("读取 checksums.txt 失败: %w", err)
 	}
-	want := lookupChecksum(string(raw), filepath.Base(asset.URL))
+	want := lookupChecksum(string(raw), filepath.Base(assetURL))
 	if want == "" {
 		// 有些项目用 asset.Name 作为键。
 		if asset.Name != "" {
@@ -569,7 +593,7 @@ func (a *API) verifyAssetChecksum(ctx context.Context, asset UpdateAsset, archiv
 		}
 	}
 	if want == "" {
-		return fmt.Errorf("checksums.txt 中找不到 %s 的校验和（已中止）", filepath.Base(asset.URL))
+		return fmt.Errorf("checksums.txt 中找不到 %s 的校验和（已中止）", filepath.Base(assetURL))
 	}
 	got, err := fileSHA256(archivePath)
 	if err != nil {

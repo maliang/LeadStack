@@ -311,3 +311,18 @@ func TestCheckConfigEnv(t *testing.T) {
 		t.Fatal("过小的 check-interval-min 应报错")
 	}
 }
+
+func TestResolveUpdateFallback(t *testing.T) {
+	if got := resolveUpdateFallback(DefaultUpdateAPIBase, ""); got != DefaultUpdateAPIBaseGitee {
+		t.Fatalf("默认 GitHub 主源应自动回退 Gitee，实际 %q", got)
+	}
+	if got := resolveUpdateFallback(DefaultUpdateAPIBase+"/", ""); got != DefaultUpdateAPIBaseGitee {
+		t.Fatalf("主源带尾斜杠也应识别为默认 GitHub，实际 %q", got)
+	}
+	if got := resolveUpdateFallback("https://mirror.example.com/api", ""); got != "" {
+		t.Fatalf("自定义主源不应自动回退公网 Gitee，实际 %q", got)
+	}
+	if got := resolveUpdateFallback("https://mirror.example.com/api", "https://backup.example.com/"); got != "https://backup.example.com" {
+		t.Fatalf("显式备用源应去尾斜杠保留，实际 %q", got)
+	}
+}

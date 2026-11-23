@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -30,13 +31,16 @@ type upgradeResult struct {
 }
 
 // sendAgentUpgrade 向一台在线 agent 下发升级指令。
+//
+// fallbackURL 由控制端按官方 GitHub/Gitee 镜像自动推导；自定义地址不猜。
 func (a *API) sendAgentUpgrade(ctx context.Context, serverID, version, rawURL, sha string) error {
 	conn, ok := a.hub.Get(serverID)
 	if !ok {
 		return fmt.Errorf("该服务器的 agent 未在线")
 	}
 	payload, err := json.Marshal(protocol.AgentUpgrade{
-		Version: version, URL: rawURL, SHA256: sha, Restart: true,
+		Version: version, URL: rawURL, FallbackURL: alternateAgentUpgradeURL(rawURL),
+		SHA256: sha, Restart: true,
 	})
 	if err != nil {
 		return fmt.Errorf("序列化升级指令: %w", err)
@@ -191,4 +195,30 @@ func (a *API) authorizeUpgradeFailure(w http.ResponseWriter, r *http.Request, se
 		return
 	}
 	a.writeRemoteError(w, r, err, "下发升级指令")
+}
+
+// alternateAgentUpgradeURL 为官方仓库的 agent 归档推导另一镜像源地址：
+// GitHub → Gitee、Gitee → GitHub。自定义镜像/非法 URL 返回空串，不做猜测。
+func alternateAgentUpgradeURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return ""
+	}
+	switch u.Host {
+	case "github.com":
+		const prefix = "/maliang/leadstack/releases/download/"
+		if strings.HasPrefix(u.Path, prefix) {
+			u.Host = "gitee.com"
+			u.Path = "/maliang47/leadstack/releases/download/" + strings.TrimPrefix(u.Path, prefix)
+			return u.String()
+		}
+	case "gitee.com":
+		const prefix = "/maliang47/leadstack/releases/download/"
+		if strings.HasPrefix(u.Path, prefix) {
+			u.Host = "github.com"
+			u.Path = "/maliang/leadstack/releases/download/" + strings.TrimPrefix(u.Path, prefix)
+			return u.String()
+		}
+	}
+	return ""
 }

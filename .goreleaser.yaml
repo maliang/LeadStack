@@ -139,8 +139,16 @@ release:
       | sudo sh -s -- --port 8080
     ```
 
+    Gitee 镜像（国内网络可直接使用）：
+
+    ```sh
+    curl -fsSL https://gitee.com/maliang47/leadstack/raw/v{{ .Version }}/deploy/install-control.sh \
+      | sudo sh -s -- --port 8080 --source gitee
+    ```
+
     > 自动完成下载 / sha256 校验 / 安装 / 注册服务（Linux systemd、macOS launchd），
     > 端口写进 `/etc/leadstack/leadstack.env`；重复执行即升级，`--uninstall` 干净卸载。
+    > 默认 `--source auto`：GitHub 不可达时自动回退 Gitee；也可显式 `--source gitee`。
     > 离线环境用 `--from-file ./leadstack`。
 
     ## 安装 agent
@@ -148,6 +156,13 @@ release:
     ```sh
     curl -fsSL https://raw.githubusercontent.com/maliang/LeadStack/v{{ .Version }}/deploy/install.sh \
       | sh -s -- --server <控制端地址> --token <接入令牌>
+    ```
+
+    Gitee 镜像：
+
+    ```sh
+    curl -fsSL https://gitee.com/maliang47/leadstack/raw/v{{ .Version }}/deploy/install.sh \
+      | sh -s -- --server <控制端地址> --token <接入令牌> --source gitee
     ```
 
     > 脚本也可从归档内取得（`deploy/install.sh`）；离线环境请按平台下载对应归档

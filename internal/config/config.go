@@ -74,8 +74,10 @@ const (
 	EnvDefaultSSHPort = "LEADSTACK_DEFAULT_SSH_PORT"
 	// EnvUpdateRepo 是检查更新的 GitHub 仓库（owner/repo）。
 	EnvUpdateRepo = "LEADSTACK_UPDATE_REPO"
-	// EnvUpdateAPIBase 是 GitHub API 基址（测试/镜像可改为本地 mock）。
+	// EnvUpdateAPIBase 是主更新源 API 基址（测试/镜像可改为本地 mock）。
 	EnvUpdateAPIBase = "LEADSTACK_UPDATE_API_BASE"
+	// EnvUpdateAPIBaseFallback 是主更新源失败时自动尝试的备用 API 基址（默认 Gitee）。
+	EnvUpdateAPIBaseFallback = "LEADSTACK_UPDATE_API_BASE_FALLBACK"
 	// EnvUpdateCheckInterval 是自动检查更新的间隔（0 表示只在手动刷新时检查）。
 	EnvUpdateCheckInterval = "LEADSTACK_UPDATE_CHECK_INTERVAL"
 	// EnvUpgradeEnabled 是否允许控制台自升级。
@@ -92,6 +94,8 @@ const (
 	DefaultUpdateRepo = "maliang/leadstack"
 	// DefaultUpdateAPIBase 是默认的 GitHub API 基址。
 	DefaultUpdateAPIBase = "https://api.github.com"
+	// DefaultUpdateAPIBaseGitee 是 Gitee API 基址（GitHub 不可达时自动回退）。
+	DefaultUpdateAPIBaseGitee = "https://gitee.com/api/v5"
 	// DefaultUpdateCheckInterval 是默认的自动检查间隔。
 	DefaultUpdateCheckInterval = 6 * time.Hour
 	// DefaultUpgradeRollbackTimeout 是默认的 watchdog 回退超时。
@@ -225,8 +229,10 @@ type Config struct {
 	FileMaxMB int
 	// UpdateRepo 是检查更新的 GitHub 仓库（owner/repo）。
 	UpdateRepo string
-	// UpdateAPIBase 是 GitHub API 基址。
+	// UpdateAPIBase 是主更新源 API 基址。
 	UpdateAPIBase string
+	// UpdateAPIBaseFallback 是主更新源失败时自动回退的 API 基址；空串表示不回退。
+	UpdateAPIBaseFallback string
 	// UpdateCheckInterval 是自动检查间隔（0 = 只在手动刷新时检查）。
 	UpdateCheckInterval time.Duration
 	// UpgradeEnabled 是否允许控制台自升级。
@@ -274,7 +280,8 @@ func Load(version string, args []string) (*Config, error) {
 	cronTick := fs.Duration("cron-tick", defaultDurationOr(EnvCronTick, DefaultCronTick), "定时任务检查周期，如 1m（环境变量 "+EnvCronTick+"）")
 	fileMaxMB := fs.Int("file-max-mb", envIntOr(EnvFileMaxMB, DefaultFileMaxMB), "文件上传单文件上限 MB（环境变量 "+EnvFileMaxMB+"）")
 	updateRepo := fs.String("update-repo", envOr(EnvUpdateRepo, DefaultUpdateRepo), "检查更新的 GitHub 仓库 owner/repo（环境变量 "+EnvUpdateRepo+"）")
-	updateAPIBase := fs.String("update-api-base", envOr(EnvUpdateAPIBase, DefaultUpdateAPIBase), "GitHub API 基址（环境变量 "+EnvUpdateAPIBase+"）")
+	updateAPIBase := fs.String("update-api-base", envOr(EnvUpdateAPIBase, DefaultUpdateAPIBase), "主更新源 API 基址（环境变量 "+EnvUpdateAPIBase+"）")
+	updateAPIBaseFallback := fs.String("update-api-base-fallback", envOr(EnvUpdateAPIBaseFallback, ""), "主更新源失败时自动回退的 API 基址（环境变量 "+EnvUpdateAPIBaseFallback+"）")
 	updateInterval := fs.Duration("update-check-interval", defaultDurationOr(EnvUpdateCheckInterval, DefaultUpdateCheckInterval), "自动检查更新间隔，0=仅手动（环境变量 "+EnvUpdateCheckInterval+"）")
 	upgradeEnabled := fs.Bool("upgrade-enabled", envBoolOr(EnvUpgradeEnabled, true), "是否允许控制台自升级（环境变量 "+EnvUpgradeEnabled+"）")
 	upgradeTimeout := fs.Duration("upgrade-rollback-timeout", defaultDurationOr(EnvUpgradeRollbackTimeout, DefaultUpgradeRollbackTimeout), "升级 watchdog 回退超时（环境变量 "+EnvUpgradeRollbackTimeout+"）")
@@ -328,6 +335,7 @@ func Load(version string, args []string) (*Config, error) {
 		FileMaxMB:              *fileMaxMB,
 		UpdateRepo:             strings.TrimSpace(*updateRepo),
 		UpdateAPIBase:          strings.TrimSuffix(strings.TrimSpace(*updateAPIBase), "/"),
+		UpdateAPIBaseFallback:  resolveUpdateFallback(*updateAPIBase, *updateAPIBaseFallback),
 		UpdateCheckInterval:    *updateInterval,
 		UpgradeEnabled:         *upgradeEnabled,
 		UpgradeRollbackTimeout: *upgradeTimeout,
@@ -425,6 +433,10 @@ func Load(version string, args []string) (*Config, error) {
 	}
 	if !strings.HasPrefix(cfg.UpdateAPIBase, "http://") && !strings.HasPrefix(cfg.UpdateAPIBase, "https://") {
 		return nil, errors.New("配置错误: update-api-base 必须以 http:// 或 https:// 开头")
+	}
+	if cfg.UpdateAPIBaseFallback != "" &&
+		!strings.HasPrefix(cfg.UpdateAPIBaseFallback, "http://") && !strings.HasPrefix(cfg.UpdateAPIBaseFallback, "https://") {
+		return nil, errors.New("配置错误: update-api-base-fallback 必须以 http:// 或 https:// 开头")
 	}
 
 	if raw := strings.TrimSpace(*masterKeyHex); raw != "" {
@@ -656,4 +668,18 @@ func ParseTrustedProxies(raw string) ([]*net.IPNet, error) {
 		out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
 	}
 	return out, nil
+}
+
+// resolveUpdateFallback 决定备用更新源：
+//   - 显式设置了 LEADSTACK_UPDATE_API_BASE_FALLBACK / flag：原样使用；
+//   - 主更新源仍是默认 GitHub：自动回退到 Gitee；
+//   - 主更新源被改到自建镜像 / 测试 mock：不自动回退（避免把 mock 失败悄悄送到公网）。
+func resolveUpdateFallback(primary, fallback string) string {
+	if v := strings.TrimSuffix(strings.TrimSpace(fallback), "/"); v != "" {
+		return v
+	}
+	if strings.TrimSuffix(strings.TrimSpace(primary), "/") == DefaultUpdateAPIBase {
+		return DefaultUpdateAPIBaseGitee
+	}
+	return ""
 }

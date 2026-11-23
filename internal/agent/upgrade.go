@@ -211,7 +211,7 @@ func (u *upgrader) perform(ctx context.Context, currentVersion string, spec prot
 	// 裸二进制会被 rename 走，归档与失败路径则由这里清理（not exist 忽略）。
 	defer func() { _ = os.Remove(pkgPath) }()
 
-	if err := u.download(ctx, spec.URL, sha, pkg); err != nil {
+	if err := u.downloadWithFallback(ctx, spec.URL, spec.FallbackURL, sha, pkg); err != nil {
 		_ = pkg.Close()
 		return nil, err
 	}
@@ -243,6 +243,39 @@ func (u *upgrader) perform(ctx context.Context, currentVersion string, spec prot
 		return nil, err
 	}
 	return &upgradeOutcome{ExePath: exePath, OldPath: oldPath}, nil
+}
+
+// downloadWithFallback 先试主地址，失败后试备用镜像。
+//
+// 每次尝试前 truncate+seek，避免主地址留下的半截数据混进备用源的计算。
+// 备用地址非法只记 warning，不阻止主地址继续（老控制端下发的自定义地址可能不匹配）。
+func (u *upgrader) downloadWithFallback(ctx context.Context, primary, fallback, wantSHA string, dst *os.File) error {
+	urls := []string{primary}
+	if raw := strings.TrimSpace(fallback); raw != "" && raw != primary {
+		if err := validateUpgradeURL(raw); err != nil {
+			u.log.Warn("升级备用地址非法，忽略", "url", raw, "err", err)
+		} else {
+			urls = append(urls, raw)
+		}
+	}
+	var errs []string
+	for _, rawURL := range urls {
+		if err := dst.Truncate(0); err != nil {
+			return fmt.Errorf("重置临时文件失败: %w", err)
+		}
+		if _, err := dst.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("重置临时文件偏移失败: %w", err)
+		}
+		if err := u.download(ctx, rawURL, wantSHA, dst); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", rawURL, err))
+			if len(urls) > 1 {
+				u.log.Warn("升级包下载失败，尝试备用镜像", "url", rawURL, "err", err)
+			}
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("下载升级包失败（已尝试 %d 个源）：%s", len(urls), strings.Join(errs, "；"))
 }
 
 // download 把升级包下载到 dst，同时计算并校验 sha256（hex 小写）。

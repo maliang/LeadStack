@@ -33,6 +33,7 @@
 #
 # 环境变量：LEADSTACK_VERSION / LEADSTACK_INSTALL_BASE_URL / LEADSTACK_CONTROL_BINARY
 #           LEADSTACK_RELEASE_API（解析 latest 的地址，镜像/自测用）
+#           LEADSTACK_INSTALL_SOURCE=auto|github|gitee（auto 默认：GitHub 失败自动回退 Gitee）
 #
 # 特性：幂等（重复执行=升级，先停服务再换二进制）、可卸载、端口自定义、
 #       下载后强制 sha256 校验、失败信息明确、使用 sudo 前先检测（绝不静默 sudo）、
@@ -43,8 +44,11 @@ set -eu
 BIN_NAME="leadstack"
 SERVICE_NAME="leadstack"
 REPO="maliang/leadstack"
+GITEE_REPO="maliang47/leadstack"
 DEFAULT_BASE_URL="https://github.com/${REPO}/releases/download"
 DEFAULT_RELEASE_API="https://api.github.com/repos/${REPO}/releases/latest"
+DEFAULT_GITEE_BASE_URL="https://gitee.com/${GITEE_REPO}/releases/download"
+DEFAULT_GITEE_RELEASE_API="https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/latest"
 DEFAULT_INSTALL_DIR="/usr/local/bin"
 LAUNCHD_LABEL="com.leadstack.control"
 # 数据库文件名（internal/config/config.go 的 DefaultDBFileName），用于判断「是否已有安装」
@@ -119,7 +123,9 @@ LeadStack 控制端一键安装
 其他：
   --data-dir DIR      数据目录
   --version V         版本号，默认 latest
-  --base-url URL      发布包下载前缀，默认 GitHub Releases
+  --source auto|github|gitee  更新源选择；auto 默认 GitHub，不可达时自动回退 Gitee
+  --base-url URL      发布包下载前缀（显式指定时只使用该源）
+  --release-api URL   解析 latest 的 API 地址（镜像 / 自测用）
   --from-file PATH    使用本地二进制安装（离线 / 自测）
                       （不指定时：脚本同目录若有 leadstack 或
                         leadstack_<版本>_<平台>.tar.gz，会自动跳过下载）
@@ -138,9 +144,10 @@ LeadStack 控制端一键安装
 
 环境变量：
   LEADSTACK_CONTROL_BINARY   等价于 --from-file
+  LEADSTACK_INSTALL_SOURCE   等价于 --source
   LEADSTACK_INSTALL_BASE_URL 等价于 --base-url
+  LEADSTACK_RELEASE_API      等价于 --release-api
   LEADSTACK_VERSION          等价于 --version
-  LEADSTACK_RELEASE_API      解析 latest 的地址（镜像 / 自测用）
 EOF
 }
 
@@ -162,8 +169,12 @@ if [ $# -gt 0 ]; then
 fi
 
 VERSION="${LEADSTACK_VERSION:-latest}"
-BASE_URL="${LEADSTACK_INSTALL_BASE_URL:-$DEFAULT_BASE_URL}"
-RELEASE_API="${LEADSTACK_RELEASE_API:-$DEFAULT_RELEASE_API}"
+SOURCE="${LEADSTACK_INSTALL_SOURCE:-auto}"
+BASE_URL="${LEADSTACK_INSTALL_BASE_URL:-}"
+RELEASE_API="${LEADSTACK_RELEASE_API:-}"
+BASE_URLS=""
+RELEASE_APIS=""
+SOURCE_USED=""
 FROM_FILE="${LEADSTACK_CONTROL_BINARY:-}"
 INSTALL_DIR="$DEFAULT_INSTALL_DIR"
 ENV_DIR_OVERRIDE=""
@@ -198,6 +209,8 @@ while [ $# -gt 0 ]; do
 		--data-dir)        need_value "$_opt" $(($# - 1)); DATA_DIR=$2; shift 2 ;;
 		--version)         need_value "$_opt" $(($# - 1)); VERSION=$2; shift 2 ;;
 		--base-url)        need_value "$_opt" $(($# - 1)); BASE_URL=$2; shift 2 ;;
+		--source)          need_value "$_opt" $(($# - 1)); SOURCE=$2; shift 2 ;;
+		--release-api)     need_value "$_opt" $(($# - 1)); RELEASE_API=$2; shift 2 ;;
 		--from-file)       need_value "$_opt" $(($# - 1)); FROM_FILE=$2; shift 2 ;;
 		--admin-password)  need_value "$_opt" $(($# - 1)); ADMIN_PASSWORD=$2; shift 2 ;;
 		--public-url)      need_value "$_opt" $(($# - 1)); PUBLIC_URL=$2; shift 2 ;;
@@ -215,6 +228,37 @@ while [ $# -gt 0 ]; do
 		*)                 die "未知选项：${_opt}（用 --help 查看用法）" ;;
 	esac
 done
+
+# 更新源列表：显式 --base-url / --release-api 优先；否则按 --source 决定。
+# auto：GitHub 在前、Gitee 兜底（GitHub 不可达时自动切换，Gitee 侧是同一 tag 的镜像）。
+build_sources() {
+	SOURCE=$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')
+	case "$SOURCE" in
+		auto|github|gitee) ;;
+		*) die "--source 只能是 auto|github|gitee（当前：${SOURCE}）" ;;
+	esac
+	BASE_URLS=""
+	RELEASE_APIS=""
+	if [ -n "$BASE_URL" ]; then
+		BASE_URLS="$BASE_URL"
+	else
+		case "$SOURCE" in
+			gitee) BASE_URLS="$DEFAULT_GITEE_BASE_URL" ;;
+			github) BASE_URLS="$DEFAULT_BASE_URL" ;;
+			auto) BASE_URLS="$DEFAULT_BASE_URL $DEFAULT_GITEE_BASE_URL" ;;
+		esac
+	fi
+	if [ -n "$RELEASE_API" ]; then
+		RELEASE_APIS="$RELEASE_API"
+	else
+		case "$SOURCE" in
+			gitee) RELEASE_APIS="$DEFAULT_GITEE_RELEASE_API" ;;
+			github) RELEASE_APIS="$DEFAULT_RELEASE_API" ;;
+			auto) RELEASE_APIS="$DEFAULT_RELEASE_API $DEFAULT_GITEE_RELEASE_API" ;;
+		esac
+	fi
+}
+build_sources
 
 # ---------------------------------------------------------------------------
 # 平台检测
@@ -492,18 +536,45 @@ download_optional() {
 
 download_stdout() {
 	case "$DOWNLOAD_TOOL" in
-		curl) curl -fsSL --connect-timeout 15 "$1" ;;
-		wget) wget -q -O - "$1" ;;
+		curl) curl -fsSL --connect-timeout 10 --max-time 30 "$1" ;;
+		wget) wget -q -T 30 -O - "$1" ;;
+	esac
+}
+
+# 哪一个 API 解析成功，下载就优先用哪个源的资产（仍保留另一源兜底）。
+reorder_sources_after_probe() {
+	[ "$SOURCE" = "auto" ] || return 0
+	[ -z "$BASE_URL" ] || return 0
+	case "$SOURCE_USED" in
+		gitee) BASE_URLS="$DEFAULT_GITEE_BASE_URL $DEFAULT_BASE_URL" ;;
+		github) BASE_URLS="$DEFAULT_BASE_URL $DEFAULT_GITEE_BASE_URL" ;;
 	esac
 }
 
 resolve_latest_version() {
-	log "解析最新版本号：${RELEASE_API}"
-	_body=$(download_stdout "$RELEASE_API") || die "无法访问 ${RELEASE_API} 解析最新版本；请显式指定 --version <x.y.z>"
-	_tag=$(printf '%s' "$_body" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	[ -n "$_tag" ] || die "无法从 ${RELEASE_API} 解析 tag_name；请显式指定 --version <x.y.z>"
-	VERSION=${_tag#v}
-	log "最新版本：${VERSION}"
+	_err=""
+	for _api in $RELEASE_APIS; do
+		log "解析最新版本号：${_api}"
+		if ! _body=$(download_stdout "$_api"); then
+			_err="无法访问 ${_api}"
+			warn "${_err}，尝试下一个更新源"
+			continue
+		fi
+		_tag=$(printf '%s' "$_body" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		if [ -z "$_tag" ]; then
+			_err="无法从 ${_api} 解析 tag_name"
+			warn "${_err}，尝试下一个更新源"
+			continue
+		fi
+		VERSION=${_tag#v}
+		case "$_api" in
+			*gitee.com*) SOURCE_USED="gitee" ;;
+			*) SOURCE_USED="github" ;;
+		esac
+		log "最新版本：${VERSION}（来源：${_api}）"
+		return 0
+	done
+	die "所有更新源都不可用（${_err:-无可用 API}）；请显式指定 --version <x.y.z>"
 }
 
 # ---------------------------------------------------------------------------
@@ -646,7 +717,7 @@ fetch_binary() {
 
 	if [ "$VERSION" = "latest" ]; then
 		if [ "$DRY_RUN" -eq 1 ]; then
-			log "[dry-run] 未指定 --version：将调用 ${RELEASE_API} 解析最新 release tag 后再下载"
+			log "[dry-run] 未指定 --version：将依次尝试 ${RELEASE_APIS} 解析最新 release tag"
 			VERSION_LABEL="<最新 tag>"
 		else
 			resolve_latest_version
@@ -657,20 +728,30 @@ fetch_binary() {
 	fi
 
 	ARCHIVE="${BIN_NAME}_${VERSION_LABEL}_${OS}_${ARCH}.tar.gz"
-	ARCHIVE_URL="${BASE_URL}/v${VERSION_LABEL}/${ARCHIVE}"
 
 	if [ "$DRY_RUN" -eq 1 ]; then
-		log "[dry-run] 下载 ${ARCHIVE_URL}"
-		log "[dry-run] 校验 ${BASE_URL}/v${VERSION_LABEL}/checksums.txt（存在时校验 sha256）"
+		for _base in $BASE_URLS; do
+			log "[dry-run] 下载 ${_base}/v${VERSION_LABEL}/${ARCHIVE}"
+		done
+		log "[dry-run] 校验 checksums.txt（同源存在时校验 sha256）"
 		log "[dry-run] 解压 ${ARCHIVE} 并取其中的 ${BIN_NAME}"
 		return 0
 	fi
 
 	ensure_tmpdir_dl
 
-	log "地址：${ARCHIVE_URL}"
-	download_retry "$ARCHIVE_URL" "${TMPDIR_DL}/${ARCHIVE}" || die "下载控制端二进制失败
-  请求地址：${ARCHIVE_URL}
+	_dl_ok=0
+	for _base in $BASE_URLS; do
+		ARCHIVE_URL="${_base}/v${VERSION_LABEL}/${ARCHIVE}"
+		log "地址：${ARCHIVE_URL}"
+		if download_retry "$ARCHIVE_URL" "${TMPDIR_DL}/${ARCHIVE}"; then
+			_dl_ok=1
+			break
+		fi
+		warn "更新源不可用：${_base}，尝试下一个"
+	done
+	[ "$_dl_ok" -eq 1 ] || die "下载控制端二进制失败
+  已尝试：${BASE_URLS}
   目标平台：${OS}/${ARCH}    版本：${VERSION}
   请依次确认：
     1) 发布地址是否可达（代理、镜像可用 --base-url <前缀> 指定）
@@ -704,10 +785,14 @@ verify_and_extract() {
 		else
 			warn "未找到 checksums.txt，跳过校验（同目录没有 checksums.txt，无法核对 ${ARCHIVE} 的 sha256）"
 		fi
-	elif download_optional "${BASE_URL}/v${VERSION_LABEL}/checksums.txt" "${TMPDIR_DL}/checksums.txt"; then
-		_sum_file="${TMPDIR_DL}/checksums.txt"
 	else
-		warn "未找到 checksums.txt，跳过 sha256 校验"
+		for _base in $BASE_URLS; do
+			if download_optional "${_base}/v${VERSION_LABEL}/checksums.txt" "${TMPDIR_DL}/checksums.txt"; then
+				_sum_file="${TMPDIR_DL}/checksums.txt"
+				break
+			fi
+		done
+		[ -n "$_sum_file" ] || warn "所有更新源都没有 checksums.txt，跳过 sha256 校验"
 	fi
 	if [ -n "$_sum_file" ]; then
 		_want=$(awk -v f="$ARCHIVE" '$2 == f || $2 == "*"f {print $1}' "$_sum_file" | head -n 1)
@@ -1120,6 +1205,8 @@ install_local_agent() {
 		_agent_args="${_agent_args} --from-file ${_agent_bin}"
 	else
 		[ -n "$AGENT_BASE_URL" ] && _agent_args="${_agent_args} --base-url ${AGENT_BASE_URL}"
+		# 控制端强制指定源时，agent 安装沿用同一选择；auto 则让 agent 脚本自行回退。
+		[ "$SOURCE" != "auto" ] && _agent_args="${_agent_args} --source ${SOURCE}"
 		# 控制端版本已知且像 semver 时锁定同一版本，避免 agent 脚本再去 GitHub 解析 latest
 		# （受限网络里这一步会直接失败，而控制端本来就是从这个版本装起来的）
 		_cver=$(json_str "$(api_get "/api/v1/system/info" "$_jwt")" version)

@@ -233,7 +233,9 @@ const TypeAgentUpgrade = "agent.upgrade"
 type AgentUpgrade struct {
 	Version string `json:"version"`
 	URL     string `json:"url"`
-	SHA256  string `json:"sha256"`
+	// FallbackURL 是另一镜像源（GitHub/Gitee）的同名归档；主地址下载失败时自动重试。
+	FallbackURL string `json:"fallback_url,omitempty"`
+	SHA256      string `json:"sha256"`
 	// Restart 为 true 时 agent 在替换完成后重启自身（或交由服务管理器重启）。
 	Restart bool `json:"restart"`
 }

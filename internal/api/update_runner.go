@@ -32,9 +32,10 @@ func NewUpgradeRunner(cfg *config.Config, version string, logger *slog.Logger) (
 		return nil, err
 	}
 	a := &API{
-		cfg:      cfg,
-		backups:  backupService,
-		updates:  newUpdateChecker(cfg.UpdateRepo, cfg.UpdateAPIBase, version, cfg.UpdateCheckInterval, logger),
+		cfg:     cfg,
+		backups: backupService,
+		updates: newUpdateChecker(cfg.UpdateRepo, cfg.UpdateAPIBase, version, cfg.UpdateCheckInterval,
+			logger, cfg.UpdateAPIBaseFallback),
 		upgrader: newUpgrader(cfg),
 		logger:   logger,
 		version:  version,

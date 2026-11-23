@@ -89,6 +89,9 @@ curl -fsSL https://raw.githubusercontent.com/maliang/leadstack/master/deploy/ins
 脚本会：下载并校验发布包 → 装到 `/usr/local/bin/leadstack` → 写 `0600` 环境文件 `/etc/leadstack/leadstack.env`
 → 注册服务（Linux systemd / macOS launchd）→ **顺手把本机 agent 也装好并纳管** → 打印访问地址与初始密码。
 
+默认 `--source auto`：先走 GitHub Releases，不可达时自动回退 Gitee 镜像（`gitee.com/maliang47/leadstack`）；
+国内网络也可以直接 `--source gitee` 强制使用 Gitee。脚本与系统升级都会自动判断，不需要手工改地址。
+
 装完控制台里已有一台「本机」在线，不用再去点「接入本机」。不想被监控就加 `--no-local-agent`。
 **重复执行同一条命令就是升级**（先停服务再换二进制）；`--uninstall` 卸载（默认保留数据）。
 
@@ -112,10 +115,13 @@ docker logs leadstack | grep 初始密码     # 首次启动打印，仅一次
 
 `/data` 是持久化卷（数据库、制品、备份、`master.key`），**务必保留**。只绑本机 8080；对外请改 ports 并自加 TLS 反代。
 
-### 方式 4：GitHub 无法访问时（镜像 / 离线安装升级）
+### 方式 4：GitHub / Gitee 访问异常时（镜像 / 离线安装升级）
 
-安装脚本默认从 `https://github.com/maliang/leadstack/releases/download` 下载，不写 `--version` 时还会请求
-`https://api.github.com/repos/maliang/leadstack/releases/latest` 解析最新版本——两步都依赖 GitHub。走不通时二选一：
+安装脚本默认 `--source auto`：先走 GitHub Releases；GitHub API 或下载地址不可达时，自动回退到 Gitee 镜像
+（`https://gitee.com/maliang47/leadstack/releases/download` 与对应 Gitee API）。也可用
+`--source gitee` 直接强制 Gitee、`--source github` 强制 GitHub。
+
+如果两个源都走不通，再二选一：
 
 **A. 走镜像**：把下载前缀指到镜像的 release 目录，并**显式给版本号**（跳过 GitHub API 解析）：
 
@@ -604,7 +610,7 @@ leadstack network --show
 
 ## 升级与回滚
 
-发布物在 GitHub Releases（每个 tag 产出 5 平台 × 2 二进制 + `checksums.txt`；到不了 GitHub 见「快速开始 → 方式 4」）。地址与各平台实测结论见
+发布物同步在 GitHub Releases 与 Gitee 发行版（每个 tag 产出 5 平台 × 2 二进制 + `checksums.txt`；安装/升级脚本默认自动回退，见「快速开始 → 方式 4」）。地址与各平台实测结论见
 [升级链路验证报告](docs/UPGRADE-VERIFY.md)，完整 runbook 见 [UPGRADE.md](docs/UPGRADE.md)。
 
 **控制端自升级（控制台已接入）**：后端实现
@@ -655,8 +661,10 @@ sudo systemctl start leadstack
 sha256 校验的是**下载到的包本体**，解包取 `leadstack-agent` 后再 A/B 重命名替换；包坏、缺可执行文件、校验不匹配都保留旧版不断连
 （契约见 [架构契约 §44](docs/ARCHITECTURE.md)）。
 
-**GitHub 不通时怎么升级**：控制端自升级要访问 GitHub Releases。网络到不了 GitHub 时，按「快速开始 → 方式 4」
-用镜像前缀或离线二进制（`--from-file` / `--agent-from-file`）换，命令与装新机完全一致——重复执行安装命令就是升级。
+**GitHub 不通时怎么升级**：控制端「检查更新」默认先请求 GitHub API，失败后自动回退 Gitee API 与 Gitee 资产地址；
+两个源都不可达时才报错并保留上次结果。也可用 `LEADSTACK_UPDATE_API_BASE` / `LEADSTACK_UPDATE_API_BASE_FALLBACK`
+指定主源与备用源，或按「快速开始 → 方式 4」用镜像前缀 / 离线二进制（`--from-file` / `--agent-from-file`）升级——
+重复执行安装命令就是升级。
 
 > **发版前必跑 `make verify-upgrade`**（29 项）：在本地 mock GitHub Releases 上真走
 > 「检查更新 → 备份失败中止 → 换二进制 → 新版本崩溃 → watchdog 回退」。它不在 `make test-e2e` 主干闸门里
@@ -717,6 +725,8 @@ leadstack restore --file /tmp/leadstack.lsbak --data-dir ./data # 离线恢复�
 | `LEADSTACK_LOGIN_IP_LIMIT` | `20` | 同 IP 窗口内登录请求上限（0=关闭） |
 | `LEADSTACK_LOGIN_IP_WINDOW` | `1m` | IP 限流窗口 |
 | `LEADSTACK_TRUSTED_PROXIES` | 空（不信任任何代理头） | 可信反代 CIDR/IP，逗号分隔 |
+| `LEADSTACK_UPDATE_API_BASE` | `https://api.github.com` | 主更新源 API 基址（测试/镜像用） |
+| `LEADSTACK_UPDATE_API_BASE_FALLBACK` | `https://gitee.com/api/v5` | 主源不可达时自动回退的备用更新源；设为空串可关闭 |
 | `LEADSTACK_UPGRADE_ENABLED` | `true` | 控制台自升级开关（`false` 时 apply 返回 403） |
 | `LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT` | `120s` | 独立 watchdog 等新版本确认成功的上限，超时自动回退 |
 | `LEADSTACK_UPGRADE_STALL_TIMEOUT` | `10m` | 单个升级阶段停滞多久判失败（`10s`–`2h`，非法值启动即报配置错误），挡住「升级永远转圈」 |

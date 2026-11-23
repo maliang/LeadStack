@@ -378,6 +378,8 @@ export interface UpdateAsset {
   size_bytes: number
   /** 资产文件名（控制端产物可能不带；agent 产物一般带，如 leadstack-agent_0.1.3_linux_amd64.tar.gz） */
   name?: string
+  /** 另一镜像源的同名资产（GitHub ↔ Gitee）；控制端/agent 下载失败时自动重试 */
+  fallback_url?: string
   /**
    * 资产 sha256。控制端自升级产物（assets）通常不返回；
    * agent 升级产物（agent_assets）必带 —— T-14 的升级弹窗要用它预填 sha256 输入框。
@@ -2355,6 +2357,7 @@ function normalizeUpdateAsset(item: unknown): UpdateAsset {
     url: toText(asset.url) ?? '',
     size_bytes: toNumber(asset.size_bytes) ?? 0,
     name: toText(asset.name) ?? undefined,
+    fallback_url: toText(asset.fallback_url) ?? undefined,
     sha256: toText(asset.sha256) ?? undefined,
   }
 }

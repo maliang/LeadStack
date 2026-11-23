@@ -1374,7 +1374,10 @@ GET /servers/{id}/ports                                            -> {ports:[{p
 
 ## 44. Agent 自升级
 
-- 协议新增（`pkg/protocol`）：`agent.upgrade` → `{version,url,sha256,restart}`。
+- 协议新增（`pkg/protocol`）：`agent.upgrade` → `{version,url,fallback_url,sha256,restart}`。
+  `fallback_url` 由控制端按官方 GitHub/Gitee 镜像自动推导（GitHub ↔ Gitee 同名归档）；
+  主地址下载失败时 agent 自动换备用源重试，每次重试前 truncate 临时文件，避免半截响应污染 sha256。
+  旧 agent 会忽略该字段，行为不变。
 - 升级包形态（按文件魔数识别，`internal/agent/upgrade.go`）：`tar.gz`（`1f 8b`）、`zip`（`PK`，Windows 发布包）、裸二进制。
   `sha256` 始终校验**下载到的归档本体**；解包时取 basename 为 `leadstack-agent` / `leadstack-agent.exe` 的常规文件（允许目录前缀），
   再走与裸二进制相同的替换流程（旧格式直传继续可用）。
@@ -1389,9 +1392,11 @@ GET /servers/{id}/ports                                            -> {ports:[{p
   Linux 上只有**原地写运行中的可执行文件**会中招（`cp` 或任何 open-for-write），GNU `install`（`install -m 0755`）因为先 unlink 再写而成功；
   macOS 上 `cp` 与 `install` 都成功（BSD `install` 同样是 unlink 后新建，路径 inode 会变）。
   真正要防的是：**文件换掉了、进程还在跑旧映像**，不重启不生效——停服务换来的是「磁盘上的文件」和「进程里的版本」一致；`--dry-run` 打印这四步但不落盘。
-- 离线 / 镜像：`--base-url`（或 `LEADSTACK_INSTALL_BASE_URL`）改下载前缀；`--from-file`（或 `LEADSTACK_AGENT_BINARY`）用本地裸二进制；
-  控制端脚本装本机 agent 时用 `--agent-from-file`。
+- 在线源自动回退：`--source auto`（默认）先 GitHub、失败后 Gitee；`--source github|gitee` 可强制单源；
+  `--base-url` / `--release-api` 显式指定时只使用该地址，`--from-file`（或 `LEADSTACK_AGENT_BINARY`）用本地裸二进制；
+  控制端脚本装本机 agent 时会把自己的 `--source` 一并传给 agent 安装脚本。
 - `POST /servers/{id}/agent-upgrade {version,url,sha256}`、`POST /agents/upgrade`（批量，按当前版本筛选）。
+  控制端会按官方 GitHub ↔ Gitee 同名归档自动补 `fallback_url`；agent 主地址失败时换备用源，旧 agent 忽略该字段。
 - 审计 `agent.upgrade`；失败保留旧版本并回报原因。
 
 ## 45. 批量导入主机
@@ -1576,7 +1581,8 @@ leadstack network --reset                      # 清除全部网络设置，回�
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `LEADSTACK_UPDATE_REPO` | `maliang/leadstack` | 检查更新的 GitHub 仓库 |
-| `LEADSTACK_UPDATE_API_BASE` | `https://api.github.com` | API 基址（测试/镜像用） |
+| `LEADSTACK_UPDATE_API_BASE` | `https://api.github.com` | 主更新源 API 基址（测试/镜像用） |
+| `LEADSTACK_UPDATE_API_BASE_FALLBACK` | `https://gitee.com/api/v5` | 主源不可达时自动回退的 API 基址；默认仅在主源仍是官方 GitHub 时启用。显式设为空串可关闭回退 |
 | `LEADSTACK_UPDATE_CHECK_INTERVAL` | `6h` | 自动检查间隔（0 = 只在手动刷新时检查） |
 | `LEADSTACK_UPGRADE_ENABLED` | `true` | 是否允许控制台自升级（false 时 apply 返回 403） |
 | `LEADSTACK_UPGRADE_ROLLBACK_TIMEOUT` | `120s` | watchdog 等待新版本确认成功的上限 |
@@ -1585,7 +1591,7 @@ leadstack network --reset                      # 清除全部网络设置，回�
 ### 51.2 检查更新
 
 ```
-GET  /system/update            -> 缓存结果（超过 interval 才真正请求 GitHub）
+GET  /system/update            -> 缓存结果（超过 interval 才真正请求更新源）
 POST /system/update/check      -> 强制刷新（忽略缓存）
 ```
 响应：
@@ -1595,12 +1601,13 @@ POST /system/update/check      -> 强制刷新（忽略缓存）
   "published_at": 1710000000000, "release_url": "https://github.com/…",
   "notes": "…release body 前 4KB…",
   "schema_changed": true,          // 该版本包含数据库迁移（需提示用户）
-  "assets": [{"os":"linux","arch":"amd64","url":"…","size_bytes":123}],
+  "assets": [{"os":"linux","arch":"amd64","url":"…","fallback_url":"…","size_bytes":123}],
+  "agent_assets": [{"os":"linux","arch":"amd64","url":"…","fallback_url":"…","sha256":"…","size_bytes":123}],
   "upgradable": true,              // 当前平台/架构在 assets 中存在
   "checked_at": 1710000000000, "error": ""   // 检查失败时 error 非空且保留旧数据
 }}
 ```
-**实现要求**：GitHub API 失败（离线/限流）**不得影响其它功能**，返回 `error` 并保留上次结果；响应体只取 release notes 前 4KB。
+**实现要求**：GitHub 主源失败（离线/限流）时自动尝试 Gitee 备用源（`https://gitee.com/api/v5`），两者都失败才返回 `error` 并保留上次结果；响应体只取 release notes 前 4KB。Gitee API 不返回 `html_url` / `published_at` / 资产 `size`：`release_url` 按 `https://gitee.com/<owner>/<repo>/releases/tag/<tag>` 推导，`published_at` 回落 `created_at`，`size_bytes` 置 0（不影响下载与 sha256 校验）。
 
 ### 51.3 执行升级
 
@@ -2386,7 +2393,7 @@ LEADSTACK_TRUSTED_PROXIES="127.0.0.1/32,10.0.0.0/8"   # 或 --trusted-proxies
 | `--bind ADDR` | 只换地址部分；地址里带端口直接报错（提示改用 `--port`），避免出现「两个端口谁生效」的歧义 |
 | `--listen ADDR:PORT` | 直接给完整值，优先级最高（`--port`/`--bind` 被忽略） |
 | `--data-dir` / `--install-dir` / `--env-dir` / `--user` | 除 `--data-dir` 外都有平台默认值；`--no-service` 时只落二进制与环境文件 |
-| `--version` / `--base-url` / `--from-file` | 版本默认 `latest`（解析 `LEADSTACK_RELEASE_API` 的 `tag_name`）；`--base-url` 指向镜像；`--from-file` 完全离线 |
+| `--version` / `--source` / `--base-url` / `--release-api` / `--from-file` | 版本默认 `latest`；`--source auto`（默认）GitHub 失败自动回退 Gitee，`github`/`gitee` 强制单源；`--base-url` / `--release-api` 指向镜像；`--from-file` 完全离线 |
 | `--uninstall` / `--purge` | 停服务 → 删单元 → 删二进制 → 删环境文件；**默认保留数据目录**，`--purge` 才删 |
 
 ### 64.3 安全与幂等
