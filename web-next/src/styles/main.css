@@ -1833,6 +1833,11 @@ body.ls-scroll-locked {
   min-width: 0;
 }
 
+.ls-logs__preset {
+  flex: 0 1 15rem;
+  min-width: 0;
+}
+
 .ls-logs__lines {
   flex: 0 0 6.5rem;
 }
@@ -1945,7 +1950,8 @@ body.ls-scroll-locked {
 
 @media (max-width: 639.98px) {
   .ls-logs__path,
-  .ls-logs__grep {
+  .ls-logs__grep,
+  .ls-logs__preset {
     flex-basis: 100%;
   }
 }

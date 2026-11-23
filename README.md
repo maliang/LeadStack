@@ -446,7 +446,7 @@ zip 制品 ≤16MB；v1 只覆盖 static/php，node/SSL/反代仍在面板里配
 | 终端开关 | 默认开启；不需要 Web 终端时设 `LEADSTACK_TERMINAL_ENABLED=false` 或 `--terminal-enabled=false` |
 
 **日常运维**：终端（ssh 走 PTY、agent 走受控通道，尺寸自适应）、文件（SFTP / 受控通道，单文件默认 ≤8 MiB）、
-日志（路径 + 行数 + 关键字）、进程与端口（Linux `ps`/`ss`，macOS `ps -ww -axo`/`lsof`，含 `ss→netstat→lsof` 回退）、
+日志（日志源自动探测 / 路径 + 行数 + 关键字）、进程与端口（Linux `ps`/`ss`，macOS `ps -ww -axo`/`lsof`，含 `ss→netstat→lsof` 回退）、
 定时任务（5 字段 cron，带人话预览，可对一组服务器执行并保留历史）、批量导入。
 
 ---
@@ -863,7 +863,7 @@ make dev               # 开发模式（另开 make web-dev 走前端热更新�
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check      # Docker 构建 + 容器内健康检查 + 备份校验
 node scripts/capture-screenshots.mjs   # 重采 README 截图（需带演示数据的控制端）
-node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3162 校验总数）
+node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3173 校验总数）
 ```
 
 > **内嵌前端 = `web-next/`**：`make build` 先构建 `web-next/dist/`，再由 `make web-embed` 复制到 `internal/webui/dist/`、经 `go:embed` 打进二进制。

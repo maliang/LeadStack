@@ -620,3 +620,44 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+func TestDetectLogSourceFallsBackToJournal(t *testing.T) {
+	runner := &fakeRunner{fn: func(_ context.Context, _, command string) (string, string, int, error) {
+		if strings.Contains(command, "/var/log/syslog") && strings.Contains(command, "journalctl") {
+			return JournalSource + "\n", "", 0, nil
+		}
+		return "", "unexpected command", 1, nil
+	}}
+	src, err := New(runner, "srv", "linux").DetectLogSource(context.Background())
+	if err != nil {
+		t.Fatalf("DetectLogSource: %v", err)
+	}
+	if src != JournalSource {
+		t.Fatalf("应回退 journal，实际 %q", src)
+	}
+}
+
+func TestDetectLogSourceUsesExistingFile(t *testing.T) {
+	runner := &fakeRunner{fn: func(_ context.Context, _, _ string) (string, string, int, error) {
+		return "/var/log/messages\n", "", 0, nil
+	}}
+	src, err := New(runner, "srv", "linux").DetectLogSource(context.Background())
+	if err != nil || src != "/var/log/messages" {
+		t.Fatalf("应选中现有文件，实际 %q / %v", src, err)
+	}
+}
+
+func TestJournalCommandShape(t *testing.T) {
+	cmd, err := JournalCommand(200, "error", 1024)
+	if err != nil {
+		t.Fatalf("JournalCommand: %v", err)
+	}
+	for _, must := range []string{"journalctl -n 200 --no-pager", "grep -E -e 'error'", "head -c 1025"} {
+		if !strings.Contains(cmd, must) {
+			t.Fatalf("journal 命令缺少 %q:\n%s", must, cmd)
+		}
+	}
+	if _, err := JournalCommand(10, "bad\x00grep", 0); err == nil {
+		t.Fatal("grep 含 NUL 应被拒绝")
+	}
+}

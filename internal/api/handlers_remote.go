@@ -79,11 +79,8 @@ func extractOSName(infoJSON string) string {
 // handleServerLogs 处理 GET /api/v1/servers/{id}/logs?path=&lines=&grep=。
 func (a *API) handleServerLogs(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "serverID")
-	remotePath, err := sanitizeRemotePath(r.URL.Query().Get("path"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
-		return
-	}
+	rawPath := strings.TrimSpace(r.URL.Query().Get("path"))
+
 	lines := defaultLogLines
 	if raw := strings.TrimSpace(r.URL.Query().Get("lines")); raw != "" {
 		v, perr := strconv.Atoi(raw)
@@ -99,8 +96,31 @@ func (a *API) handleServerLogs(w http.ResponseWriter, r *http.Request) {
 		a.writeRemoteError(w, r, err, "准备远程执行通道")
 		return
 	}
-	out, truncated, err := client.TailLog(r.Context(), remotePath, lines,
-		strings.TrimSpace(r.URL.Query().Get("grep")), remoteOutputMaxBytes)
+
+	// path 为空或 auto：在目标机现场探测常见日志文件，找不到时回退 journalctl。
+	// 这样默认值不再硬编码 /var/log/syslog（Debian 之外的机器上往往不存在）。
+	remotePath := rawPath
+	if strings.EqualFold(remotePath, remote.JournalSource) {
+		remotePath = remote.JournalSource
+	} else if remotePath == "" || strings.EqualFold(remotePath, "auto") {
+		remotePath, err = client.DetectLogSource(r.Context())
+		if err != nil {
+			a.writeRemoteError(w, r, err, "选择日志源")
+			return
+		}
+	} else if remotePath, err = sanitizeRemotePath(remotePath); err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+		return
+	}
+
+	grep := strings.TrimSpace(r.URL.Query().Get("grep"))
+	var out []string
+	var truncated bool
+	if remotePath == remote.JournalSource {
+		out, truncated, err = client.TailJournal(r.Context(), lines, grep, remoteOutputMaxBytes)
+	} else {
+		out, truncated, err = client.TailLog(r.Context(), remotePath, lines, grep, remoteOutputMaxBytes)
+	}
 	if err != nil {
 		a.writeRemoteError(w, r, err, "读取日志")
 		return

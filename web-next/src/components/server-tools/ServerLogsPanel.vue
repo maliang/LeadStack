@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { api } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
@@ -28,7 +28,9 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
-const path = ref('/var/log/syslog')
+/** 空串 = auto：由控制端在目标机现场探测（常见日志文件 → journalctl）。 */
+const path = ref('')
+const resolvedPath = ref('')
 const lines = ref('200')
 const grep = ref('')
 const auto = ref(false)
@@ -40,22 +42,46 @@ const error = ref<string | null>(null)
 let requests = 0
 let timer: number | null = null
 
+const sourceOptions = computed(() => [
+  { value: '', labelKey: 'logs.sourceAuto' },
+  { value: '/var/log/syslog', labelKey: 'logs.sourceSyslog' },
+  { value: '/var/log/messages', labelKey: 'logs.sourceMessages' },
+  { value: '/var/log/system.log', labelKey: 'logs.sourceSystemLog' },
+  { value: '/var/log/auth.log', labelKey: 'logs.sourceAuth' },
+  { value: 'journal', labelKey: 'logs.sourceJournal' },
+])
+
+const sourceLabel = computed(() => {
+  if (resolvedPath.value === 'journal') return t('logs.resolvedJournal')
+  return resolvedPath.value || path.value || t('logs.sourceAuto')
+})
+
+function selectSource(): void {
+  resolvedPath.value = ''
+  void load()
+}
+
+function useAuto(): void {
+  path.value = ''
+  selectSource()
+}
+
 async function load(): Promise<void> {
   if (!props.allowed) return
   const target = path.value.trim()
-  if (!target) return
   const current = ++requests
   loading.value = true
   error.value = null
   try {
     const result = await api.serverLogs(props.serverId, {
-      path: target,
+      path: target || 'auto',
       lines: Number(lines.value) || 200,
       grep: grep.value.trim() || undefined,
     })
     if (current !== requests) return
     output.value = result.lines
     truncated.value = result.truncated
+    resolvedPath.value = result.path
   } catch (caught) {
     if (current !== requests) return
     error.value = errorMessage(caught, t('logs.loadFailed'))
@@ -87,6 +113,7 @@ watch(
     output.value = []
     truncated.value = false
     error.value = null
+    resolvedPath.value = ''
     void load()
   },
 )
@@ -121,11 +148,20 @@ onBeforeUnmount(() => {
           v-model="path"
           class="ls-input ls-logs__mono"
           type="text"
-          placeholder="/var/log/app.log"
+          :placeholder="t('logs.pathPlaceholder')"
           autocomplete="off"
           spellcheck="false"
+          @input="resolvedPath = ''"
           @keydown.enter="load"
         />
+      </div>
+      <div class="ls-field ls-logs__preset">
+        <label class="ls-field__label" for="server-logs-preset">{{ t('logs.preset') }}</label>
+        <select id="server-logs-preset" class="ls-input" :value="path" @change="path = ($event.target as HTMLSelectElement).value; selectSource()">
+          <option v-for="option in sourceOptions" :key="option.value" :value="option.value">
+            {{ t(option.labelKey) }}
+          </option>
+        </select>
       </div>
       <div class="ls-field ls-logs__lines">
         <label class="ls-field__label" for="server-logs-lines">{{ t('logs.lines') }}</label>
@@ -163,12 +199,16 @@ onBeforeUnmount(() => {
     <div v-if="error" class="ls-notice ls-notice--error" role="alert">
       <p class="ls-notice__title">{{ t('logs.loadFailed') }}</p>
       <p class="ls-notice__text">{{ error }}</p>
+      <p class="ls-notice__text">{{ t('logs.sourceHint') }}</p>
       <button class="ls-notice__action" type="button" @click="load">{{ t('common.retry') }}</button>
+      <button v-if="path !== ''" class="ls-notice__action" type="button" @click="useAuto">
+        {{ t('logs.useAuto') }}
+      </button>
     </div>
 
     <div v-else class="ls-logs__output">
       <div class="ls-logs__meta">
-        <span class="ls-logs__file" :title="path">{{ path }}</span>
+        <span class="ls-logs__file" :title="sourceLabel">{{ sourceLabel }}</span>
         <span class="ls-logs__stats">
           <span v-if="truncated" class="ls-logs__truncated">{{ t('logs.truncated') }}</span>
           <span class="ls-logs__count">{{ t('logs.lineCount', { count: output.length }) }}</span>

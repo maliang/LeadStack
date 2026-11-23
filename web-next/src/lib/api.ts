@@ -1402,6 +1402,8 @@ export interface RemotePort {
 export interface ServerLogsResult {
   lines: string[]
   truncated: boolean
+  /** 实际读取的日志源：绝对路径，或 `journal`（systemd journal）。 */
+  path: string
 }
 
 /* ------------------------------------------------------------------ */
@@ -3982,6 +3984,7 @@ export const api = {
       return {
         lines: extractList(raw, ['lines']).map((line) => String(line)),
         truncated: toBool(record.truncated),
+        path: toText(record.path) ?? '',
       }
     })
   },

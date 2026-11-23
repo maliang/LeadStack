@@ -520,3 +520,104 @@ func snippet(s string) string {
 	}
 	return s
 }
+
+// JournalSource 是「自动选择日志源」时表示 systemd journal 的保留值。
+const JournalSource = "journal"
+
+// commonLogPaths 返回各平台常见的系统日志候选（按优先级）。
+//
+// 这些路径在不同发行版/版本上并不都存在：Debian 系常用 syslog，
+// RHEL 系常用 messages，macOS 用 system.log；因此前端默认走 auto，
+// 由目标机现场探测，而不是把 /var/log/syslog 硬编码成唯一答案。
+func commonLogPaths(osName string) []string {
+	switch normalizeOS(osName) {
+	case "darwin":
+		return []string{"/var/log/system.log", "/var/log/install.log", "/var/log/wifi.log"}
+	case "linux":
+		return []string{
+			"/var/log/syslog", "/var/log/messages", "/var/log/kern.log",
+			"/var/log/auth.log", "/var/log/secure", "/var/log/dmesg",
+		}
+	default:
+		return nil
+	}
+}
+
+// DetectLogSource 在目标机上探测第一个可读的常见日志文件；都不可读时回退 journalctl。
+// 返回绝对路径或 JournalSource；两者都不可用返回错误。
+func (c *Client) DetectLogSource(ctx context.Context) (string, error) {
+	if normalizeOS(c.osName) == "windows" {
+		return "", errors.New("remote: Windows 暂不支持自动选择日志源，请填写绝对路径")
+	}
+	paths := commonLogPaths(c.osName)
+	if len(paths) == 0 {
+		return "", errors.New("remote: 未知系统，无法自动选择日志源")
+	}
+	var b strings.Builder
+	for _, p := range paths {
+		b.WriteString("[ -r " + shQuote(p) + " ] && { printf '%s\\n' " + shQuote(p) + "; exit 0; }; ")
+	}
+	b.WriteString("command -v journalctl >/dev/null 2>&1 && { printf '%s\\n' " + shQuote(JournalSource) + "; exit 0; }; ")
+	b.WriteString("exit 1")
+	stdout, stderr, exitCode, err := c.run(ctx, b.String())
+	if err != nil {
+		return "", err
+	}
+	source := strings.TrimSpace(stdout)
+	if exitCode == 0 && source != "" {
+		return source, nil
+	}
+	msg := strings.TrimSpace(stderr)
+	if msg == "" {
+		msg = "常见日志文件都不可读，且未找到 journalctl"
+	}
+	return "", fmt.Errorf("remote: 自动选择日志源失败: %s", msg)
+}
+
+// JournalCommand 生成读取 systemd journal 末尾 lines 行的命令。
+func JournalCommand(lines int, grep string, maxBytes int) (string, error) {
+	if lines <= 0 {
+		lines = DefaultLogLines
+	}
+	if lines > MaxLogLines {
+		lines = MaxLogLines
+	}
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxLogBytes
+	}
+	if maxBytes > MaxLogBytes {
+		maxBytes = MaxLogBytes
+	}
+	if strings.ContainsRune(grep, 0) {
+		return "", errors.New("remote: grep 关键字不能包含 NUL")
+	}
+	var b strings.Builder
+	b.WriteString("journalctl -n " + strconv.Itoa(lines) + " --no-pager -o short-iso")
+	if strings.TrimSpace(grep) != "" {
+		b.WriteString(" | grep -E -e " + shQuote(grep))
+	}
+	b.WriteString(" | head -c " + strconv.Itoa(maxBytes+1))
+	return b.String(), nil
+}
+
+// TailJournal 读取目标机 systemd journal 末尾 lines 行。
+func (c *Client) TailJournal(ctx context.Context, lines int, grep string, maxBytes int) ([]string, bool, error) {
+	cmd, err := JournalCommand(lines, grep, maxBytes)
+	if err != nil {
+		return nil, false, err
+	}
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxLogBytes
+	}
+	if maxBytes > MaxLogBytes {
+		maxBytes = MaxLogBytes
+	}
+	stdout, stderr, exitCode, err := c.run(ctx, cmd)
+	if err != nil {
+		return nil, false, err
+	}
+	if exitCode != 0 {
+		return nil, false, fmt.Errorf("remote: 读取 journal 失败（退出码 %d）: %s", exitCode, snippet(stderr))
+	}
+	return ParseLogOutput(stdout, maxBytes)
+}

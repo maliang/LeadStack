@@ -1365,11 +1365,17 @@ CREATE INDEX idx_str_task ON scheduled_task_runs(task_id, ts);
 ## 43. 日志查看与进程/端口视图
 
 ```
-GET /servers/{id}/logs?path=/var/log/app.log&lines=200&grep=error  -> {lines:[...], truncated}
+GET /servers/{id}/logs?path=/var/log/app.log&lines=200&grep=error  -> {lines:[...], truncated, path}
+GET /servers/{id}/logs?path=auto                                   -> 现场探测常见日志文件，找不到时回退 journalctl
+GET /servers/{id}/logs?path=journal                                -> journalctl -n N --no-pager -o short-iso
 GET /servers/{id}/processes?sort=cpu|mem&limit=50                  -> {processes:[{pid,user,cpu_pct,mem_pct,rss_kb,command}]}
 GET /servers/{id}/ports                                            -> {ports:[{proto,local,pid,process}]}
 ```
 - 实现：ssh 模式执行 `tail -n` / `ps` / `ss -tulpn`（macOS 回退 `lsof -i`）；agent 模式经 `job.exec`。
+- **日志源自动探测**：`path` 为空或 `auto` 时，目标机依次检查 `/var/log/syslog`、`/var/log/messages`、`/var/log/kern.log`、
+  `/var/log/auth.log`、`/var/log/secure`、`/var/log/dmesg`（macOS 为 `system.log` / `install.log`），
+  都不可读时回退 `journalctl`；响应里的 `path` 是实际选中的源（绝对路径或 `journal`）。
+  前端默认 auto，并提供 syslog / messages / system.log / auth / journal 快捷选项；读不到时可一键回到 auto。
 - 输出大小上限 256 KB；`grep` 用服务端过滤（不要拉全量）。
 
 ## 44. Agent 自升级

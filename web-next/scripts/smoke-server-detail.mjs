@@ -480,8 +480,13 @@ async function installMockApi(context, state) {
     const logs = /^\/api\/v1\/servers\/([^/]+)\/logs$/.exec(path)
     if (logs && method === 'GET') {
       state.logsCalls += 1
+      state.logPaths.push(url.searchParams.get('path') || '')
       return json(200, {
-        data: { lines: ['2026-11-18T10:00:00 line-one', '2026-11-18T10:00:05 line-two'], truncated: false },
+        data: {
+          lines: ['2026-11-18T10:00:00 line-one', '2026-11-18T10:00:05 line-two'],
+          truncated: false,
+          path: '/var/log/system.log',
+        },
       })
     }
 
@@ -612,6 +617,7 @@ async function run() {
     ticketCalls: 0,
     filesCalls: 0,
     logsCalls: 0,
+    logPaths: [],
     patchBodies: [],
     // n3：指标曲线 / 测试连接 / 刷新主机信息 / agent 升级
     metricsCalls: [],
@@ -936,6 +942,9 @@ async function run() {
     await shot(page, '09-logs')
     check('自动刷新默认关闭', (await page.locator('.ls-logs__auto input').isChecked()) === false)
     check('日志行数默认 200', (await page.locator('#server-logs-lines').inputValue()) === '200')
+    check('日志路径默认留空（自动选择）', (await page.locator('#server-logs-path').inputValue()) === '')
+    check('首次日志请求 path=auto', state.logPaths[0] === 'auto', String(state.logPaths[0]))
+    check('实际日志源回显 system.log', (await page.locator('.ls-logs__file').innerText()).includes('/var/log/system.log'))
     check('320px 日志 tab 无横向滚动', (await noHorizontalScroll()).overflow <= 0)
 
     await page.click('#server-tab-overview')
