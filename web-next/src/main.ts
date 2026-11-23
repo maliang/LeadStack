@@ -6,6 +6,20 @@ import router from './router'
 import { ensureLanguage, initI18n, readStoredLanguage } from './i18n'
 
 /**
+ * 发版后旧 index.html 可能还会请求已被替换的懒加载 chunk，浏览器会报
+ * "Failed to fetch dynamically imported module"。这里只自动刷新一次：
+ * 刷新后拿到新 index.html 与新 chunk，用户不会停在坏页面上。
+ */
+const CHUNK_RELOAD_KEY = 'leadstack.chunk-reload-at'
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault()
+  const last = Number(window.sessionStorage.getItem(CHUNK_RELOAD_KEY) ?? '0')
+  if (Date.now() - last < 10_000) return
+  window.sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()))
+  window.location.reload()
+})
+
+/**
  * 启动顺序：先补齐当前语言的词典再挂载。
  * zh-CN 是静态打包的默认语言，这里立即 resolve；
  * 存储语言为 en-US 时才会去拉独立的 en chunk，避免首帧闪回中文。
