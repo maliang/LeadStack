@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
 import { useCan } from '@/composables/useCan'
@@ -9,32 +10,30 @@ import {
   type Credential,
   type LocalServerResult,
   type Server,
+  type ServerGroup,
   type UpdateServerPayload,
 } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import { validateServerHost } from '@/lib/network'
-import { MAX_BATCH_TAGS, MAX_BATCH_TAG_LENGTH, parseTagsInput } from '@/lib/server-batch'
+import { MAX_BATCH_TAGS, MAX_BATCH_TAG_LENGTH } from '@/lib/server-batch'
 import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * 服务器纳管 / 编辑弹窗（ServersPage 与 ServerDetailPage 共用）。
  *
- * - 新建：POST /servers，支持 agent / SSH 两种接入方式；SSH 需要引用已有凭证。
- * - 编辑：PATCH /servers/{id}，只提交名称 / 地址 / 端口 / 分组 / 标签。
- * - 「一键接入本机」（POST /servers/local）需要 enroll.manage；成功后展示
- *   安装命令并复制，列表由父级刷新、agent 上线状态由轮询接管。
- *
- * 校验错误就近展示：字段级错误 + 一个提交错误位；提交失败不关闭弹窗，
- * 用户不用重填（此前定时任务页的教训：关窗即丢草稿）。
+ * - 新建：POST /servers，agent / SSH 两种接入方式；SSH 要引用已有凭证。
+ * - 编辑：PATCH /servers/{id}。agent 模式的地址由 agent 上报、端口不参与连接，
+ *   所以编辑时只读；只有 SSH 模式才允许改地址/端口。
+ * - 宝塔面板：绑定 kind=baota 的 API 密钥凭证；绑定后列表出现「宝塔登录」。
+ * - 分组：下拉选已管理分组（写 group_ids），也可切换「自定义」直接输入文本。
+ * - 标签：输入逗号 / 空格 / 换行即转成可删除的标签块。
  */
 const props = withDefaults(
   defineProps<{
     /** 传入表示编辑，不传表示新建 */
     server?: Server | null
-    /** 已有分组名（datalist 建议值） */
-    groupOptions?: string[]
   }>(),
-  { server: null, groupOptions: () => [] },
+  { server: null },
 )
 
 const emit = defineEmits<{
@@ -49,6 +48,10 @@ const { can } = useCan()
 
 const editing = computed(() => props.server !== null)
 const canLocal = computed(() => !editing.value && can('enroll.manage'))
+const isAgentEdit = computed(() => editing.value && props.server?.mode !== 'ssh')
+const showPort = computed(() => (editing.value ? props.server?.mode === 'ssh' : form.mode === 'ssh'))
+
+const CUSTOM_GROUP = '__custom__'
 
 const form = reactive({
   name: '',
@@ -56,14 +59,22 @@ const form = reactive({
   port: '22',
   mode: 'agent' as 'agent' | 'ssh',
   credentialId: '',
-  group: '',
-  tags: '',
+  panelCredentialId: '',
+  groupChoice: '' as string,
+  customGroup: '',
   hostKeyPolicy: 'accept-new' as 'accept-new' | 'strict' | 'insecure',
 })
+
+const tags = ref<string[]>([])
+const tagDraft = ref('')
 
 const credentials = ref<Credential[]>([])
 const credentialsState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const credentialsError = ref<string | null>(null)
+
+const serverGroups = ref<ServerGroup[]>([])
+const groupsState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
+const groupsError = ref<string | null>(null)
 
 const busy = ref(false)
 const error = ref<string | null>(null)
@@ -75,10 +86,15 @@ const localResult = ref<LocalServerResult | null>(null)
 const localCopied = ref(false)
 
 const sshCredentials = computed(() => credentials.value.filter((item) => item.kind !== 'baota'))
+const baotaCredentials = computed(() => credentials.value.filter((item) => item.kind === 'baota'))
+const selectedGroupName = computed(() => {
+  if (form.groupChoice === '' || form.groupChoice === CUSTOM_GROUP) return ''
+  return serverGroups.value.find((group) => group.id === form.groupChoice)?.name ?? ''
+})
 
 const addressChanged = computed(() => {
   const server = props.server
-  if (!server) return false
+  if (!server || server.mode !== 'ssh') return false
   return form.host.trim() !== server.host || Number(form.port) !== server.port
 })
 
@@ -88,9 +104,13 @@ function hydrate(server: Server): void {
   form.port = server.port === null ? '22' : String(server.port)
   form.mode = server.mode === 'ssh' ? 'ssh' : 'agent'
   form.credentialId = server.credential_id ?? ''
-  form.group = server.group ?? server.group_names[0] ?? ''
-  form.tags = server.tags.join(', ')
+  form.panelCredentialId = server.panel_credential_id ?? ''
   form.hostKeyPolicy = 'accept-new'
+  tags.value = [...server.tags]
+  tagDraft.value = ''
+  // 先按 group_ids 匹配；历史数据只有文本 group 时落到「自定义」。
+  form.groupChoice = server.group_ids[0] ?? (server.group ? CUSTOM_GROUP : '')
+  form.customGroup = server.group ?? ''
 }
 
 async function loadCredentials(): Promise<void> {
@@ -106,19 +126,95 @@ async function loadCredentials(): Promise<void> {
   }
 }
 
+async function loadGroups(): Promise<void> {
+  if (groupsState.value === 'loading' || groupsState.value === 'ready') return
+  groupsState.value = 'loading'
+  groupsError.value = null
+  try {
+    serverGroups.value = await api.serverGroups()
+    groupsState.value = 'ready'
+    // 历史数据只有 group 文本：若与已管理分组同名，自动切到该分组，避免重复文本。
+    if (form.groupChoice === CUSTOM_GROUP && form.customGroup.trim() !== '') {
+      const matched = serverGroups.value.find((group) => group.name === form.customGroup.trim())
+      if (matched) form.groupChoice = matched.id
+    }
+  } catch (caught) {
+    groupsState.value = 'error'
+    groupsError.value = errorMessage(caught, t('common.error'))
+  }
+}
+
 function selectMode(mode: 'agent' | 'ssh'): void {
   if (editing.value) return
   form.mode = mode
-  if (mode === 'ssh') void loadCredentials()
+}
+
+function addTags(raw: string): void {
+  const next = [...tags.value]
+  for (const part of raw.split(/[,，\s]+/)) {
+    const value = part.trim()
+    if (value === '' || [...value].length > MAX_BATCH_TAG_LENGTH) continue
+    if (next.includes(value)) continue
+    if (next.length >= MAX_BATCH_TAGS) break
+    next.push(value)
+  }
+  tags.value = next
+}
+
+function onTagInput(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const raw = input.value
+  if (/[,，\s]/.test(raw)) {
+    const parts = raw.split(/[,，\s]+/)
+    const pending = parts.pop() ?? ''
+    addTags(parts.join(' '))
+    tagDraft.value = pending.trim()
+    input.value = tagDraft.value
+    return
+  }
+  tagDraft.value = raw
+}
+
+function commitTagDraft(): void {
+  if (tagDraft.value.trim() === '') return
+  addTags(tagDraft.value)
+  tagDraft.value = ''
+}
+
+function onTagPaste(event: ClipboardEvent): void {
+  const text = event.clipboardData?.getData('text') ?? ''
+  if (!/[\r\n]/.test(text)) return
+  event.preventDefault()
+  addTags(text)
+  tagDraft.value = ''
+}
+
+function onTagKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Enter' || event.key === ',' || event.key === '，') {
+    event.preventDefault()
+    commitTagDraft()
+    return
+  }
+  if (event.key === 'Backspace' && tagDraft.value === '' && tags.value.length > 0) {
+    removeTag(tags.value[tags.value.length - 1])
+  }
+}
+
+function removeTag(tag: string): void {
+  tags.value = tags.value.filter((item) => item !== tag)
 }
 
 function validate(): boolean {
   const next: Record<string, string> = {}
   if (form.name.trim() === '') next.name = t('server.form.errorName')
-  const hostError = validateServerHost(form.host)
-  if (hostError) next.host = t(hostError)
-  const port = Number(form.port)
-  if (!Number.isInteger(port) || port < 1 || port > 65535) next.port = t('server.form.errorPort')
+  if (!isAgentEdit.value) {
+    const hostError = validateServerHost(form.host)
+    if (hostError) next.host = t(hostError)
+  }
+  if (showPort.value) {
+    const port = Number(form.port)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) next.port = t('server.form.errorPort')
+  }
   if (!editing.value && form.mode === 'ssh' && form.credentialId === '') {
     next.credential = t('server.form.errorCredential')
   }
@@ -126,21 +222,36 @@ function validate(): boolean {
   return Object.keys(next).length === 0
 }
 
+function buildGroup(): { group: string; groupIds: string[] } {
+  // PATCH 语义：空串表示清除；null/缺省表示不改。所以这里统一返回空串而不是 null。
+  if (form.groupChoice === '') return { group: '', groupIds: [] }
+  if (form.groupChoice === CUSTOM_GROUP) {
+    return { group: form.customGroup.trim(), groupIds: [] }
+  }
+  return { group: selectedGroupName.value || props.server?.group || '', groupIds: [form.groupChoice] }
+}
+
 async function submit(): Promise<void> {
   if (busy.value) return
+  commitTagDraft()
   error.value = null
   if (!validate()) return
   busy.value = true
-  const tags = parseTagsInput(form.tags).slice(0, MAX_BATCH_TAGS)
-  const group = form.group.trim()
+  const group = buildGroup()
+  const tagsValue = tags.value.slice(0, MAX_BATCH_TAGS)
   try {
     if (props.server) {
       const payload: UpdateServerPayload = {
         name: form.name.trim(),
-        host: form.host.trim(),
-        port: Number(form.port),
-        tags,
-        group: group === '' ? null : group,
+        tags: tagsValue,
+        group: group.group,
+        group_ids: group.groupIds,
+        panel_credential_id: form.panelCredentialId,
+      }
+      // agent 模式的 host/port 由 agent 上报，不参与连接；编辑时不提交，避免无意义变更。
+      if (props.server.mode === 'ssh') {
+        payload.host = form.host.trim()
+        payload.port = Number(form.port)
       }
       const saved = await api.updateServer(props.server.id, payload)
       emit('saved', saved)
@@ -149,11 +260,13 @@ async function submit(): Promise<void> {
     const created = await api.createServer({
       name: form.name.trim(),
       host: form.host.trim(),
-      port: Number(form.port),
+      port: showPort.value ? Number(form.port) : 22,
       mode: form.mode,
       credential_id: form.mode === 'ssh' ? form.credentialId : undefined,
-      group: group === '' ? undefined : group,
-      tags,
+      panel_credential_id: form.panelCredentialId === '' ? undefined : form.panelCredentialId,
+      group: group.group === '' ? undefined : group.group,
+      group_ids: group.groupIds,
+      tags: tagsValue,
       host_key_policy: form.mode === 'ssh' ? form.hostKeyPolicy : undefined,
     })
     emit('saved', created)
@@ -186,12 +299,18 @@ async function copyCommand(): Promise<void> {
 }
 
 onMounted(() => {
-  if (props.server) {
-    hydrate(props.server)
-    return
-  }
-  // 新建默认 agent：不需要凭证，等用户切到 SSH 再按需拉取凭证。
+  if (props.server) hydrate(props.server)
+  void loadCredentials()
+  void loadGroups()
 })
+
+// 编辑弹窗可能在分组列表返回后才打开（例如从详情页打开），这里补一次匹配。
+watch(
+  () => props.server?.id,
+  () => {
+    if (props.server) hydrate(props.server)
+  },
+)
 </script>
 
 <template>
@@ -240,11 +359,13 @@ onMounted(() => {
             type="text"
             autocomplete="off"
             spellcheck="false"
+            :readonly="isAgentEdit"
             :aria-invalid="Boolean(fieldErrors.host)"
           />
+          <span v-if="isAgentEdit" class="ls-field__hint">{{ t('server.form.hostAgentHint') }}</span>
           <span v-if="fieldErrors.host" class="ls-field__error" role="alert">{{ fieldErrors.host }}</span>
         </label>
-        <label class="ls-field" for="server-form-port">
+        <label v-if="showPort" class="ls-field" for="server-form-port">
           <span class="ls-field__label">{{ t('server.edit.port') }}</span>
           <input
             id="server-form-port"
@@ -256,10 +377,12 @@ onMounted(() => {
             inputmode="numeric"
             :aria-invalid="Boolean(fieldErrors.port)"
           />
-          <span class="ls-field__hint">{{ t('server.form.portHint') }}</span>
+          <span class="ls-field__hint">{{ t('server.form.portSshHint') }}</span>
           <span v-if="fieldErrors.port" class="ls-field__error" role="alert">{{ fieldErrors.port }}</span>
         </label>
       </div>
+
+      <p v-if="isAgentEdit" class="ls-field__hint">{{ t('server.form.portAgentHint') }}</p>
 
       <p v-if="addressChanged" class="ls-field__hint" role="status">
         {{ t('server.edit.addressWarning') }} — {{ t('server.edit.addressWarningHint') }}
@@ -294,81 +417,125 @@ onMounted(() => {
           </button>
         </div>
 
-        <template v-if="form.mode === 'ssh'">
-          <label class="ls-field" for="server-form-credential">
-            <span class="ls-field__label">{{ t('server.form.credential') }}</span>
-            <select
-              id="server-form-credential"
-              v-model="form.credentialId"
-              class="ls-input"
-              :disabled="credentialsState === 'loading'"
-              :aria-invalid="Boolean(fieldErrors.credential)"
-            >
-              <option value="">{{ t('server.form.credentialNone') }}</option>
-              <option v-for="credential in sshCredentials" :key="credential.id" :value="credential.id">
-                {{ credential.name }}（{{ credential.username || credential.kind }}）
-              </option>
-            </select>
-            <span class="ls-field__hint">{{ t('server.form.credentialHint') }}</span>
-            <span v-if="fieldErrors.credential" class="ls-field__error" role="alert">
-              {{ fieldErrors.credential }}
-            </span>
-          </label>
+        <label v-if="form.mode === 'ssh'" class="ls-field" for="server-form-credential">
+          <span class="ls-field__label">{{ t('server.form.credential') }}</span>
+          <select
+            id="server-form-credential"
+            v-model="form.credentialId"
+            class="ls-input"
+            :disabled="credentialsState === 'loading'"
+            :aria-invalid="Boolean(fieldErrors.credential)"
+          >
+            <option value="">{{ t('server.form.credentialNone') }}</option>
+            <option v-for="credential in sshCredentials" :key="credential.id" :value="credential.id">
+              {{ credential.name }}（{{ credential.username || credential.kind }}）
+            </option>
+          </select>
+          <span class="ls-field__hint">{{ t('server.form.credentialHint') }}</span>
+          <span v-if="fieldErrors.credential" class="ls-field__error" role="alert">
+            {{ fieldErrors.credential }}
+          </span>
+        </label>
 
-          <p v-if="credentialsState === 'error'" class="ls-inline-error" role="alert">
-            {{ credentialsError }}
-            <button class="ls-btn ls-btn--small" type="button" @click="loadCredentials">
-              {{ t('common.retry') }}
-            </button>
-          </p>
-          <p v-else-if="credentialsState === 'ready' && sshCredentials.length === 0" class="ls-field__hint">
-            {{ t('server.form.noCredentials') }}
-          </p>
+        <p v-if="form.mode === 'ssh' && credentialsState === 'error'" class="ls-inline-error" role="alert">
+          {{ credentialsError }}
+          <button class="ls-btn ls-btn--small" type="button" @click="loadCredentials">
+            {{ t('common.retry') }}
+          </button>
+        </p>
+        <p v-else-if="form.mode === 'ssh' && credentialsState === 'ready' && sshCredentials.length === 0" class="ls-field__hint">
+          {{ t('server.form.noCredentials') }}
+        </p>
 
-          <label class="ls-field" for="server-form-policy">
-            <span class="ls-field__label">{{ t('server.form.hostKeyPolicy') }}</span>
-            <select id="server-form-policy" v-model="form.hostKeyPolicy" class="ls-input">
-              <option value="accept-new">{{ t('server.form.policyAcceptNew') }}</option>
-              <option value="strict">{{ t('server.form.policyStrict') }}</option>
-              <option value="insecure">{{ t('server.form.policyInsecure') }}</option>
-            </select>
-            <span class="ls-field__hint">{{ t('server.form.policyHint') }}</span>
-          </label>
-        </template>
+        <label v-if="form.mode === 'ssh'" class="ls-field" for="server-form-policy">
+          <span class="ls-field__label">{{ t('server.form.hostKeyPolicy') }}</span>
+          <select id="server-form-policy" v-model="form.hostKeyPolicy" class="ls-input">
+            <option value="accept-new">{{ t('server.form.policyAcceptNew') }}</option>
+            <option value="strict">{{ t('server.form.policyStrict') }}</option>
+            <option value="insecure">{{ t('server.form.policyInsecure') }}</option>
+          </select>
+          <span class="ls-field__hint">{{ t('server.form.policyHint') }}</span>
+        </label>
       </fieldset>
 
       <div class="ls-form__row">
         <label class="ls-field" for="server-form-group">
           <span class="ls-field__label">{{ t('server.form.group') }}</span>
+          <select id="server-form-group" v-model="form.groupChoice" class="ls-input">
+            <option value="">{{ t('server.form.groupNone') }}</option>
+            <option v-for="group in serverGroups" :key="group.id" :value="group.id">
+              {{ group.name }}（{{ group.member_count }}）
+            </option>
+            <option :value="CUSTOM_GROUP">{{ t('server.form.groupCustom') }}</option>
+          </select>
           <input
-            id="server-form-group"
-            v-model="form.group"
+            v-if="form.groupChoice === CUSTOM_GROUP"
+            v-model="form.customGroup"
             class="ls-input"
             type="text"
-            list="server-form-group-options"
             autocomplete="off"
             :placeholder="t('server.form.groupPlaceholder')"
+            :aria-label="t('server.form.groupCustom')"
           />
-          <datalist id="server-form-group-options">
-            <option v-for="group in props.groupOptions" :key="group" :value="group" />
-          </datalist>
           <span class="ls-field__hint">{{ t('server.form.groupHint') }}</span>
+          <span v-if="groupsState === 'error'" class="ls-field__error" role="alert">
+            {{ groupsError }}
+          </span>
         </label>
-        <label class="ls-field" for="server-form-tags">
-          <span class="ls-field__label">{{ t('server.form.tags') }}</span>
-          <input
-            id="server-form-tags"
-            v-model="form.tags"
-            class="ls-input"
-            type="text"
-            autocomplete="off"
-            :placeholder="t('server.form.tagsPlaceholder')"
-          />
+
+        <div class="ls-field">
+          <label class="ls-field__label" for="server-form-tags">{{ t('server.form.tags') }}</label>
+          <div class="ls-tags">
+            <span v-for="tag in tags" :key="tag" class="ls-tag">
+              {{ tag }}
+              <button type="button" class="ls-tag__remove" :aria-label="`${t('common.delete')} ${tag}`" @click="removeTag(tag)">
+                <AppIcon name="close" size="0.75rem" />
+              </button>
+            </span>
+            <input
+              id="server-form-tags"
+              class="ls-tags__input"
+              type="text"
+              autocomplete="off"
+              :value="tagDraft"
+              :placeholder="tags.length === 0 ? t('server.form.tagsPlaceholder') : ''"
+              @input="onTagInput"
+              @paste="onTagPaste"
+              @blur="commitTagDraft"
+              @keydown="onTagKeydown"
+            />
+          </div>
           <span class="ls-field__hint">
             {{ t('server.form.tagsHint', { max: MAX_BATCH_TAGS, len: MAX_BATCH_TAG_LENGTH }) }}
           </span>
-        </label>
+        </div>
       </div>
+
+      <label class="ls-field" for="server-form-panel">
+        <span class="ls-field__label">{{ t('server.form.panelCredential') }}</span>
+        <select
+          id="server-form-panel"
+          v-model="form.panelCredentialId"
+          class="ls-input"
+          :disabled="credentialsState === 'loading'"
+        >
+          <option value="">{{ t('server.form.panelCredentialNone') }}</option>
+          <option v-for="credential in baotaCredentials" :key="credential.id" :value="credential.id">
+            {{ credential.name }}
+          </option>
+          <option
+            v-if="form.panelCredentialId && !baotaCredentials.some((item) => item.id === form.panelCredentialId)"
+            :value="form.panelCredentialId"
+          >
+            {{ form.panelCredentialId }}
+          </option>
+        </select>
+        <span class="ls-field__hint">{{ t('server.form.panelCredentialHint') }}</span>
+        <span v-if="credentialsState === 'ready' && baotaCredentials.length === 0" class="ls-field__hint">
+          {{ t('server.form.noPanelCredentials') }}
+          <RouterLink to="/credentials">{{ t('server.form.openCredentials') }}</RouterLink>
+        </span>
+      </label>
 
       <p v-if="error" id="server-form-error" class="ls-adminpage__form-error" role="alert">{{ error }}</p>
 

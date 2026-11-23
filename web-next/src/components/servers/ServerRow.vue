@@ -4,7 +4,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { useI18n } from '@/i18n'
 import type { Server } from '@/lib/api'
-import { formatRelativeTime, serverAddress } from '@/lib/format'
+import { formatRelativeTime, serverAddress, usageTone } from '@/lib/format'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 import ServerTerminalPanel from '@/components/server-tools/ServerTerminalPanel.vue'
 import ServerFilesPanel from '@/components/server-tools/ServerFilesPanel.vue'
@@ -100,6 +100,18 @@ function openDetailFromRow(event: MouseEvent): void {
           #{{ tag }}
         </span>
         <span class="ls-srv-row__seen">{{ t('s.0538') }} · {{ lastSeen }}</span>
+        <span v-if="server.metrics_summary" class="ls-srv-metrics">
+          <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.cpu_pct)}`">
+            {{ t('servers.metricCpu') }} {{ server.metrics_summary.cpu_pct === null ? '—' : `${server.metrics_summary.cpu_pct.toFixed(0)}%` }}
+          </span>
+          <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.mem_used_pct)}`">
+            {{ t('servers.metricMem') }} {{ server.metrics_summary.mem_used_pct === null ? '—' : `${server.metrics_summary.mem_used_pct.toFixed(0)}%` }}
+          </span>
+          <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.disk_used_pct)}`">
+            {{ t('servers.metricDisk') }} {{ server.metrics_summary.disk_used_pct === null ? '—' : `${server.metrics_summary.disk_used_pct.toFixed(0)}%` }}
+          </span>
+        </span>
+        <span v-else class="ls-srv-row__seen">{{ t('servers.metricsPending') }}</span>
       </div>
 
       <div class="ls-srv-row__actions">
@@ -133,7 +145,7 @@ function openDetailFromRow(event: MouseEvent): void {
           @click.stop.prevent="emit('open-panel', server.id)"
         >
           <AppIcon name="key-round" size="0.875rem" />
-          {{ t('server.panel.open') }}
+          {{ t('servers.panelLogin') }}
         </button>
         <button
           v-if="props.canEdit"

@@ -4,7 +4,7 @@ import { RouterLink } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { useI18n } from '@/i18n'
 import type { Server } from '@/lib/api'
-import { formatOs, formatRelativeTime, serverAddress } from '@/lib/format'
+import { formatOs, formatRelativeTime, serverAddress, usageTone } from '@/lib/format'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 
 /** 卡片视图：一眼回答「这台机器是谁、通不通、在哪」。展开终端/文件只在列表视图提供。 */
@@ -82,6 +82,19 @@ const mode = computed(() => props.server.mode.trim())
       </div>
     </dl>
 
+    <div v-if="server.metrics_summary" class="ls-srv-metrics ls-srv-card__metrics">
+      <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.cpu_pct)}`">
+        {{ t('servers.metricCpu') }} {{ server.metrics_summary.cpu_pct === null ? '—' : `${server.metrics_summary.cpu_pct.toFixed(0)}%` }}
+      </span>
+      <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.mem_used_pct)}`">
+        {{ t('servers.metricMem') }} {{ server.metrics_summary.mem_used_pct === null ? '—' : `${server.metrics_summary.mem_used_pct.toFixed(0)}%` }}
+      </span>
+      <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.disk_used_pct)}`">
+        {{ t('servers.metricDisk') }} {{ server.metrics_summary.disk_used_pct === null ? '—' : `${server.metrics_summary.disk_used_pct.toFixed(0)}%` }}
+      </span>
+    </div>
+    <p v-else class="ls-srv-card__metrics ls-field__hint">{{ t('servers.metricsPending') }}</p>
+
     <div v-if="mode || groupLabels.length > 0 || server.tags.length > 0" class="ls-srv-card__chips">
       <span v-if="mode" class="ls-chip ls-chip--muted">{{ mode }}</span>
       <span v-for="group in groupLabels" :key="group" class="ls-chip" :title="group">{{ group }}</span>
@@ -99,7 +112,7 @@ const mode = computed(() => props.server.mode.trim())
         @click="emit('open-panel', server.id)"
       >
         <AppIcon name="key-round" size="0.875rem" />
-        {{ t('server.panel.open') }}
+        {{ t('servers.panelLogin') }}
       </button>
       <button
         v-if="props.canEdit"

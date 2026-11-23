@@ -750,8 +750,8 @@ async function run() {
 
     // 4) 一键登录：terminal 态给命令 + 复制
     await page.click('#server-tab-login')
-    await page.waitForSelector('.ls-card button.ls-btn--primary', { timeout: 5000 })
-    await page.locator('.ls-card button.ls-btn--primary').first().click()
+    await page.waitForSelector('#server-login-run', { timeout: 5000 })
+    await page.click('#server-login-run')
     await page.waitForSelector('.ls-code', { timeout: 5000 })
     await shot(page, '04-login')
     check('一键登录发出 POST /login', state.loginCalls === 1, `${state.loginCalls} 次`)

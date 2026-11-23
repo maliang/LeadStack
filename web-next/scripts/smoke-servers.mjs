@@ -62,7 +62,7 @@ function user(terminalUse, write = false) {
     permissions: [
       'server.read',
       ...(terminalUse ? ['terminal.use'] : []),
-      ...(write ? ['server.write'] : []),
+      ...(write ? ['server.write', 'group.write'] : []),
     ],
     scope: { mode: 'all', group_ids: [], server_ids: [] },
   }
@@ -227,6 +227,10 @@ function createStaticServer(distDir) {
 
 /** 假后端：只覆盖服务器页需要的端点，其他一律 404，避免静默放过。 */
 async function installMockApi(context, state) {
+  state.groups = state.groups || [
+    { id: 'grp-default', name: '默认分组', description: '', member_count: 1, updated_at: Date.now() },
+    { id: 'grp-test', name: '测试分组', description: '', member_count: 1, updated_at: Date.now() },
+  ]
   await context.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -263,8 +267,38 @@ async function installMockApi(context, state) {
       return json(200, {
         data: [
           { id: 'cred-ssh', name: 'deploy-key', kind: 'key', username: 'root', server_count: 0 },
+          { id: 'cred-baota', name: 'panel-key', kind: 'baota', username: 'baota', panel_url: 'https://panel.example.com:8888/entry', server_count: 0 },
         ],
       })
+    }
+    if (path === '/api/v1/server-groups' && method === 'GET') {
+      return json(200, { data: state.groups })
+    }
+    if (path === '/api/v1/server-groups' && method === 'POST') {
+      const body = JSON.parse(request.postData() || '{}')
+      const created = {
+        id: `grp-${state.groups.length + 1}`,
+        name: body.name,
+        description: body.description || '',
+        member_count: 0,
+        updated_at: Date.now(),
+      }
+      state.groups.push(created)
+      return json(201, { data: created })
+    }
+    const groupItem = /^\/api\/v1\/server-groups\/([^/]+)$/.exec(path)
+    if (groupItem && method === 'PATCH') {
+      const id = decodeURIComponent(groupItem[1])
+      const body = JSON.parse(request.postData() || '{}')
+      const found = state.groups.find((group) => group.id === id)
+      if (!found) return json(404, { error: { code: 'not_found' } })
+      Object.assign(found, { name: body.name ?? found.name, description: body.description ?? found.description, updated_at: Date.now() })
+      return json(200, { data: found })
+    }
+    if (groupItem && method === 'DELETE') {
+      const id = decodeURIComponent(groupItem[1])
+      state.groups = state.groups.filter((group) => group.id !== id)
+      return json(200, { data: { ok: true } })
     }
 
     const detail = /^\/api\/v1\/servers\/([^/]+)$/.exec(path)
@@ -454,12 +488,21 @@ async function run() {
     )
     check('默认渲染列表容器而非卡片网格', (await page.locator('.ls-servers__list').count()) === 1 && (await page.locator('.ls-servers__cards').count()) === 0)
 
+    // 2a) 列表项基础监控信息
+    const firstRowText = await page.locator('.ls-srv-row').first().innerText()
+    check(
+      '列表项显示 CPU / 内存 / 磁盘指标',
+      firstRowText.includes('CPU 13%') && firstRowText.includes('内存 33%') && firstRowText.includes('磁盘 40%'),
+      firstRowText.replace(/\s+/g, ' ').slice(0, 140),
+    )
+
     // 2b) 宝塔 API 一键登录：只有绑定了面板凭据的行显示入口
     check(
       '仅绑定面板凭据的服务器显示宝塔登录',
       (await page.locator('#server-srv-alpha-panel').count()) === 1 &&
         (await page.locator('#server-srv-beta-panel').count()) === 0,
     )
+    check('列表项宝塔按钮文案为「宝塔登录」', (await page.locator('#server-srv-alpha-panel').innerText()).includes('宝塔登录'))
     await page.click('#server-srv-alpha-panel')
     await page.waitForTimeout(250)
     const openedPanel = await page.evaluate(() => window.__opened.slice())
@@ -829,8 +872,10 @@ async function run() {
       await batchPage.click('#server-form-mode-ssh')
       await batchPage.waitForSelector('#server-form-credential', { timeout: 5000 })
       await batchPage.selectOption('#server-form-credential', 'cred-ssh')
-      await batchPage.fill('#server-form-tags', 'edge, 测试')
-      await batchPage.fill('#server-form-group', '测试分组')
+      await batchPage.fill('#server-form-tags', 'edge, 测试,')
+      check('标签输入分隔符后渲染为可删除标签块', (await batchPage.locator('#server-form .ls-tag').count()) === 2)
+      await batchPage.selectOption('#server-form-group', 'grp-test')
+      await batchPage.selectOption('#server-form-panel', 'cred-baota')
       const createResponse = batchPage.waitForResponse(
         (response) =>
           response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/servers',
@@ -846,24 +891,31 @@ async function run() {
           createBody.host === '10.0.0.33' &&
           createBody.port === 22 &&
           createBody.mode === 'ssh' &&
-          createBody.credential_id === 'cred-ssh',
+          createBody.credential_id === 'cred-ssh' &&
+          createBody.panel_credential_id === 'cred-baota',
         JSON.stringify(createBody),
       )
       check(
-        '新增服务器标签按逗号/空白拆分、分组原样提交',
+        '新增服务器标签按逗号/空白拆分、分组按 group_ids 提交',
         Array.isArray(createBody.tags) &&
           createBody.tags.includes('edge') &&
           createBody.tags.includes('测试') &&
-          createBody.group === '测试分组',
-        JSON.stringify({ tags: createBody.tags, group: createBody.group }),
+          createBody.group === '测试分组' &&
+          Array.isArray(createBody.group_ids) &&
+          createBody.group_ids[0] === 'grp-test',
+        JSON.stringify({ tags: createBody.tags, group: createBody.group, group_ids: createBody.group_ids }),
       )
       await batchPage.waitForSelector('#servers-action-notice', { timeout: 5000 })
 
-      /* 编辑服务器：PATCH 只带名称/地址/端口/分组/标签，不误发 mode/credential */
+      /* 编辑 agent 服务器：地址/端口只读，PATCH 不提交 host/port/mode/credential */
       await batchPage.click('#server-srv-alpha-edit')
       await batchPage.waitForSelector('#server-form', { timeout: 5000 })
+      check(
+        'agent 编辑时地址只读、端口输入不渲染',
+        (await batchPage.locator('#server-form-host').getAttribute('readonly')) !== null &&
+          (await batchPage.locator('#server-form-port').count()) === 0,
+      )
       await batchPage.fill('#server-form-name', 'alpha-renamed')
-      await batchPage.fill('#server-form-host', '10.0.0.21')
       const patchResponse = batchPage.waitForResponse(
         (response) =>
           response.request().method() === 'PATCH' && new URL(response.url()).pathname === '/api/v1/servers/srv-alpha',
@@ -874,8 +926,8 @@ async function run() {
       await batchPage.waitForSelector('#server-form', { state: 'detached', timeout: 8000 })
       const patchBody = batchState.serverPatchBodies.at(-1) || {}
       check(
-        '编辑服务器提交名称/地址/端口',
-        patchBody.name === 'alpha-renamed' && patchBody.host === '10.0.0.21' && patchBody.port === 22,
+        '编辑 agent 服务器只提交名称，不提交 host/port',
+        patchBody.name === 'alpha-renamed' && !('host' in patchBody) && !('port' in patchBody),
         JSON.stringify(patchBody),
       )
       check(
@@ -883,6 +935,24 @@ async function run() {
         !('mode' in patchBody) && !('credential_id' in patchBody),
         JSON.stringify(patchBody),
       )
+
+      /* 分组管理弹窗：新增 / 删除 */
+      await batchPage.click('#servers-groups')
+      await batchPage.waitForSelector('#group-manager-create', { timeout: 5000 })
+      await batchPage.waitForFunction(() => document.querySelectorAll('.ls-group-manager__item').length === 2, null, { timeout: 5000 })
+      check('分组管理弹窗展示现有分组', (await batchPage.locator('.ls-group-manager__item').count()) === 2)
+      await batchPage.click('#group-manager-create')
+      await batchPage.fill('#group-manager-name', '临时分组')
+      await batchPage.fill('#group-manager-desc', '弹窗 CRUD 测试')
+      await batchPage.locator('.ls-group-manager__form-actions .ls-btn--primary').click()
+      await batchPage.waitForFunction(() => document.body.innerText.includes('临时分组'), null, { timeout: 5000 })
+      check('分组管理可以新增分组', (await batchPage.locator('.ls-group-manager__item').count()) === 3)
+      const tempItem = batchPage.locator('.ls-group-manager__item', { hasText: '临时分组' })
+      await tempItem.locator('.ls-btn--danger').click()
+      await tempItem.locator('.ls-btn--danger').click()
+      await batchPage.waitForFunction(() => document.querySelectorAll('.ls-group-manager__item').length === 2, null, { timeout: 5000 })
+      check('分组管理可以删除分组', (await batchPage.locator('.ls-group-manager__item').count()) === 2)
+      await batchPage.locator('.ls-modal__foot button', { hasText: '关闭' }).click()
 
       check('有 server.write 时每行出现选择框', (await batchPage.locator('.ls-srv-row__select input').count()) === 2)
       check('未选中时不出批量工具条', (await batchPage.locator('.ls-servers-batch').count()) === 0)

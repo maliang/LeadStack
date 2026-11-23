@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { useI18n } from '@/i18n'
 import type { Server, ServerLoginResult } from '@/lib/api'
@@ -35,12 +36,17 @@ const props = defineProps<{
   scriptSaving: boolean
   scriptError: string | null
   scriptNotice: string | null
+  /** 是否绑定了宝塔面板 API 密钥凭据 */
+  panelBound: boolean
+  panelBusy: boolean
+  panelError: string | null
 }>()
 
 const emit = defineEmits<{
   (event: 'run'): void
   (event: 'open-url'): void
   (event: 'save', payload: { login_script: string }): void
+  (event: 'open-panel'): void
 }>()
 
 const { t } = useI18n()
@@ -185,6 +191,41 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ls-detail__stack">
+    <section class="ls-card" :aria-label="t('server.login.panelTitle')">
+      <header class="ls-card__head">
+        <div class="ls-card__heading">
+          <h2 class="ls-card__title">
+            <AppIcon name="key-round" size="1rem" />
+            {{ t('server.login.panelTitle') }}
+          </h2>
+          <p class="ls-card__subtitle">{{ t('server.login.panelHint') }}</p>
+        </div>
+        <div class="ls-card__actions">
+          <span v-if="panelBound" class="ls-chip ls-chip--muted">{{ t('server.login.panelBound') }}</span>
+          <button
+            v-if="panelBound"
+            id="server-login-panel"
+            class="ls-btn ls-btn--primary ls-btn--small"
+            type="button"
+            :disabled="panelBusy"
+            :aria-busy="panelBusy"
+            @click="emit('open-panel')"
+          >
+            <span v-if="panelBusy" class="ls-spinner" aria-hidden="true" />
+            <AppIcon v-else name="key-round" size="0.875rem" />
+            {{ panelBusy ? t('server.login.panelOpening') : t('server.login.panelAction') }}
+          </button>
+        </div>
+      </header>
+      <p v-if="!panelBound" class="ls-field__hint">
+        {{ t('server.login.panelUnbound') }}
+        <RouterLink to="/credentials">{{ t('server.login.panelOpenCredentials') }}</RouterLink>
+      </p>
+      <div v-if="panelError" class="ls-notice ls-notice--error" role="alert">
+        <p class="ls-notice__text">{{ panelError }}</p>
+      </div>
+    </section>
+
     <section class="ls-card" :aria-label="t('server.login.title')">
       <header class="ls-card__head">
         <div class="ls-card__heading">
@@ -195,6 +236,7 @@ onBeforeUnmount(() => {
           <p class="ls-card__subtitle">{{ t('server.login.hint') }}</p>
         </div>
         <button
+          id="server-login-run"
           class="ls-btn ls-btn--primary ls-btn--small"
           type="button"
           :disabled="busy || !configured"

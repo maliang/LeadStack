@@ -8251,3 +8251,201 @@ body.ls-scroll-locked {
   accent-color: var(--ls-primary-fill);
   cursor: pointer;
 }
+
+
+/* ---------- 服务器列表 / 卡片的小指标 ---------- */
+
+.ls-srv-metrics {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-1);
+  min-width: 0;
+}
+
+.ls-srv-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25em;
+  padding: 0.0625rem var(--ls-space-2);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-full);
+  background: var(--ls-surface-muted);
+  color: var(--ls-text-muted);
+  font: 500 var(--ls-text-2xs) / 1.4 var(--ls-font-sans);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ls-srv-metric--warn {
+  border-color: var(--ls-warning-border);
+  background: var(--ls-warning-soft);
+  color: var(--ls-warning);
+}
+
+.ls-srv-metric--danger {
+  border-color: var(--ls-danger-border);
+  background: var(--ls-danger-soft);
+  color: var(--ls-danger);
+}
+
+.ls-srv-card__metrics {
+  margin: 0;
+}
+
+
+/* ---------- 标签输入（逗号 / 空格 / 换行 → 可删除标签块） ---------- */
+
+.ls-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-1);
+  min-height: var(--ls-hit-size);
+  padding: var(--ls-space-1) var(--ls-space-2);
+  border: 1px solid var(--ls-border-strong);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-surface);
+}
+
+.ls-tags:focus-within {
+  border-color: var(--ls-primary-fill);
+  box-shadow: var(--ls-focus-ring);
+}
+
+.ls-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.0625rem var(--ls-space-1) 0.0625rem var(--ls-space-2);
+  border-radius: var(--ls-radius-full);
+  background: var(--ls-primary-soft);
+  color: var(--ls-primary);
+  font: 500 var(--ls-text-xs) / 1.5 var(--ls-font-sans);
+  overflow-wrap: anywhere;
+}
+
+.ls-tag__remove {
+  display: inline-grid;
+  place-items: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ls-radius-full);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ls-tag__remove:hover {
+  background: var(--ls-brand-100);
+  color: var(--ls-brand-900);
+}
+
+.ls-tag__remove:focus-visible {
+  outline: none;
+  box-shadow: var(--ls-focus-ring);
+}
+
+.ls-tags__input {
+  flex: 1 1 8rem;
+  min-width: 4rem;
+  padding: 0.125rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--ls-text);
+  font: 400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+}
+
+.ls-tags__input:focus {
+  outline: none;
+}
+
+
+/* ---------- 分组管理弹窗 ---------- */
+
+.ls-group-manager {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-3);
+  min-width: 0;
+}
+
+.ls-group-manager__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ls-space-2);
+}
+
+.ls-group-manager__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  padding: var(--ls-space-3);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-surface-muted);
+}
+
+.ls-group-manager__form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ls-space-2);
+}
+
+.ls-group-manager__loading {
+  display: flex;
+  align-items: center;
+  gap: var(--ls-space-2);
+  color: var(--ls-text-muted);
+  font: 400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+}
+
+.ls-group-manager__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ls-group-manager__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ls-space-2);
+  padding: var(--ls-space-2) var(--ls-space-3);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-surface);
+}
+
+.ls-group-manager__main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.ls-group-manager__name {
+  color: var(--ls-text);
+  font: 600 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+  overflow-wrap: anywhere;
+}
+
+.ls-group-manager__meta,
+.ls-group-manager__desc {
+  color: var(--ls-text-subtle);
+  font: 400 var(--ls-text-xs) / 1.5 var(--ls-font-sans);
+  overflow-wrap: anywhere;
+}
+
+.ls-group-manager__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-1);
+}

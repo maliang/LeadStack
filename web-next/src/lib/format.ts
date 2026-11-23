@@ -69,6 +69,14 @@ export function serverAddress(server: { host: string; port: number | null }): st
   return server.port ? `${server.host}:${server.port}` : server.host
 }
 
+/** 资源占用越低越绿、越高越红（列表/卡片的小指标着色）。 */
+export function usageTone(value: number | null | undefined): 'normal' | 'warn' | 'danger' {
+  if (value === null || value === undefined) return 'normal'
+  if (value >= 90) return 'danger'
+  if (value >= 75) return 'warn'
+  return 'normal'
+}
+
 /** 字节数：1.5 GB / 512 MB / 8 KB。 */
 export function formatBytes(bytes: number | null | undefined, digits = 1): string {
   if (bytes === null || bytes === undefined || Number.isNaN(bytes)) return '—'

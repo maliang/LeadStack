@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
 import ServerBatchBar from '@/components/servers/ServerBatchBar.vue'
@@ -7,6 +7,7 @@ import ServerBatchResultDialog from '@/components/servers/ServerBatchResultDialo
 import ServerListToolbar from '@/components/servers/ServerListToolbar.vue'
 import ServerCard from '@/components/servers/ServerCard.vue'
 import ServerFormDialog from '@/components/servers/ServerFormDialog.vue'
+import ServerGroupManagerDialog from '@/components/servers/ServerGroupManagerDialog.vue'
 import ServerRow from '@/components/servers/ServerRow.vue'
 import { useCan } from '@/composables/useCan'
 import {
@@ -22,7 +23,7 @@ import {
   type ServersView,
 } from '@/composables/useServers'
 import { useI18n } from '@/i18n'
-import { api, type BatchAction, type BatchResultItem, type Server } from '@/lib/api'
+import { api, type BatchAction, type BatchResultItem, type Server, type ServerGroup } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import {
   CUSTOM_GROUP_VALUE,
@@ -61,7 +62,14 @@ const expandedId = ref<string | null>(null)
 watch(viewMode, (value) => writeServersView(value))
 
 const terminalAllowed = computed(() => can('terminal.use'))
-const groups = computed(() => collectGroupOptions(servers.value))
+const serverGroups = ref<ServerGroup[]>([])
+const groupManagerOpen = ref(false)
+
+const groups = computed(() => {
+  const names = new Set(collectGroupOptions(servers.value))
+  for (const group of serverGroups.value) names.add(group.name)
+  return [...names].sort((a, b) => a.localeCompare(b))
+})
 const tags = computed(() => collectTagOptions(servers.value))
 const visibleServers = computed(() => filterServers(servers.value, filters.value))
 const filtersActive = computed(() => hasActiveServerFilters(filters.value))
@@ -285,6 +293,24 @@ async function openPanel(id: string): Promise<void> {
   }
 }
 
+async function loadServerGroups(): Promise<void> {
+  try {
+    serverGroups.value = await api.serverGroups()
+  } catch {
+    // 分组列表只用于筛选/下拉建议；失败不阻断服务器列表。
+    serverGroups.value = []
+  }
+}
+
+onMounted(() => {
+  void loadServerGroups()
+})
+
+async function handleGroupsChanged(): Promise<void> {
+  await loadServerGroups()
+  await refresh()
+}
+
 function closeForm(): void {
   formOpen.value = false
   formTarget.value = null
@@ -317,6 +343,15 @@ async function handleFormSaved(saved: Server): Promise<void> {
           <span v-if="refreshing" class="ls-spinner" aria-hidden="true" />
           <AppIcon v-else name="refresh" size="0.875rem" />
           {{ t('common.refresh') }}
+        </button>
+        <button
+          id="servers-groups"
+          class="ls-btn"
+          type="button"
+          @click="groupManagerOpen = true"
+        >
+          <AppIcon name="folder" size="0.875rem" />
+          {{ t('server.group.manager.title') }}
         </button>
         <button
           v-if="canWrite"
@@ -567,10 +602,15 @@ async function handleFormSaved(saved: Server): Promise<void> {
     <ServerFormDialog
       v-if="formOpen"
       :server="formTarget"
-      :group-options="groups"
       @close="closeForm"
       @saved="handleFormSaved"
       @local-created="refresh()"
+    />
+
+    <ServerGroupManagerDialog
+      v-if="groupManagerOpen"
+      @close="groupManagerOpen = false"
+      @changed="handleGroupsChanged"
     />
 
     <ServerBatchResultDialog

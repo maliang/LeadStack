@@ -1565,9 +1565,9 @@ function toText(value: unknown): string | null {
 // 指标 key 以协议点分命名为准（契约 3.1），同时兼容 基础 期间出现过的下划线别名。
 export const METRIC_KEYS = {
   cpu: ['cpu.pct', 'cpu_pct', 'cpu', 'cpu_percent'],
-  mem: ['mem.used_pct', 'mem_used_pct', 'mem.pct', 'mem', 'mem_percent', 'memory_used_pct'],
+  mem: ['mem.used_pct', 'mem_used_pct', 'mem.pct', 'mem_pct', 'mem', 'mem_percent', 'memory_used_pct'],
   memBytes: ['mem.used_bytes', 'mem_used_bytes'],
-  disk: ['disk.used.pct', 'disk.used_pct', 'disk_used_pct', 'disk.pct', 'disk', 'disk_percent'],
+  disk: ['disk.used.pct', 'disk.used_pct', 'disk_used_pct', 'disk.pct', 'disk_pct', 'disk', 'disk_percent'],
   load: ['load.1', 'load1', 'load'],
   uptime: ['uptime_s', 'uptime'],
   netRx: ['net.rx_bytes', 'net_rx_bytes'],

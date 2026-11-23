@@ -710,9 +710,13 @@ onMounted(() => {
           :script-saving="scriptSaving"
           :script-error="scriptError"
           :script-notice="scriptNotice"
+          :panel-bound="Boolean(server.panel_credential_id)"
+          :panel-busy="panelBusy"
+          :panel-error="panelError"
           @run="runLogin"
           @open-url="reopenUrl"
           @save="saveLoginScript"
+          @open-panel="openPanel"
         />
         <ServerMetaTab
           v-else-if="tab === 'meta'"
