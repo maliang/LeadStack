@@ -188,7 +188,9 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 带扩展名的资源找不到就是 404，不能回退成 HTML。
-	if path.Ext(name) != "" {
+	// 例外是 index.html 本身（cleanPath 把 "/" 映射成它）：干净检出（dist 里只有
+	// .gitkeep）时要用占位页给出「先 make build」的提示，而不是 404。
+	if path.Ext(name) != "" && name != "index.html" {
 		http.NotFound(w, r)
 		return
 	}

@@ -246,6 +246,28 @@ func TestWebUIHandlerWithEmbeddedDist(t *testing.T) {
 	}
 }
 
+// 干净检出（dist 里只有 .gitkeep）时 "/" 必须回退到占位页而不是 404；
+// 带扩展名的缺失资源仍然保持 404（不能被 SPA 回退成 HTML）。
+func TestWebUIHandlerFallsBackToPlaceholderOnCleanCheckout(t *testing.T) {
+	h := newSPAHandler(fstest.MapFS{".gitkeep": {Data: []byte{}}})
+
+	rec := doRequest(t, h, http.MethodGet, "/", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d，期望 200（占位页）", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "make build") {
+		t.Fatalf("占位页应提示先 make build，实际 body=%q", rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("占位页 Cache-Control = %q，期望 no-store", got)
+	}
+
+	missing := doRequest(t, h, http.MethodGet, "/assets/missing.js", nil)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("缺失资源 status = %d，期望 404", missing.Code)
+	}
+}
+
 // failingWalkFS 让整树遍历失败，但单文件仍可打开：用于验证初始化降级。
 type failingWalkFS struct{ fs.FS }
 
