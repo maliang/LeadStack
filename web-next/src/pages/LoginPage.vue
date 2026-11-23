@@ -87,7 +87,7 @@ onMounted(() => {
     <section class="ls-login__card" :aria-busy="isChecking || submitting">
       <div class="ls-login__head">
         <span class="ls-login__mark" aria-hidden="true">
-          <BrandMark size="1.375rem" />
+          <BrandMark size="2rem" />
         </span>
         <h1 class="ls-login__title">
           LeadStack

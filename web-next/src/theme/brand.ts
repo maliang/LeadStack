@@ -16,19 +16,19 @@ import type { ThemePresetColors } from '@vean/ui'
  * 品牌绿色阶（Tailwind green 家族；与旧版的 emerald 青绿 #10b981/#059669 明确区分）：
  *   50  #f0fdf4
  *   100 #dcfce7
- *   500 #22c55e  ← 浅色模式 hover 的等价阶 / 焦点环
- *   600 #16a34a  ← 品牌主色，浅色模式填充
- *   700 #15803d  ← 深色模式填充：600 降亮一阶
- *   900 #14532d
- *   950 #052e16  ← 浅色模式按钮前景
+ *   500 #22c55e  ← 焦点环
+ *   600 #16a34a  ← 品牌主色（浅色模式 logo 渐变起点）
+ *   700 #15803d  ← 主按钮填充（浅色 / 深色统一）
+ *   800 #166534  ← 主按钮 hover
+ *   900 #14532d  ← 主按钮 active
+ *   950 #052e16
  *
  * 对比度自查（WCAG AA 正文 4.5:1，sRGB 相对亮度）：
- *   #052e16 on #16a34a = 4.52:1 ✓（所以浅色模式前景必须是深绿）
- *   #ffffff on #16a34a = 3.30:1 ✗（旧版白字方案不达 AA）
- *   #f8fafc on #15803d = 4.87:1 ✓（深色模式）
- * 注意 Vean 没有 hover 语义 token：solid 按钮 hover 是 `bg-primary/80` 叠在页面上，
- * 600 叠白 ≈ #45b56e，与 #22c55e 同色相、介于 500–400 之间，仍落在品牌绿色阶内；
- * 这正是把填充放在 600、把更亮的 500 留给 hover/焦点环的原因。
+ *   #ffffff on #15803d = 5.02:1 ✓（绿底白字，浅色 / 深色统一）
+ *   #ffffff on #16a34a = 3.30:1 ✗（600 太亮，不能配白字）
+ *   #ffffff on #166534 = 7.13:1 ✓（hover）
+ * 因此主按钮填充固定为 700、hover 到 800、active 到 900；600/500 只用于
+ * logo 渐变与焦点环，不承担正文对比度。
  */
 export const BRAND_SCALE = {
   50: '#f0fdf4',
@@ -36,31 +36,32 @@ export const BRAND_SCALE = {
   500: '#22c55e',
   600: '#16a34a',
   700: '#15803d',
+  800: '#166534',
   900: '#14532d',
   950: '#052e16',
 } as const
 
 /**
- * 语义 token 覆盖。浅色：品牌绿 600 做填充、950 做前景（AA 4.52:1）、500 做焦点环；
- * 深色：整体降亮一阶到 700，前景回到近白（4.87:1）。
+ * 语义 token 覆盖。浅色 / 深色都用 700 做填充、白字（5.02:1）、500 做焦点环；
+ * hover/active 由 `--ls-primary-hover-bg` / `brand-900` 负责。
  *
  * `sidebar-primary*` 是 mirror 规则，mirror 在 overrides 之前解析，所以必须在这里
  * 再声明一次，否则侧栏品牌色会停在内置 green.500 上。
  */
 export const BRAND_PRESET: ThemePresetColors = {
   light: {
-    primary: 'green.600',
-    'primary-foreground': 'green.950',
+    primary: 'green.700',
+    'primary-foreground': 'white',
     ring: 'green.500',
-    'sidebar-primary': 'green.600',
-    'sidebar-primary-foreground': 'green.950',
+    'sidebar-primary': 'green.700',
+    'sidebar-primary-foreground': 'white',
   },
   dark: {
     primary: 'green.700',
-    'primary-foreground': 'gray.50',
+    'primary-foreground': 'white',
     ring: 'green.500',
     'sidebar-primary': 'green.700',
-    'sidebar-primary-foreground': 'gray.50',
+    'sidebar-primary-foreground': 'white',
   },
 }
 

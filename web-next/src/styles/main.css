@@ -11,12 +11,13 @@
 :root {
   color-scheme: light;
 
-  /* 品牌绿（green 家族，与 theme/brand.ts 同一色阶）：600 填充（浅色），700 文字链接与深色填充，950 深绿字 */
+  /* 品牌绿（green 家族，与 theme/brand.ts 同一色阶）：700 填充/文字链接，800 hover，950 深色文字 */
   --ls-brand-50: #f0fdf4;
   --ls-brand-100: #dcfce7;
   --ls-brand-500: #22c55e;
   --ls-brand-600: #16a34a;
   --ls-brand-700: #15803d;
+  --ls-brand-800: #166534;
   --ls-brand-900: #14532d;
   --ls-brand-950: #052e16;
 
@@ -42,12 +43,12 @@
   --ls-mask: rgb(15 23 42 / 0.45);
 
   --ls-primary: var(--ls-brand-700);
-  --ls-primary-fill: var(--ls-brand-600);
-  --ls-primary-contrast: var(--ls-brand-950);
+  /* 绿底白字：700 上的白字对比度 5.02:1；hover 再深一阶到 800（7.13:1） */
+  --ls-primary-fill: var(--ls-brand-700);
+  --ls-primary-contrast: #ffffff;
   --ls-primary-soft: var(--ls-brand-50);
-  /* Vean solid hover = fill/80 叠在页面底色上；前景保持深绿以维持 AA */
-  --ls-primary-hover-bg: rgb(22 163 74 / 0.8);
-  --ls-primary-hover-contrast: var(--ls-brand-950);
+  --ls-primary-hover-bg: var(--ls-brand-800);
+  --ls-primary-hover-contrast: #ffffff;
 
   /* 字族与字号（font 简写用） */
   --ls-font-sans:
@@ -118,12 +119,12 @@ html.dark {
   --ls-danger-soft: #3b1113;
   --ls-danger-border: #5c1f1f;
   --ls-primary: #4ade80;
-  /* 与 theme/brand.ts 的 BRAND_PRESET.dark 对齐：填充降到 700，前景近白（4.87:1） */
+  /* 与 theme/brand.ts 的 BRAND_PRESET.dark 对齐：填充 700、前景白（5.02:1） */
   --ls-primary-fill: #15803d;
-  --ls-primary-contrast: #f8fafc;
+  --ls-primary-contrast: #ffffff;
   --ls-primary-soft: #0f2a1c;
-  --ls-primary-hover-bg: rgb(21 128 61 / 0.8);
-  --ls-primary-hover-contrast: #f8fafc;
+  --ls-primary-hover-bg: #166534;
+  --ls-primary-hover-contrast: #ffffff;
 
   /* 品牌色阶在深色下反转：50/100 为绿底，700/900 为绿字，500/600 仍作标记渐变 */
   --ls-brand-50: #0f2a1c;
@@ -284,7 +285,7 @@ body.ls-scroll-locked {
   height: 2rem;
   border-radius: var(--ls-radius-md);
   background: linear-gradient(135deg, var(--ls-brand-500), var(--ls-brand-600));
-  color: var(--ls-primary-contrast);
+  color: #ffffff;
 }
 
 .ls-brand__text {
@@ -809,7 +810,7 @@ body.ls-scroll-locked {
 }
 
 .ls-brandmark__pulse {
-  stroke: var(--ls-brand-50);
+  stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -865,7 +866,7 @@ body.ls-scroll-locked {
   height: 2.75rem;
   border-radius: var(--ls-radius-md);
   background: var(--ls-primary-fill);
-  color: var(--ls-primary-contrast);
+  color: #ffffff;
   box-shadow: var(--ls-shadow-sm);
 }
 
@@ -1067,14 +1068,15 @@ body.ls-scroll-locked {
 }
 
 .ls-btn--primary:hover {
-  /* 与 brand.ts 的约定保持一致：hover = 填充 80% 叠页面底色，不再自造一档实色 */
-  border-color: var(--ls-primary-fill);
+  /* hover 再深一阶，白字仍保持 AA；不用半透明叠色，避免不同底色上对比度漂移 */
+  border-color: var(--ls-primary-hover-bg);
   background: var(--ls-primary-hover-bg);
   color: var(--ls-primary-hover-contrast);
 }
 
 .ls-btn--primary:active {
-  background: var(--ls-primary-fill);
+  border-color: var(--ls-brand-900);
+  background: var(--ls-brand-900);
   color: var(--ls-primary-contrast);
 }
 
@@ -8065,5 +8067,181 @@ body.ls-scroll-locked {
   align-items: center;
   gap: var(--ls-space-2);
   min-height: var(--ls-hit-size);
+  cursor: pointer;
+}
+
+
+/* ---------- 服务器访问账号 ---------- */
+
+.ls-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-3);
+  min-width: 0;
+}
+
+.ls-accounts__loading {
+  display: flex;
+  align-items: center;
+  gap: var(--ls-space-2);
+  color: var(--ls-text-muted);
+  font: 400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+}
+
+.ls-accounts__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ls-account {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  min-width: 0;
+  padding: var(--ls-space-3);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-surface-muted);
+}
+
+.ls-account__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-account__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-account__name {
+  margin: 0;
+  color: var(--ls-text);
+  font: 600 var(--ls-text-md) / 1.4 var(--ls-font-sans);
+  overflow-wrap: anywhere;
+}
+
+.ls-account__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-1);
+}
+
+.ls-account__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-1);
+}
+
+.ls-account__kv {
+  margin: 0;
+}
+
+.ls-account__fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-1);
+  margin: 0;
+  padding: var(--ls-space-2);
+  border: 1px dashed var(--ls-border);
+  border-radius: var(--ls-radius-sm);
+  list-style: none;
+}
+
+.ls-account__field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-account__field-key {
+  color: var(--ls-text-subtle);
+  font: 500 var(--ls-text-xs) / 1.4 var(--ls-font-sans);
+}
+
+.ls-account__field-value {
+  min-width: 0;
+  color: var(--ls-text);
+  font: 400 var(--ls-text-xs) / 1.5 var(--ls-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.ls-account__result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  padding: var(--ls-space-2);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-sm);
+  background: var(--ls-surface);
+}
+
+.ls-account__result .ls-card__head {
+  margin: 0;
+}
+
+/* ---------- 访问账号表单 ---------- */
+
+.ls-account-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-3);
+  min-width: 0;
+}
+
+.ls-account-form__fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  margin: var(--ls-space-2) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ls-account-form__field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  gap: var(--ls-space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.ls-login-script__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+}
+
+/* 通用复选框行（账号表单 / 其它弹窗） */
+.ls-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ls-space-2);
+  min-height: var(--ls-hit-size);
+  color: var(--ls-text);
+  font: 400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+  cursor: pointer;
+}
+
+.ls-check input {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--ls-primary-fill);
   cursor: pointer;
 }

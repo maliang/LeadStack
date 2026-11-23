@@ -5,6 +5,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import ServerFormDialog from '@/components/servers/ServerFormDialog.vue'
 import ServerOverviewTab from '@/components/server-detail/ServerOverviewTab.vue'
 import ServerAccessTab from '@/components/server-detail/ServerAccessTab.vue'
+import ServerAccountsTab from '@/components/server-detail/ServerAccountsTab.vue'
 import ServerLoginTab from '@/components/server-detail/ServerLoginTab.vue'
 import ServerMetaTab from '@/components/server-detail/ServerMetaTab.vue'
 import ServerChecksTab from '@/components/server-detail/ServerChecksTab.vue'
@@ -60,6 +61,7 @@ import {
 const TABS: { key: ServerDetailTab; labelKey: string }[] = [
   { key: 'overview', labelKey: 'server.tab.overview' },
   { key: 'access', labelKey: 'server.tab.access' },
+  { key: 'accounts', labelKey: 'server.tab.accounts' },
   { key: 'login', labelKey: 'server.tab.login' },
   { key: 'meta', labelKey: 'server.tab.meta' },
   { key: 'checks', labelKey: 'server.tab.checks' },
@@ -681,6 +683,11 @@ onMounted(() => {
           @refresh-host="refreshHost"
           @test-connection="testConnection"
           @agent-upgrade="submitAgentUpgrade"
+        />
+        <ServerAccountsTab
+          v-else-if="tab === 'accounts'"
+          :server="server"
+          :can-write="canWrite"
         />
         <ServerAccessTab
           v-else-if="tab === 'access'"

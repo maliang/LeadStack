@@ -265,6 +265,26 @@ function openEditForm(id: string): void {
   formOpen.value = true
 }
 
+/* ---------------- 宝塔面板一键登录 ---------------- */
+
+const panelBusyId = ref<string | null>(null)
+const panelError = ref<string | null>(null)
+
+async function openPanel(id: string): Promise<void> {
+  if (panelBusyId.value !== null) return
+  panelBusyId.value = id
+  panelError.value = null
+  try {
+    const panel = await api.serverPanel(id)
+    const opened = window.open(panel.panel_url, '_blank', 'noopener,noreferrer')
+    if (!opened) panelError.value = t('server.login.urlBlocked')
+  } catch (caught) {
+    panelError.value = `${t('server.panel.failed')}${errorMessage(caught, '')}`.trim()
+  } finally {
+    panelBusyId.value = null
+  }
+}
+
 function closeForm(): void {
   formOpen.value = false
   formTarget.value = null
@@ -314,6 +334,14 @@ async function handleFormSaved(saved: Server): Promise<void> {
     <div v-if="actionNotice" id="servers-action-notice" class="ls-notice ls-notice--success" role="status">
       <p class="ls-notice__title">{{ actionNotice }}</p>
       <button class="ls-notice__action" type="button" @click="actionNotice = null">
+        {{ t('common.close') }}
+      </button>
+    </div>
+
+    <div v-if="panelError" id="servers-panel-error" class="ls-notice ls-notice--error" role="alert">
+      <p class="ls-notice__title">{{ t('server.panel.open') }}</p>
+      <p class="ls-notice__text">{{ panelError }}</p>
+      <button class="ls-notice__action" type="button" @click="panelError = null">
         {{ t('common.close') }}
       </button>
     </div>
@@ -408,8 +436,10 @@ async function handleFormSaved(saved: Server): Promise<void> {
         :selectable="canWrite"
         :selected="selectedIds.includes(server.id)"
         :can-edit="canWrite"
+        :panel-allowed="Boolean(server.panel_credential_id)"
         @select="onSelect"
         @edit="openEditForm"
+        @open-panel="openPanel"
       />
     </div>
 
@@ -423,9 +453,11 @@ async function handleFormSaved(saved: Server): Promise<void> {
         :selectable="canWrite"
         :selected="selectedIds.includes(server.id)"
         :can-edit="canWrite"
+        :panel-allowed="Boolean(server.panel_credential_id)"
         @toggle="toggleRow"
         @select="onSelect"
         @edit="openEditForm"
+        @open-panel="openPanel"
       />
     </ul>
 

@@ -2,17 +2,17 @@
 /**
  * 品牌绿调色板验收（Playwright 无头）。
  *
- * 断言目标：SConfigProvider 的 `preset` 生效后，主按钮（SButton solid primary）的
- * computed background 落在品牌绿色阶里（#16a34a / green.600），而不是 Vean 内置
+ * 断言目标：主按钮（`.ls-btn--primary` / SConfigProvider preset）的 computed background
+ * 落在品牌绿色阶里（#15803d / green.700，配白字 5.02:1），而不是 Vean 内置
  * emerald 青绿（#10b981/#059669，色相约 161°）。
  *
- * 另外覆盖三处「品牌面」消除两种绿：登录页主按钮 = rgb(22,163,74)、侧栏 logo 渐变含
+ * 另外覆盖三处「品牌面」消除两种绿：登录页主按钮 = rgb(21,128,61)、侧栏 logo 渐变含
  * #22c55e、键盘焦点环 box-shadow 含品牌绿；浅色与深色模式都不许出现 emerald 色值。
  *
  * 做法（hermetic，不需要 Go 后端）：
  *  1. 起静态服务器托管 web-next/dist（hash 路由，index.html 兜底）。
  *  2. 用 page.route() 拦 /api/v1/*，给登录 / me 一套内存假后端。
- *  3. 登录进首页，取「开始使用」主按钮的 computed color，按色阶 + 色相 + 对比度断言，
+ *  3. 登录进首页，取总览页主操作按钮的 computed color，按色阶 + 色相 + 对比度断言，
  *     并截整页图与按钮图。
  *
  * 用法：
@@ -56,13 +56,16 @@ const BRAND_SCALE = {
   500: '#22c55e',
   600: '#16a34a',
   700: '#15803d',
+  800: '#166534',
   900: '#14532d',
   950: '#052e16',
 }
-/** 主按钮填充必须命中的档位（浅色模式）。 */
-const EXPECTED_LEVEL = 600
-/** 深色模式：浅色 600 降亮一阶 → 700。 */
+/** 主按钮填充必须命中的档位（浅色 / 深色统一 700，配白字）。 */
+const EXPECTED_LEVEL = 700
+/** 深色模式同样用 700 + 白字。 */
 const DARK_EXPECTED_LEVEL = 700
+/** hover 再深一阶。 */
+const HOVER_EXPECTED_LEVEL = 800
 /** emerald 青绿的色相（#10b981 / #059669 ≈ 160–162°），用来证明「不是旧主题」。 */
 const EMERALD_HUE_MIN = 156
 
@@ -367,16 +370,16 @@ async function main() {
     await page.goto(`${base}/#/login`, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('#login-password', { timeout: 15000 })
 
-    // 1.1) 登录页主按钮：必须命中品牌绿 600，不能是 Vean 内置的 emerald 青绿
+    // 1.1) 登录页主按钮：必须命中品牌绿 700，不能是 Vean 内置的 emerald 青绿
     const loginButton = page.locator('#login-submit')
     const readLoginButton = () =>
       loginButton.evaluate((element) => {
         const computed = window.getComputedStyle(element)
         return { background: computed.backgroundColor, color: computed.color }
       })
-    const isBrand600 = (value) => {
+    const isBrand700 = (value) => {
       const color = parseRgb(value)
-      return Boolean(color) && color.r === 22 && color.g === 163 && color.b === 74 && color.a === 1
+      return Boolean(color) && color.r === 21 && color.g === 128 && color.b === 61 && color.a === 1
     }
 
     // 1.2) 焦点环：用键盘 Tab 走到提交按钮（鼠标点不算 :focus-visible）
@@ -399,7 +402,7 @@ async function main() {
     check('键盘 Tab 可到达登录页主按钮（:focus-visible 生效）', focusedSubmit)
 
     const loginStyle = await readLoginButton()
-    check('登录页主按钮填充 = rgb(22, 163, 74)（品牌 600）', isBrand600(loginStyle.background), loginStyle.background)
+    check('登录页主按钮填充 = rgb(21, 128, 61)（品牌 700，白字 5.02:1）', isBrand700(loginStyle.background), loginStyle.background)
     checkNoEmerald('浅色模式登录页主按钮不含 emerald', `${loginStyle.background} ${loginStyle.color}`)
 
     const lightRing = await readFocusRing()
@@ -415,7 +418,7 @@ async function main() {
     await page.waitForTimeout(250)
     const darkLoginStyle = await readLoginButton()
     check(
-      '深色模式登录页主按钮填充 = rgb(21, 128, 61)（品牌 700，600 降亮一阶）',
+      '深色模式登录页主按钮填充 = rgb(21, 128, 61)（品牌 700，白字）',
       /rgb\(21,\s*128,\s*61\)/.test(darkLoginStyle.background),
       darkLoginStyle.background,
     )
@@ -512,7 +515,7 @@ async function main() {
     await page.screenshot({ path: pageShot })
     await primary.screenshot({ path: buttonShot })
 
-    // 5) hover 等价阶：Vean solid hover = primary/80，叠在页面上更亮（≈ green.500 同族）
+    // 5) hover 语义：再深一阶到 800（白字对比度反而更高）
     const pageBackground = await page.evaluate(() => window.getComputedStyle(document.body).backgroundColor)
     await primary.hover()
     // Vean 的 transition-all-150：不等一下会读到过渡起点的颜色
@@ -527,23 +530,17 @@ async function main() {
     const hover = parseRgb(hoverStyle.background)
     check('hover 背景可解析', Boolean(hover), hoverStyle.background)
     if (hover) {
-      check('hover 走 primary/80 的提亮档（alpha 0.8）', Math.abs(hover.a - 0.8) <= 0.02, hoverStyle.background)
-      // 半透明色要叠到页面底色上才是眼睛看到的颜色
-      const surface = parseRgb(pageBackground) || { r: 255, g: 255, b: 255 }
-      const composite = {
-        r: hover.a * hover.r + (1 - hover.a) * surface.r,
-        g: hover.a * hover.g + (1 - hover.a) * surface.g,
-        b: hover.a * hover.b + (1 - hover.a) * surface.b,
-      }
-      const hovered = nearestScale(composite)
+      const hovered = nearestScale(hover)
       check(
-        `hover 合成色落在品牌绿色阶（${hovered.level} 档，偏差 ${hovered.distance.toFixed(1)}/255）且比填充更亮`,
-        hovered.distance <= 40 && relativeLuminance(composite) > relativeLuminance(background),
-        `rgb(${Math.round(composite.r)} ${Math.round(composite.g)} ${Math.round(composite.b)})`,
+        `hover 命中品牌绿 ${HOVER_EXPECTED_LEVEL} 档（偏差 ${hovered.distance.toFixed(1)}/255）且比填充更深`,
+        hovered.level === HOVER_EXPECTED_LEVEL &&
+          hovered.distance <= 4 &&
+          relativeLuminance(hover) < relativeLuminance(background),
+        `${hovered.hex}（page=${pageBackground}）`,
       )
     }
 
-    // 6) 深色模式：preset.dark 生效 → 填充降亮一阶（green.700），前景回到近白
+    // 6) 深色模式：preset.dark 生效 → 填充 green.700，前景白
     await page.mouse.move(0, 0)
     await page.evaluate(() => document.documentElement.classList.add('dark'))
     await page.waitForTimeout(250)
@@ -560,7 +557,7 @@ async function main() {
     if (darkBackground) {
       const nearestDark = nearestScale(darkBackground)
       check(
-        `深色模式填充命中品牌色阶 ${nearestDark.level}（600 降亮一阶）`,
+        `深色模式填充命中品牌色阶 ${nearestDark.level}（700 + 白字）`,
         nearestDark.level === DARK_EXPECTED_LEVEL && nearestDark.distance <= 4,
         `实际 ${darkStyle.background} ≈ ${nearestDark.hex}（偏差 ${nearestDark.distance}/255）`,
       )

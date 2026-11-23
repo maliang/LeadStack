@@ -1428,15 +1428,15 @@ POST /servers/import
 5. 空状态必须给出「下一步该做什么」的引导按钮。
 6. 表单错误就近展示，不用全局 toast 代替字段级错误。
 
-### 46.1 品牌绿与 Vean 主题：主色只能走 preset，按钮前景必须是深绿
+### 46.1 品牌绿与 Vean 主题：主色只能走 preset，主按钮统一绿底白字
 
-**结论**：品牌绿 #16a34a（green.600）不是通过 `theme.primary` 传进去的——`@vean/ui` 的 `ConfigProviderThemeOptions.primary` 只接受 26 个内置调色板名（slate / mist / gray / zinc / neutral / stone / taupe / olive / mauve / red / orange / amber / yellow / lime / green / emerald / teal / cyan / sky / blue / indigo / violet / purple / fuchsia / pink / rose），拿不到任意色值。品牌色的唯一入口是 `theme.preset`（`ThemePresetColors`：按 `SemanticToken` 给出 light/dark 两组 `TokenOverride`）。`SConfigProvider` 把 preset 物化成 `overrides` 再交给主题引擎（`presetToOverrides` / `resolveThemeOptions`），所以 preset 能盖住声明式规则，但**不改写调色板本身**；`primary` 仍要选一个内置名（用 `green`）来给 `--primary-50…950` 角色阶与 chart 派生兜底。两者一起用：`primary: 'green'` + `preset: BRAND_PRESET`（`web-next/src/App.vue`）。
+**结论**：品牌绿以 green 家族为准（600 #16a34a 用于 logo 渐变与品牌标识，700 #15803d 用于主按钮填充）——它不是通过 `theme.primary` 传进去的——`@vean/ui` 的 `ConfigProviderThemeOptions.primary` 只接受 26 个内置调色板名（slate / mist / gray / zinc / neutral / stone / taupe / olive / mauve / red / orange / amber / yellow / lime / green / emerald / teal / cyan / sky / blue / indigo / violet / purple / fuchsia / pink / rose），拿不到任意色值。品牌色的唯一入口是 `theme.preset`（`ThemePresetColors`：按 `SemanticToken` 给出 light/dark 两组 `TokenOverride`）。`SConfigProvider` 把 preset 物化成 `overrides` 再交给主题引擎（`presetToOverrides` / `resolveThemeOptions`），所以 preset 能盖住声明式规则，但**不改写调色板本身**；`primary` 仍要选一个内置名（用 `green`）来给 `--primary-50…950` 角色阶与 chart 派生兜底。两者一起用：`primary: 'green'` + `preset: BRAND_PRESET`（`web-next/src/App.vue`）。
 
-- **preset 的值不能写裸 hex**：`ColorValue = HSLColor | OKLCHColor | SimplePaletteKey | TailwindPaletteLevelColorKey`，合法写法是 `green.600` 这种「调色板.阶」、`white` / `black` / `transparent` 这类简单键，或完整的 `hsl(...)` / `oklch(...)`；`#16a34a` 不在类型里（运行时解析器更宽松，但类型层直接拒绝，别依赖）。
-- **`--ls-brand-*` 不是 Vean token**：`web-next/src/styles/main.css` 里的 `--ls-brand-*` 是旧版设计变量的遗留（旧 React 界面仍以 indigo 系类名为主），迁移期两套并存；Vean 侧的权威定义在 `web-next/src/theme/brand.ts`（`BRAND_SCALE` / `BRAND_PRESET`）。写文档只写「品牌绿 #16a34a」，别去 `main.css` 抄当下变量值——它正在被逐批替换。
-- **按钮前景刻意用深绿，不是白字**：浅色模式 `primary` = `green.600` #16a34a、`primary-foreground` = `green.950` #052e16。白字 `#ffffff` 压在 #16a34a 上只有 **3.30:1**，正文 AA 要 4.5:1，不过；深绿 #052e16 是 **4.52:1**，达标。深色模式填充降到 `green.700` #15803d、前景 `gray.50` #f8fafc，**4.87:1**。所以「主按钮改回白字」是回归，不是风格偏好。
+- **preset 的值不能写裸 hex**：`ColorValue = HSLColor | OKLCHColor | SimplePaletteKey | TailwindPaletteLevelColorKey`，合法写法是 `green.700` 这种「调色板.阶」、`white` / `black` / `transparent` 这类简单键，或完整的 `hsl(...)` / `oklch(...)`；`#16a34a` 不在类型里（运行时解析器更宽松，但类型层直接拒绝，别依赖）。
+- **`--ls-brand-*` 不是 Vean token**：`web-next/src/styles/main.css` 里的 `--ls-brand-*` 是旧版设计变量的遗留；Vean 侧的权威定义在 `web-next/src/theme/brand.ts`（`BRAND_SCALE` / `BRAND_PRESET`）。改主色时两处一起改，并以 `brand.ts` 的色阶说明为准。
+- **主按钮统一绿底白字**：填充用 `green.700` #15803d，白字 **5.02:1**（AA 达标）；`green.600` 配白字只有 3.30:1，所以 600 只用于 logo 渐变，不承担按钮文字对比度。hover 再深一阶到 `green.800` #166534（7.13:1），active 到 `green.900` #14532d；浅色 / 深色模式同一套填充与前景，不按主题翻转按钮文字颜色。
 - **`sidebar-primary*` 必须在 preset 里再声明一次**：mirror 规则在 overrides 之前解析，只改 `primary` 的话侧栏品牌色会停在内置 `green.500` 上。
-- **没有 hover 语义 token**：solid 按钮的 hover 是 `bg-primary/80` 叠在页面底色上（600 叠白 ≈ #45b56e），仍在品牌绿阶内；「填充放 600、更亮的 500 留给 hover 与焦点环」就是这个决定，别给按钮单独加 hover 色。
+- **没有 hover 语义 token**：自定义 `.ls-btn--primary` 的 hover 由 `--ls-primary-hover-bg` 显式给出（green.800 实色），不再用半透明叠色——半透明在不同页面底色上会让白字对比度漂移。
 
 **怎么验**：`node web-next/scripts/palette-check.mjs`（先 `pnpm --dir web-next run build` 出 `dist`；Playwright 无头，退出码 0=全过 / 1=断言失败 / 2=环境缺失，如未装 playwright）。它取主按钮的 computed background 断言落在品牌绿阶（而不是内置 emerald 青绿 #10b981/#059669），并断言按钮文字对比度 ≥ 4.5:1；动主题必须让这条脚本绿。
 
@@ -3047,3 +3047,52 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 文案键集中在 `web-next/src/i18n/zh-CN/servers.ts` 与 `web-next/src/i18n/en-US/servers.ts` 的 `server.meta.*`（标题、备注计数、六个预设名、四类校验错误、保存/重读失败、只读提示）；新增文案两边都要加，缺键会把 key 直接显示在界面上。
 
+
+## 70. 服务器访问账号（`server_accounts`，迁移 0015）
+
+### 70.1 为什么需要
+
+一台机器常常不止一组登录信息：宝塔面板、SSH、数据库、只读跳板机……旧的
+`servers.login_script` / 全局 `credentials` 都只能表达「一条」。本节新增
+**服务器级、可多条**的访问账号：名称 / 地址 / 用户名 / 密码 / 备注 /
+自定义字段 / 一键登录脚本，列表项支持单字段复制与整条复制。
+
+### 70.2 表与安全边界
+
+- `server_accounts(id, server_id, name, address, username, password_enc, note,
+  custom_fields, login_script, created_at, updated_at)`；`custom_fields` 是 JSON
+  对象文本，默认 `{}`。
+- **密码只存 AES-256-GCM 密文**（与 `credentials.secret_enc` 同一把主密钥）；
+  列表/详情只返回 `has_password`，明文只在用户点「显示/复制密码」时通过
+  `GET /servers/{id}/accounts/{accountId}/secret` 按需读取，并写
+  `server.account.access` 审计。复制整条会先读一次密码再拼文本。
+- 删除服务器时 `DeleteServer` 显式清理该表（同时保留 `ON DELETE` 语义的注释）；
+  备份/恢复沿用整库归档，不需要额外的备份格式变更。
+
+### 70.3 接口与权限
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/servers/{id}/accounts` | `server.read` + 范围 | 列表（不含密码） |
+| GET | `/servers/{id}/accounts/{aid}/secret` | `server.read` + 范围 | 明文密码；写 `server.account.access` |
+| POST | `/servers/{id}/accounts` | `server.write` + 范围 | 创建；密码可空 |
+| PATCH | `/servers/{id}/accounts/{aid}` | `server.write` + 范围 | 部分更新；`password: ""` 清空、缺省不改 |
+| DELETE | `/servers/{id}/accounts/{aid}` | `server.write` + 范围 | 删除 |
+| POST | `/servers/{id}/accounts/{aid}/login` | `server.write` + 范围 | 执行该账号的登录脚本 |
+
+字段约束：名称 ≤128 字且必填；地址 ≤512 字；用户名 ≤128 字；备注 ≤2000 字；
+自定义字段沿用服务器档案的 32 键 / 键 40 字 / 值 200 字 / 8KB 限制；脚本 ≤8192
+字（码点）且禁止 NUL。跨服务器访问账号一律 404，不泄露存在性。
+
+schema 版本 14 → 15：`internal/api/handlers_backup.go` 的 `defaultMaxSchemaVersion`
+与 `cmd/leadstack/backup_cmd.go` 的 `currentSchemaVersion` 必须同步改成 15，
+否则本版本备份会被自己的 CLI 当成「来自未来版本」拒绝恢复。
+
+### 70.4 一键登录与列表项
+
+- 账号脚本执行复用 `RunLoginScript`（与 `POST /servers/{id}/login` 同一条发布
+  执行器路径），stdout 解析为 `url` / `terminal` / `output`；返回体额外带
+  `account_id`。
+- 服务器列表的行/卡片在 `panel_credential_id` 非空时显示「打开面板」：点击才
+  `GET /servers/{id}/panel`，随后直接 `window.open(panel_url)`；地址不进入页面
+  文案、不预取、不缓存（与 §67 的面板入口同一安全模型）。

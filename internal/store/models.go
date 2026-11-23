@@ -59,6 +59,24 @@ const (
 	HostKeyPolicyStrict    = "strict"
 )
 
+// ServerAccount 是服务器上的一条访问账号（迁移 0015）。
+//
+// 一台服务器可以有多条：名称 / 地址 / 用户名 / 密码 / 备注 / 自定义字段 /
+// 一键登录脚本。密码只存密文；自定义字段是 JSON 对象文本。
+type ServerAccount struct {
+	ID               string `json:"id"`
+	ServerID         string `json:"server_id"`
+	Name             string `json:"name"`
+	Address          string `json:"address"`
+	Username         string `json:"username"`
+	PasswordEnc      []byte `json:"-"`
+	Note             string `json:"note"`
+	CustomFieldsJSON string `json:"-"`
+	LoginScript      string `json:"login_script"`
+	CreatedAt        int64  `json:"created_at"`
+	UpdatedAt        int64  `json:"updated_at"`
+}
+
 // Credential 是一条 SSH 凭证；库内只存密文，明文永不落库。
 type Credential struct {
 	ID          string  `json:"id"`

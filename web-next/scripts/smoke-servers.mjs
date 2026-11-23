@@ -87,12 +87,13 @@ function serverFixture(overrides) {
     group: '默认分组',
     group_ids: ['grp-default'],
     group_names: ['默认分组'],
+    panel_credential_id: null,
     ...overrides,
   }
 }
 
 const SERVERS = [
-  serverFixture({ id: 'srv-alpha' }),
+  serverFixture({ id: 'srv-alpha', panel_credential_id: '{{SECRET_hnjdy2wo}}' }),
   serverFixture({
     id: 'srv-beta',
     name: 'beta-node',
@@ -280,6 +281,13 @@ async function installMockApi(context, state) {
       return json(200, { data: { ...found, ...body } })
     }
 
+    const panel = /^\/api\/v1\/servers\/([^/]+)\/panel$/.exec(path)
+    if (panel && method === 'GET') {
+      return json(200, {
+        data: { server_id: decodeURIComponent(panel[1]), panel_url: 'https://panel.example.com:8888/entry', auth_type: 'session' },
+      })
+    }
+
     const ticket = /^\/api\/v1\/servers\/([^/]+)\/terminal-ticket$/.exec(path)
     if (ticket && method === 'POST') {
       return json(200, { data: { ticket: 'smoke-terminal-ticket', expires_in: 60 } })
@@ -385,6 +393,13 @@ async function run() {
   const page = await context.newPage()
   const pageErrors = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.addInitScript(() => {
+    window.__opened = []
+    window.open = (target) => {
+      window.__opened.push(String(target))
+      return null
+    }
+  })
   const apiCalls = []
   page.on('request', (request) => {
     if (request.url().includes('/api/v1/')) {
@@ -438,6 +453,22 @@ async function run() {
       (await page.locator('#servers-view-list').getAttribute('aria-pressed')) === 'true',
     )
     check('默认渲染列表容器而非卡片网格', (await page.locator('.ls-servers__list').count()) === 1 && (await page.locator('.ls-servers__cards').count()) === 0)
+
+    // 2b) 宝塔 API 一键登录：只有绑定了面板凭据的行显示入口
+    check(
+      '仅绑定面板凭据的服务器显示宝塔登录',
+      (await page.locator('#server-srv-alpha-panel').count()) === 1 &&
+        (await page.locator('#server-srv-beta-panel').count()) === 0,
+    )
+    await page.click('#server-srv-alpha-panel')
+    await page.waitForTimeout(250)
+    const openedPanel = await page.evaluate(() => window.__opened.slice())
+    check(
+      '点击宝塔登录按 panel_url 打开新窗口且不进页面文案',
+      openedPanel.includes('https://panel.example.com:8888/entry') &&
+        !(await page.locator('body').innerText()).includes('panel.example.com'),
+      openedPanel.join(',').slice(0, 80),
+    )
     check('两台服务器都渲染', (await page.locator('.ls-srv-row').count()) === 2)
 
     // 3) 卡片视图 + localStorage 记忆

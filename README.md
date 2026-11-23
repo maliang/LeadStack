@@ -54,7 +54,7 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量 agent，跨平台、开箱即用
 <details>
 <summary>展开其余界面</summary>
 
-**服务器详情** —— 基础信息、面板入口、登录信息、一键登录与服务器档案；检测 / 终端 / 文件 / 日志各是独立标签页。
+**服务器详情** —— 基础信息、面板入口、SSH 登录信息、访问账号（多条登录信息 + 一键登录脚本）、一键登录与服务器档案；检测 / 终端 / 文件 / 日志各是独立标签页。
 
 ![服务器详情](docs/images/server-detail.png)
 
@@ -284,7 +284,11 @@ db-01.internal
 
 > 每台机器可单独设 SSH 端口，全局默认在「设置 → 网络与端口」。改地址/端口后会自动重测连通性并重新校验主机密钥。
 
-**D. 查看登录信息（登录信息卡片）**
+**D. 访问账号（一台机器多条登录信息）**
+
+服务器详情页的「访问账号」标签可以保存**多条**登录信息：名称、地址、用户名、密码、备注、自定义字段，以及每条账号各自的一键登录脚本。密码只加密存在控制端，列表默认掩码；点「显示密码 / 复制密码 / 复制整条」时才按需读取并写审计 `server.account.access`。每条账号的字段都能单独复制，自定义字段也可以逐个复制。脚本执行走 `POST /servers/{id}/accounts/{aid}/login`，返回 `url / terminal / output`，与单条一键登录同一套执行器。
+
+**D1. 查看 SSH 登录信息（登录信息卡片）**
 
 服务器详情页的「登录信息」卡片显示这台机器绑定的 SSH 地址、端口、用户名与密码，密码可复制，省得再去凭证库里翻。
 
@@ -416,7 +420,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 宝塔补充：面板「设置 → API 接口」开 API 并把控制端出口 IP 加白名单；面板多为自签证书，内网可「跳过证书校验」；
 zip 制品 ≤16MB；v1 只覆盖 static/php，node/SSL/反代仍在面板里配。
 
-> 绑了面板凭证（`kind=baota`）的服务器，详情页「登录信息」卡片头部会出现**「打开面板」**按钮：点击时先 `GET /api/v1/servers/{id}/panel` 取一次面板地址（写审计 `server.panel`），再用新标签打开。接口只回显 `panel_url` 与 `auth_type`，**`api_key` 永不回显**；服务器不在你的角色范围内一律 404。详见 [架构契约 §67.8](docs/ARCHITECTURE.md)。
+> 绑了面板凭证（`kind=baota`）的服务器，**列表行/卡片**和详情页「登录信息」卡片都会出现**「打开面板」**按钮：点击时先 `GET /api/v1/servers/{id}/panel` 取一次面板地址（写审计 `server.panel`），再用新标签打开。接口只回显 `panel_url` 与 `auth_type`，**`api_key` 永不回显**；服务器不在你的角色范围内一律 404。详见 [架构契约 §67.8](docs/ARCHITECTURE.md)。
 
 内置 6 个部署预设（git pull / 静态接管 / 宝塔站点 / systemd / compose / LaravelS）可一键建模板并预填参数。
 
@@ -849,7 +853,7 @@ make dev               # 开发模式（另开 make web-dev 走前端热更新�
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check      # Docker 构建 + 容器内健康检查 + 备份校验
 node scripts/capture-screenshots.mjs   # 重采 README 截图（需带演示数据的控制端）
-node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3099 校验总数）
+node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3162 校验总数）
 ```
 
 > **内嵌前端 = `web-next/`**：`make build` 先构建 `web-next/dist/`，再由 `make web-embed` 复制到 `internal/webui/dist/`、经 `go:embed` 打进二进制。

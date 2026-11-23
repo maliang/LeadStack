@@ -52,7 +52,7 @@ function isActive(item: NavGroup['items'][number]): boolean {
     <div class="ls-sidebar__head">
       <RouterLink class="ls-brand" to="/" @click="emit('navigate')">
         <span class="ls-brand__mark">
-          <BrandMark size="1.125rem" />
+          <BrandMark size="1.5rem" />
         </span>
         <span class="ls-brand__text">
           <span class="ls-brand__name">{{ copy.appName }}</span>

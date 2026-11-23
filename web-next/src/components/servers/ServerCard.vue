@@ -16,13 +16,16 @@ const props = withDefaults(
     selected?: boolean
     /** 无 server.write 时页面传 false：编辑按钮不渲染 */
     canEdit?: boolean
+    /** 绑定了宝塔面板凭据：显示「宝塔登录」入口 */
+    panelAllowed?: boolean
   }>(),
-  { selectable: false, selected: false, canEdit: false },
+  { selectable: false, selected: false, canEdit: false, panelAllowed: false },
 )
 
 const emit = defineEmits<{
   (event: 'select', id: string, selected: boolean): void
   (event: 'edit', id: string): void
+  (event: 'open-panel', id: string): void
 }>()
 
 const { t } = useI18n()
@@ -88,6 +91,16 @@ const mode = computed(() => props.server.mode.trim())
     </div>
 
     <div class="ls-srv-card__foot">
+      <button
+        v-if="props.panelAllowed"
+        :id="`server-card-${server.id}-panel`"
+        class="ls-btn ls-btn--small"
+        type="button"
+        @click="emit('open-panel', server.id)"
+      >
+        <AppIcon name="key-round" size="0.875rem" />
+        {{ t('server.panel.open') }}
+      </button>
       <button
         v-if="props.canEdit"
         :id="`server-card-${server.id}-edit`"

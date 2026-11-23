@@ -156,6 +156,25 @@ const ACCESS = {
   auth_type: 'password',
 }
 
+const ACCOUNT_PASSWORD = '{{SECRET_o7tocwoa}}'
+const ACCOUNT_PANEL_URL = 'https://10.0.0.11:8888/entry'
+const ACCOUNTS = [
+  {
+    id: 'acc-1',
+    server_id: 'srv-alpha',
+    name: '宝塔面板',
+    address: 'https://10.0.0.11:8888',
+    username: 'admin',
+    note: '生产面板',
+    custom_fields: { 环境: '生产' },
+    login_script: 'printf \'{"url":"https://10.0.0.11:8888/entry"}\'',
+    has_password: true,
+    has_login_script: true,
+    created_at: Date.now() - 1000,
+    updated_at: Date.now() - 1000,
+  },
+]
+
 const CHECKS = [
   {
     id: 'chk-1',
@@ -358,6 +377,68 @@ async function installMockApi(context, state) {
       return json(200, { data: { ...state.server, notes: undefined, custom_fields: undefined } })
     }
 
+    const accountsPath = /^\/api\/v1\/servers\/([^/]+)\/accounts$/.exec(path)
+    if (accountsPath && method === 'GET') {
+      return json(200, { data: state.accounts })
+    }
+    if (accountsPath && method === 'POST') {
+      const body = JSON.parse(request.postData() || '{}')
+      state.accountCreateBodies.push(body)
+      const created = {
+        id: 'acc-new',
+        server_id: state.server.id,
+        name: body.name,
+        address: body.address || '',
+        username: body.username || '',
+        note: body.note || '',
+        custom_fields: body.custom_fields || {},
+        login_script: body.login_script || '',
+        has_password: Boolean(body.password),
+        has_login_script: Boolean(body.login_script),
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      }
+      state.accounts.push(created)
+      return json(201, { data: created })
+    }
+    const accountSecret = /^\/api\/v1\/servers\/([^/]+)\/accounts\/([^/]+)\/secret$/.exec(path)
+    if (accountSecret && method === 'GET') {
+      state.accountSecretCalls += 1
+      return json(200, { data: { password: ACCOUNT_PASSWORD } })
+    }
+    const accountLogin = /^\/api\/v1\/servers\/([^/]+)\/accounts\/([^/]+)\/login$/.exec(path)
+    if (accountLogin && method === 'POST') {
+      state.accountLoginCalls += 1
+      return json(200, {
+        data: {
+          server_id: state.server.id,
+          account_id: decodeURIComponent(accountLogin[2]),
+          url: ACCOUNT_PANEL_URL,
+          terminal: '',
+          output: '',
+        },
+      })
+    }
+    const accountItem = /^\/api\/v1\/servers\/([^/]+)\/accounts\/([^/]+)$/.exec(path)
+    if (accountItem && method === 'PATCH') {
+      const id = decodeURIComponent(accountItem[2])
+      const body = JSON.parse(request.postData() || '{}')
+      state.accountPatchBodies.push(body)
+      const found = state.accounts.find((item) => item.id === id)
+      if (found) {
+        Object.assign(found, body)
+        if (typeof body.password === 'string') found.has_password = body.password !== ''
+        if (typeof body.login_script === 'string') found.has_login_script = body.login_script !== ''
+      }
+      return json(200, { data: found || state.accounts[0] })
+    }
+    if (accountItem && method === 'DELETE') {
+      const id = decodeURIComponent(accountItem[2])
+      state.accountDeletes.push(id)
+      state.accounts = state.accounts.filter((item) => item.id !== id)
+      return json(200, { data: { deleted: true } })
+    }
+
     const access = /^\/api\/v1\/servers\/([^/]+)\/access$/.exec(path)
     if (access && method === 'GET') {
       state.accessCalls += 1
@@ -541,6 +622,12 @@ async function run() {
     upgradeCalls: 0,
     upgradeMode: 'ok',
     upgradeBodies: [],
+    accounts: structuredClone(ACCOUNTS),
+    accountSecretCalls: 0,
+    accountLoginCalls: 0,
+    accountPatchBodies: [],
+    accountCreateBodies: [],
+    accountDeletes: [],
   }
   const context = await browser.newContext({ viewport: { width: 320, height: 800 } })
   await installMockApi(context, state)
@@ -585,7 +672,7 @@ async function run() {
     await page.waitForSelector('.ls-detail__title', { timeout: 15000 })
     check('详情页渲染标题', (await page.locator('.ls-detail__title').innerText()).includes('alpha-node'))
     check('详情只拉一次 /servers/{id}', state.detailCalls === 1, `${state.detailCalls} 次`)
-    check('八个 tab 都在', (await page.locator('.ls-tabs__btn').count()) === 8, String(await page.locator('.ls-tabs__btn').count()))
+    check('九个 tab 都在', (await page.locator('.ls-tabs__btn').count()) === 9, String(await page.locator('.ls-tabs__btn').count()))
     await shot(page, '01-overview')
     check('概览 tab 默认选中', (await page.locator('#server-tab-overview').getAttribute('aria-selected')) === 'true')
 
@@ -621,6 +708,39 @@ async function run() {
     check('收起不重复请求', state.accessCalls === 1, `${state.accessCalls} 次`)
     const narrowAccess = await noHorizontalScroll()
     check('320px 登录信息无横向滚动', narrowAccess.overflow <= 0, `溢出 ${narrowAccess.overflow}px`)
+
+    // 3b) 访问账号：多条登录信息 + 按需读密码 + 账号级一键登录
+    await page.click('#server-tab-accounts')
+    await page.waitForSelector('.ls-account', { timeout: 8000 })
+    const accountText = await page.locator('.ls-account').innerText()
+    check('访问账号渲染名称/地址/用户名/备注', accountText.includes('宝塔面板') && accountText.includes('10.0.0.11') && accountText.includes('admin') && accountText.includes('生产面板'))
+    check('自定义字段可见', accountText.includes('环境') && accountText.includes('生产'))
+    check('列表默认掩码密码', accountText.includes('••••••••') && !accountText.includes(ACCOUNT_PASSWORD))
+    check('账号不请求密码直到用户点击', state.accountSecretCalls === 0, `${state.accountSecretCalls} 次`)
+
+    await page.locator('.ls-account button', { hasText: '显示密码' }).first().click()
+    await page.waitForFunction((pwd) => document.body.innerText.includes(pwd), ACCOUNT_PASSWORD, { timeout: 5000 })
+    check('点显示密码后才请求 secret', state.accountSecretCalls === 1, `${state.accountSecretCalls} 次`)
+
+    await page.locator('.ls-account__actions button', { hasText: '一键登录' }).click()
+    await page.waitForSelector('.ls-account__result', { timeout: 8000 })
+    const openedAccount = await page.evaluate(() => window.__opened.slice())
+    check('账号脚本返回 url 时打开新窗口', openedAccount.includes(ACCOUNT_PANEL_URL), openedAccount.join(',').slice(0, 80))
+    check('账号登录打到账号级端点', state.accountLoginCalls === 1, `${state.accountLoginCalls} 次`)
+
+    await page.locator('.ls-account__actions button', { hasText: '编辑' }).click()
+    await page.waitForSelector('#server-account-form', { timeout: 5000 })
+    await page.fill('#account-form-address', 'https://10.0.0.11:9999')
+    await page.click('#server-account-submit')
+    await page.waitForSelector('#server-account-form', { state: 'detached', timeout: 8000 })
+    const accountPatch = state.accountPatchBodies.at(-1) || {}
+    check(
+      '编辑账号 PATCH 提交地址且密码留空不提交',
+      accountPatch.address === 'https://10.0.0.11:9999' && accountPatch.password === undefined,
+      JSON.stringify(accountPatch),
+    )
+    const narrowAccounts = await noHorizontalScroll()
+    check('320px 访问账号无横向滚动', narrowAccounts.overflow <= 0, `溢出 ${narrowAccounts.overflow}px`)
 
     // 4) 一键登录：terminal 态给命令 + 复制
     await page.click('#server-tab-login')
@@ -1145,7 +1265,7 @@ async function run() {
       await limitedPage.goto(`${base}/#/servers/srv-alpha?tab=terminal`, { waitUntil: 'domcontentloaded' })
       await limitedPage.waitForSelector('.ls-detail__title', { timeout: 15000 })
       await limitedPage.waitForSelector('.ls-banner--warning', { timeout: 5000 })
-      check('缺权限时八个 tab 仍可见', (await limitedPage.locator('.ls-tabs__btn').count()) === 8)
+      check('缺权限时九个 tab 仍可见', (await limitedPage.locator('.ls-tabs__btn').count()) === 9)
       check(
         '缺权限时 ?tab=terminal 仍选中终端',
         (await limitedPage.locator('#server-tab-terminal').getAttribute('aria-selected')) === 'true',

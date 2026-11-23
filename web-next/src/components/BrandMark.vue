@@ -22,7 +22,7 @@ withDefaults(
     focusable="false"
     :style="{ width: size, height: size }"
   >
-    <path class="ls-brandmark__frame" d="M17 11 V45 H52" stroke-width="7.2" />
-    <path class="ls-brandmark__pulse" d="M26 33 L32 33 L36 21 L42 38 L46 27 L52 27" stroke-width="4.8" />
+    <path class="ls-brandmark__frame" d="M15 8 V49 H56" stroke-width="7.6" />
+    <path class="ls-brandmark__pulse" d="M24 35 L30 35 L35 20 L42 41 L47 27 L56 27" stroke-width="5.2" />
   </svg>
 </template>

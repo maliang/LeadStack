@@ -217,6 +217,9 @@ func (s *Store) DeleteServer(ctx context.Context, id string) error {
 		if _, err := tx.ExecContext(ctx, `UPDATE enroll_tokens SET server_id = NULL WHERE server_id = ?`, id); err != nil {
 			return fmt.Errorf("解绑服务器 %s 的接入令牌: %w", id, err)
 		}
+		if err := DeleteServerAccounts(ctx, tx, id); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -433,6 +436,14 @@ func nullableInt(p *int64) any {
 }
 
 // nullableStr 把可选字符串转成可绑定的参数。
+// nullableBytes 把空/非空字节切片映射为 SQL NULL / BLOB。
+func nullableBytes(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
+}
+
 func nullableStr(p *string) any {
 	if p == nil {
 		return nil

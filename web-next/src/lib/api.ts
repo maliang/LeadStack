@@ -2554,6 +2554,77 @@ export function normalizeServerPanel(input: unknown): ServerPanel {
 }
 
 /**
+ * 服务器访问账号（迁移 0015）：一台服务器可保存多条登录信息。
+ *
+ * 列表/详情不含密码：`has_password` 只表示是否已保存，明文密码走
+ * `GET /servers/{id}/accounts/{aid}/secret`（服务端每次写审计）。
+ */
+export interface ServerAccount {
+  id: string
+  server_id: string
+  name: string
+  address: string
+  username: string
+  note: string
+  custom_fields: Record<string, string>
+  login_script: string
+  has_password: boolean
+  has_login_script: boolean
+  created_at: number | null
+  updated_at: number | null
+}
+
+export interface CreateServerAccountPayload {
+  name: string
+  address?: string
+  username?: string
+  password?: string
+  note?: string
+  custom_fields?: Record<string, string>
+  login_script?: string
+}
+
+export interface UpdateServerAccountPayload {
+  name?: string
+  address?: string
+  username?: string
+  /** 传空串表示清空密码；不传表示保持不变 */
+  password?: string
+  note?: string
+  custom_fields?: Record<string, string>
+  login_script?: string
+}
+
+export interface ServerAccountLoginResult extends ServerLoginResult {
+  account_id: string
+}
+
+function normalizeServerAccount(input: unknown): ServerAccount {
+  const raw = toRecord(input) ?? {}
+  return {
+    id: toText(raw.id) ?? '',
+    server_id: toText(raw.server_id) ?? '',
+    name: toText(raw.name) ?? '',
+    address: toText(raw.address) ?? '',
+    username: toText(raw.username) ?? '',
+    note: toText(raw.note) ?? '',
+    custom_fields: normalizeCustomFields(raw.custom_fields),
+    login_script: toText(raw.login_script) ?? '',
+    has_password: toBool(raw.has_password),
+    has_login_script: toBool(raw.has_login_script),
+    created_at: toNumber(raw.created_at),
+    updated_at: toNumber(raw.updated_at),
+  }
+}
+
+/** 账号执行结果在同一份 payload 上多带 account_id。 */
+function normalizeServerAccountLogin(input: unknown): ServerAccountLoginResult {
+  const base = normalizeServerLogin(input)
+  const raw = toRecord(input) ?? {}
+  return { ...base, account_id: toText(raw.account_id) ?? '' }
+}
+
+/**
  * POST /servers/{id}/login 的返回体：服务端在目标机执行登录脚本，把 stdout 解析成三选一。
  *
  * 前端按「哪个字段非空」分派：url → 新标签打开；terminal → 跳到终端并预置命令；否则展示 output。
@@ -2968,6 +3039,51 @@ export const api = {
    */
   serverPanel(id: string): Promise<ServerPanel> {
     return request<unknown>(`/servers/${encodeURIComponent(id)}/panel`).then(normalizeServerPanel)
+  },
+
+  serverAccounts(id: string): Promise<ServerAccount[]> {
+    return request<unknown>(`/servers/${encodeURIComponent(id)}/accounts`).then((raw) =>
+      Array.isArray(raw) ? raw.map(normalizeServerAccount) : [],
+    )
+  },
+
+  createServerAccount(serverId: string, payload: CreateServerAccountPayload): Promise<ServerAccount> {
+    return request<unknown>(`/servers/${encodeURIComponent(serverId)}/accounts`, {
+      method: 'POST',
+      body: payload,
+    }).then(normalizeServerAccount)
+  },
+
+  updateServerAccount(
+    serverId: string,
+    accountId: string,
+    payload: UpdateServerAccountPayload,
+  ): Promise<ServerAccount> {
+    return request<unknown>(
+      `/servers/${encodeURIComponent(serverId)}/accounts/${encodeURIComponent(accountId)}`,
+      { method: 'PATCH', body: payload },
+    ).then(normalizeServerAccount)
+  },
+
+  deleteServerAccount(serverId: string, accountId: string): Promise<unknown> {
+    return request<unknown>(
+      `/servers/${encodeURIComponent(serverId)}/accounts/${encodeURIComponent(accountId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  /** 明文密码只在用户点「显示/复制」时读取，服务端写审计。 */
+  serverAccountSecret(serverId: string, accountId: string): Promise<string> {
+    return request<unknown>(
+      `/servers/${encodeURIComponent(serverId)}/accounts/${encodeURIComponent(accountId)}/secret`,
+    ).then((raw) => toText(toRecord(raw)?.password) ?? '')
+  },
+
+  serverAccountLogin(serverId: string, accountId: string): Promise<ServerAccountLoginResult> {
+    return request<unknown>(
+      `/servers/${encodeURIComponent(serverId)}/accounts/${encodeURIComponent(accountId)}/login`,
+      { method: 'POST' },
+    ).then(normalizeServerAccountLogin)
   },
 
   /** 执行该服务器配置的登录脚本（POST，非幂等只读：服务端会在目标机跑一次命令）。 */

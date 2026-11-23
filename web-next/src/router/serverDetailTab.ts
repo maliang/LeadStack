@@ -11,6 +11,7 @@
 export type ServerDetailTab =
   | 'overview'
   | 'access'
+  | 'accounts'
   | 'login'
   | 'meta'
   | 'checks'
@@ -21,6 +22,7 @@ export type ServerDetailTab =
 export const SERVER_DETAIL_TABS: readonly ServerDetailTab[] = [
   'overview',
   'access',
+  'accounts',
   'login',
   'meta',
   'checks',
@@ -32,6 +34,7 @@ export const SERVER_DETAIL_TABS: readonly ServerDetailTab[] = [
 export const SERVER_DETAIL_TAB_QUERY: Record<ServerDetailTab, { tab: ServerDetailTab } | null> = {
   overview: null,
   access: { tab: 'access' },
+  accounts: { tab: 'accounts' },
   login: { tab: 'login' },
   meta: { tab: 'meta' },
   checks: { tab: 'checks' },
