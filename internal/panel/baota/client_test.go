@@ -73,6 +73,11 @@ func (m *mockPanel) handler() http.Handler {
 			_ = json.NewEncoder(w).Encode(map[string]any{"siteStatus": true})
 		case strings.Contains(r.URL.Path, "/files"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": true})
+		case strings.Contains(r.URL.Path, "/config"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": true,
+				"msg":    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -98,6 +103,36 @@ func TestClientSignsRequestsAndPings(t *testing.T) {
 	bad, _ := New(Config{BaseURL: srv.URL, APIKey: "wrong-key"})
 	if err := bad.Ping(context.Background()); err == nil {
 		t.Fatal("错误密钥应返回错误")
+	}
+}
+
+func TestLoginURLUsesTmpToken(t *testing.T) {
+	mock := newMockPanel("k")
+	srv := httptest.NewServer(mock.handler())
+	defer srv.Close()
+	c, err := New(Config{BaseURL: srv.URL + "/safe-entry", APIKey: "k"})
+	if err != nil {
+		t.Fatalf("构造客户端失败: %v", err)
+	}
+	login, err := c.LoginURL(context.Background())
+	if err != nil {
+		t.Fatalf("生成登录地址失败: %v", err)
+	}
+	wantPrefix := srv.URL + "/login?tmp_token="
+	if !strings.HasPrefix(login, wantPrefix) {
+		t.Fatalf("登录地址应以 %s 开头，实际 %s", wantPrefix, login)
+	}
+	if strings.Contains(login, "safe-entry") {
+		t.Fatalf("登录地址不应包含安全入口子路径: %s", login)
+	}
+	var called bool
+	for _, call := range mock.calls {
+		if strings.Contains(call, "get_tmp_token") {
+			called = true
+		}
+	}
+	if !called {
+		t.Fatalf("应调用 get_tmp_token，实际 %v", mock.calls)
 	}
 }
 

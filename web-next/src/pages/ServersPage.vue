@@ -283,11 +283,19 @@ async function openPanel(id: string): Promise<void> {
   if (panelBusyId.value !== null) return
   panelBusyId.value = id
   panelError.value = null
+  // 必须在点击事件内同步开窗，否则 await 之后会被浏览器当成弹窗拦截。
+  const win = window.open('about:blank', '_blank')
+  if (!win) {
+    panelError.value = t('server.login.urlBlocked')
+    panelBusyId.value = null
+    return
+  }
+  win.opener = null
   try {
-    const panel = await api.serverPanel(id)
-    const opened = window.open(panel.panel_url, '_blank', 'noopener,noreferrer')
-    if (!opened) panelError.value = t('server.login.urlBlocked')
+    const login = await api.serverPanelLogin(id)
+    if (!win.closed) win.location.replace(login.url)
   } catch (caught) {
+    win.close()
     panelError.value = `${t('server.panel.failed')}${errorMessage(caught, '')}`.trim()
   } finally {
     panelBusyId.value = null

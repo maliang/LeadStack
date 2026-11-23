@@ -3061,6 +3061,11 @@ export const api = {
     return request<unknown>(`/servers/${encodeURIComponent(id)}/panel`).then(normalizeServerPanel)
   },
 
+  /** POST /servers/{id}/panel-login —— 生成一次性宝塔登录地址（120 秒内有效） */
+  serverPanelLogin(id: string): Promise<{ url: string; expires_in: number }> {
+    return request(`/servers/${encodeURIComponent(id)}/panel-login`, { method: 'POST' })
+  },
+
   serverAccounts(id: string): Promise<ServerAccount[]> {
     return request<unknown>(`/servers/${encodeURIComponent(id)}/accounts`).then((raw) =>
       Array.isArray(raw) ? raw.map(normalizeServerAccount) : [],

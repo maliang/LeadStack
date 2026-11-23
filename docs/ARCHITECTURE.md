@@ -2008,6 +2008,9 @@ ALTER TABLE servers ADD COLUMN panel_credential_id TEXT; -- kind=baota 的凭据
 
 - `POST /api/v1/credentials`：`{"name":"bt","kind":"baota","panel_url":"https://1.2.3.4:8888","api_key":"…","insecure_skip_verify":true}` → 201
 - `POST /api/v1/credentials/{id}/test` → `{"ok":true,"message":"面板连接正常"}`；失败也是 200 + `ok:false`（把面板原因原样带出）
+- `POST /api/v1/servers/{id}/panel-login` → `{"url":"https://面板/login?tmp_token=…","expires_in":120}`：
+  控制端用面板 API 的 `config?action=get_tmp_token` 生成一次性登录地址；前端必须在点击事件内先同步开窗，
+  拿到 URL 后 `location.replace`，避免 `await` 之后再 `window.open` 被浏览器弹窗拦截
 - `POST/PATCH /api/v1/apps`：新增 `provider`、`site_name`、`site_port`、`site_type`、`healthcheck_path`
 - `POST/PATCH /api/v1/servers`：新增 `panel_credential_id`（空串=解绑；非 baota 凭据 → 400）
 - `binary` 模板允许 `content` 为空（表示本次发布不重启服务；baota 通道直接用空模板）

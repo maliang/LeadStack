@@ -445,6 +445,12 @@ async function installMockApi(context, state) {
       return json(200, { data: ACCESS })
     }
 
+    const panelLogin = /^\/api\/v1\/servers\/([^/]+)\/panel-login$/.exec(path)
+    if (panelLogin && method === 'POST') {
+      state.panelLoginCalls = (state.panelLoginCalls || 0) + 1
+      return json(200, { data: { url: PANEL_URL, expires_in: 120 } })
+    }
+
     const panel = /^\/api\/v1\/servers\/([^/]+)\/panel$/.exec(path)
     if (panel && method === 'GET') {
       state.panelCalls += 1
@@ -643,8 +649,13 @@ async function run() {
   await page.addInitScript(() => {
     window.__opened = []
     window.open = (target) => {
-      window.__opened.push(String(target))
-      return null
+      const fake = {
+        closed: false,
+        opener: null,
+        location: { replace: (url) => window.__opened.push(String(url)) },
+      }
+      if (target && target !== 'about:blank') window.__opened.push(String(target))
+      return fake
     }
   })
 
@@ -688,7 +699,7 @@ async function run() {
     await panelButton.click()
     await page.waitForTimeout(300)
     const opened = await page.evaluate(() => window.__opened.slice())
-    check('打开面板走 window.open(panel_url)', opened.includes(PANEL_URL), opened.join(',').slice(0, 60))
+    check('打开面板走一次性登录地址', opened.includes(PANEL_URL) && state.panelLoginCalls === 1, opened.join(',').slice(0, 60))
     check('面板地址不进页面文案', !(await page.locator('body').innerText()).includes(PANEL_URL))
 
     // 3) 登录信息：默认折叠且不发请求

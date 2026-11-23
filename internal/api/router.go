@@ -60,6 +60,7 @@ func (a *API) Router() http.Handler {
 			r.With(permServerRead, inScope).Get("/servers/{serverID}", a.handleGetServer)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}/access", a.handleServerAccess)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}/panel", a.handleServerPanel)
+			r.With(permServerRead, inScope).Post("/servers/{serverID}/panel-login", a.handleServerPanelLogin)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}/accounts", a.handleListServerAccounts)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}/accounts/{accountID}/secret", a.handleServerAccountSecret)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}/metrics", a.handleServerMetrics)

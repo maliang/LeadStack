@@ -114,6 +114,7 @@ const (
 	pathUnzip       = "/files?action=Unzip"
 	pathZip         = "/files?action=Zip"
 	pathDeleteFile  = "/files?action=DeleteFile"
+	pathTmpToken    = "/config?action=get_tmp_token"
 )
 
 // token 返回面板鉴权 token：md5(api_key)。
@@ -181,6 +182,41 @@ func snippet(b []byte) string {
 		s = s[:200] + "…"
 	}
 	return s
+}
+
+// LoginURL 通过面板 API 生成一次性登录地址（/login?tmp_token=...）。
+//
+// 面板的 get_tmp_token 接口会生成 64 位临时 token，有效期 120 秒；
+// 浏览器打开 /login?tmp_token=<token> 后直接建立登录会话并跳转面板首页。
+// 因此调用方必须立即打开该 URL，不能缓存或写日志。
+func (c *Client) LoginURL(ctx context.Context) (string, error) {
+	body, err := c.post(ctx, pathTmpToken, nil)
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		Status *bool  `json:"status"`
+		Msg    string `json:"msg"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", fmt.Errorf("解析面板临时登录密钥失败: %w（响应：%s）", err, snippet(body))
+	}
+	token := strings.TrimSpace(out.Msg)
+	if token == "" || len(token) != 64 {
+		return "", fmt.Errorf("面板未返回有效的临时登录密钥（响应：%s）", snippet(body))
+	}
+	// 面板登录路由固定在站点根路径 /login；安全入口只影响面板首页，不影响该路由。
+	base := c.origin()
+	return base + "/login?tmp_token=" + url.QueryEscape(token), nil
+}
+
+// origin 返回 scheme://host[:port]，去掉可能存在的安全入口子路径。
+func (c *Client) origin() string {
+	u, err := url.Parse(c.base)
+	if err != nil || u.Host == "" {
+		return c.base
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // Ping 调用 GetSystemTotal 验证地址、密钥与白名单是否可用。

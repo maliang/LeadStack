@@ -322,6 +322,13 @@ async function installMockApi(context, state) {
       return json(200, { data: { ...found, ...body } })
     }
 
+    const panelLogin = /^\/api\/v1\/servers\/([^/]+)\/panel-login$/.exec(path)
+    if (panelLogin && method === 'POST') {
+      return json(200, {
+        data: { url: 'https://panel.example.com:8888/login?tmp_token=smoke-token', expires_in: 120 },
+      })
+    }
+
     const panel = /^\/api\/v1\/servers\/([^/]+)\/panel$/.exec(path)
     if (panel && method === 'GET') {
       return json(200, {
@@ -437,8 +444,13 @@ async function run() {
   await page.addInitScript(() => {
     window.__opened = []
     window.open = (target) => {
-      window.__opened.push(String(target))
-      return null
+      const fake = {
+        closed: false,
+        opener: null,
+        location: { replace: (url) => window.__opened.push(String(url)) },
+      }
+      if (target && target !== 'about:blank') window.__opened.push(String(target))
+      return fake
     }
   })
   const apiCalls = []
@@ -514,8 +526,8 @@ async function run() {
     await page.waitForTimeout(250)
     const openedPanel = await page.evaluate(() => window.__opened.slice())
     check(
-      '点击宝塔登录按 panel_url 打开新窗口且不进页面文案',
-      openedPanel.includes('https://panel.example.com:8888/entry') &&
+      '点击宝塔登录打开一次性登录地址且不进页面文案',
+      openedPanel.some((url) => url.includes('tmp_token=smoke-token')) &&
         !(await page.locator('body').innerText()).includes('panel.example.com'),
       openedPanel.join(',').slice(0, 80),
     )

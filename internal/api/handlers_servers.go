@@ -19,6 +19,7 @@ import (
 
 	"github.com/maliang/leadstack/internal/credential"
 	"github.com/maliang/leadstack/internal/deploy"
+	"github.com/maliang/leadstack/internal/panel/baota"
 )
 
 // 服务器字段的长度约束。
@@ -309,7 +310,7 @@ func (a *API) handleServerAccess(w http.ResponseWriter, r *http.Request) {
 
 // serverPanelPayload 是 GET /api/v1/servers/{id}/panel 的返回体。
 //
-// 只回显面板地址与认证类型：panel_url 供调用方跳转/展示，api_key 永不回显。
+// 只回显面板地址与认证类型：panel_url 供调用方展示，api_key 永不回显。
 type serverPanelPayload struct {
 	ServerID string `json:"server_id"`
 	PanelURL string `json:"panel_url"`
@@ -327,45 +328,16 @@ func (a *API) handleServerPanel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "缺少服务器 ID")
 		return
 	}
-	if a.cipher == nil {
-		writeError(w, http.StatusServiceUnavailable, codeInternal, "凭证加密未启用（缺少主密钥）")
-		return
-	}
-
-	ctx := r.Context()
-	srv, err := a.st.GetServer(ctx, id)
+	srv, cred, secret, err := a.loadServerPanelSecret(r.Context(), id)
 	if err != nil {
-		a.writeStoreError(w, r, err)
-		return
-	}
-	if srv.PanelCredentialID == nil || strings.TrimSpace(*srv.PanelCredentialID) == "" {
-		writeError(w, http.StatusConflict, codeConflict, "服务器未绑定面板凭证")
-		return
-	}
-	cred, err := a.st.GetCredential(ctx, *srv.PanelCredentialID)
-	if err != nil {
-		a.writeStoreError(w, r, err)
-		return
-	}
-	// 只有宝塔面板凭据才有面板地址；SSH 凭据没有 panel_url 可返回。
-	if cred.Kind != string(credential.KindBaota) {
-		writeError(w, http.StatusConflict, codeConflict, "服务器绑定的不是宝塔面板凭证")
-		return
-	}
-	plain, err := a.cipher.Decrypt(cred.SecretEnc)
-	if err != nil {
-		a.internalError(w, r, fmt.Errorf("解密服务器 %s 的面板凭证失败: %w", id, err))
-		return
-	}
-	secret, err := credential.Unmarshal(plain)
-	if err != nil {
-		a.internalError(w, r, fmt.Errorf("解析服务器 %s 的面板凭证失败: %w", id, err))
-		return
-	}
-	panelURL := strings.TrimSpace(secret.PanelURL)
-	if secret.Kind != credential.KindBaota || panelURL == "" {
-		// 库里 kind 与密文内容不一致属数据损坏，按冲突返回而不是回显空地址。
-		writeError(w, http.StatusConflict, codeConflict, "服务器绑定的宝塔面板凭证缺少面板地址")
+		switch {
+		case errors.Is(err, errCipherDisabled):
+			writeError(w, http.StatusServiceUnavailable, codeInternal, err.Error())
+		case errors.Is(err, errPanelUnbound), errors.Is(err, errPanelCredentialKind), errors.Is(err, errPanelURLMissing):
+			writeError(w, http.StatusConflict, codeConflict, err.Error())
+		default:
+			a.writeStoreError(w, r, err)
+		}
 		return
 	}
 
@@ -374,9 +346,91 @@ func (a *API) handleServerPanel(w http.ResponseWriter, r *http.Request) {
 
 	writeData(w, http.StatusOK, serverPanelPayload{
 		ServerID: srv.ID,
-		PanelURL: panelURL,
+		PanelURL: strings.TrimSpace(secret.PanelURL),
 		AuthType: string(secret.Kind),
 	})
+}
+
+// loadServerPanelSecret 读取服务器绑定的宝塔凭据并解密。
+func (a *API) loadServerPanelSecret(ctx context.Context, id string) (*store.Server, *store.Credential, credential.Secret, error) {
+	if a.cipher == nil {
+		return nil, nil, credential.Secret{}, errCipherDisabled
+	}
+	srv, err := a.st.GetServer(ctx, id)
+	if err != nil {
+		return nil, nil, credential.Secret{}, err
+	}
+	if srv.PanelCredentialID == nil || strings.TrimSpace(*srv.PanelCredentialID) == "" {
+		return nil, nil, credential.Secret{}, errPanelUnbound
+	}
+	cred, err := a.st.GetCredential(ctx, *srv.PanelCredentialID)
+	if err != nil {
+		return nil, nil, credential.Secret{}, err
+	}
+	if cred.Kind != string(credential.KindBaota) {
+		return nil, nil, credential.Secret{}, errPanelCredentialKind
+	}
+	plain, err := a.cipher.Decrypt(cred.SecretEnc)
+	if err != nil {
+		return nil, nil, credential.Secret{}, fmt.Errorf("解密服务器 %s 的面板凭证失败: %w", id, err)
+	}
+	secret, err := credential.Unmarshal(plain)
+	if err != nil {
+		return nil, nil, credential.Secret{}, fmt.Errorf("解析服务器 %s 的面板凭证失败: %w", id, err)
+	}
+	if secret.Kind != credential.KindBaota || strings.TrimSpace(secret.PanelURL) == "" {
+		return nil, nil, credential.Secret{}, errPanelURLMissing
+	}
+	return srv, cred, secret, nil
+}
+
+var (
+	errCipherDisabled      = errors.New("凭证加密未启用（缺少主密钥）")
+	errPanelUnbound        = errors.New("服务器未绑定面板凭证")
+	errPanelCredentialKind = errors.New("服务器绑定的不是宝塔面板凭证")
+	errPanelURLMissing     = errors.New("服务器绑定的宝塔面板凭证缺少面板地址")
+)
+
+// handleServerPanelLogin 处理 POST /api/v1/servers/{id}/panel-login。
+//
+// 用面板 API 生成一次性 tmp_token 登录地址（有效期 120 秒），前端立即打开；
+// api_key 与 tmp_token 都不写日志、不进响应缓存。
+func (a *API) handleServerPanelLogin(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "serverID"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, "缺少服务器 ID")
+		return
+	}
+	_, cred, secret, err := a.loadServerPanelSecret(r.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, errCipherDisabled):
+			writeError(w, http.StatusServiceUnavailable, codeInternal, err.Error())
+		case errors.Is(err, errPanelUnbound), errors.Is(err, errPanelCredentialKind), errors.Is(err, errPanelURLMissing):
+			writeError(w, http.StatusConflict, codeConflict, err.Error())
+		default:
+			a.writeStoreError(w, r, err)
+		}
+		return
+	}
+	client, err := baota.New(baota.Config{
+		BaseURL:            secret.PanelURL,
+		APIKey:             secret.APIKey,
+		InsecureSkipVerify: secret.InsecureSkipVerify,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+		return
+	}
+	loginURL, err := client.LoginURL(r.Context())
+	if err != nil {
+		a.logger.Warn("宝塔面板临时登录失败", "server_id", id, "error", err)
+		writeError(w, http.StatusBadGateway, codeInternal, "宝塔面板登录失败: "+err.Error())
+		return
+	}
+	a.auditManual(r, "server.panel_login", "server", id,
+		fmt.Sprintf(`{"credential_id":%q}`, cred.ID))
+	writeData(w, http.StatusOK, map[string]any{"url": loginURL, "expires_in": 120})
 }
 
 // handleCreateServer 处理 POST /api/v1/servers。
