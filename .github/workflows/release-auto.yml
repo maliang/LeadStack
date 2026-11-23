@@ -140,6 +140,7 @@ jobs:
     timeout-minutes: 40
     permissions:
       contents: write
+      actions: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAG: ${{ needs.prepare.outputs.version }}
@@ -238,6 +239,20 @@ jobs:
           gh release edit "${TAG}" --notes-file /tmp/release-notes.md --draft=false
           echo "已发布 ${TAG}"
           echo "schema marker: <!-- schema_changed: ${SCHEMA_CHANGED} -->"
+
+      # 触发独立的 Gitee 镜像 workflow。
+      # 不用 release.published 事件：本 workflow 用 GITHUB_TOKEN 创建 Release，
+      # GitHub 不会为 GITHUB_TOKEN 产生的事件再触发其它 workflow（防递归）。
+      # 镜像失败只告警，不影响已经发布的 GitHub Release，也不会触发下面的清理。
+      - name: 触发 Gitee 镜像
+        continue-on-error: true
+        shell: bash
+        run: |
+          if gh workflow run mirror-gitee.yml -f tag="${TAG}"; then
+            echo "已触发 Gitee 镜像：${TAG}"
+          else
+            echo "::warning::触发 Gitee 镜像失败，可手动执行 gh workflow run mirror-gitee.yml -f tag=${TAG}"
+          fi
 
       # 任何一步失败：删掉草稿 Release 与远端 tag，避免「有新版本提示但下载 404」
       - name: 失败清理（删除草稿 Release 与 tag）
