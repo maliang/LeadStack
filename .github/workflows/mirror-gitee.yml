@@ -1,0 +1,177 @@
+# GitHub Release 发布后镜像到 Gitee：master / tag / 发行版 / 二进制资产。
+#
+# 为什么独立成 workflow：Gitee 同步失败不应该影响已经发布成功的 GitHub Release，
+# 而且可以手动重跑（幂等：已有发行版与同名资产会跳过，不再重复上传）。
+#
+# 前置 secret：GITEE_TOKEN（Gitee 私人令牌，勾选 projects 权限）。
+# 未配置时打印 warning 并跳过，不阻塞任何流程。
+name: Mirror to Gitee
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要同步的 tag（留空 = 最近一次 GitHub Release）"
+        required: false
+        default: ""
+
+# 同一 tag 只跑一个镜像任务；手动重跑不会与自动触发并发上传同一批资产。
+concurrency:
+  group: mirror-gitee-${{ github.event.release.tag_name || inputs.tag || 'latest' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  GITEE_OWNER: maliang47
+  GITEE_REPO: leadstack
+
+jobs:
+  mirror:
+    name: 同步到 Gitee
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检查 GITEE_TOKEN
+        id: token
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "${GITEE_TOKEN}" ]; then
+            echo "::warning::未配置 GITEE_TOKEN，跳过 Gitee 同步"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 解析 tag
+        if: steps.token.outputs.enabled == 'true'
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          if [ -z "${tag}" ]; then
+            tag="$(gh release view --json tagName -q .tagName)"
+          fi
+          printf 'tag=%s\n' "${tag}" >> "$GITHUB_OUTPUT"
+          echo "同步版本：${tag}"
+
+      - name: 检出 tag 对应的提交
+        if: steps.token.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+
+      - name: 推送 master 与 tag
+        if: steps.token.outputs.enabled == 'true'
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # token 只存在于本 step 的临时 remote URL，不写进仓库配置（runner 用完即弃）。
+          git remote add gitee "https://${GITEE_OWNER}:${GITEE_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+          # tag 必须与本地对象一致；已存在时 git 会报 up-to-date，不会覆盖。
+          git push gitee "refs/tags/${TAG}:refs/tags/${TAG}"
+          # 分支只做快进：老 tag 重跑时 master 已前进，push 会被拒绝，这里降级为警告。
+          if ! git push gitee HEAD:refs/heads/master; then
+            echo "::warning::Gitee master 不是快进更新，已跳过分支同步（tag 已同步）"
+          fi
+
+      - name: 下载 GitHub Release 资产
+        if: steps.token.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "${TAG}" --dir dist
+          ls -lh dist
+
+      - name: 创建或复用 Gitee 发行版
+        if: steps.token.outputs.enabled == 'true'
+        id: release
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          api="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}"
+          status=$(curl -sS -o /tmp/gitee-release.json -w '%{http_code}' \
+            -H "Authorization: token ${GITEE_TOKEN}" \
+            "${api}/releases/tags/${TAG}")
+          release_id="$(jq -r '.id // empty' /tmp/gitee-release.json 2>/dev/null || true)"
+          if [ -z "${release_id}" ]; then
+            gh release view "${TAG}" --json body -q .body > /tmp/gitee-body.md
+            jq -n --arg tag "${TAG}" --arg name "${TAG}" --rawfile body /tmp/gitee-body.md \
+              '{tag_name:$tag,name:$name,body:$body,target_commitish:"master",prerelease:false}' \
+              > /tmp/gitee-create.json
+            curl -fsS -X POST "${api}/releases" \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              -H 'Content-Type: application/json' \
+              -d @/tmp/gitee-create.json > /tmp/gitee-created.json
+            release_id="$(jq -r '.id' /tmp/gitee-created.json)"
+            echo "已创建 Gitee 发行版 ${TAG}（id=${release_id}）"
+          else
+            echo "复用已有 Gitee 发行版 ${TAG}（id=${release_id}）"
+          fi
+          printf 'id=%s\n' "${release_id}" >> "$GITHUB_OUTPUT"
+
+      - name: 上传缺失的二进制资产
+        if: steps.token.outputs.enabled == 'true'
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          api="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${RELEASE_ID}"
+          curl -fsS -H "Authorization: token ${GITEE_TOKEN}" "${api}" > /tmp/gitee-current.json
+          jq -r '.assets[].name' /tmp/gitee-current.json > /tmp/gitee-existing.txt
+          for f in dist/*; do
+            name="$(basename "${f}")"
+            case "${name}" in
+              *.tar.gz|*.zip|checksums.txt) ;;
+              *) continue ;;
+            esac
+            if grep -Fxq "${name}" /tmp/gitee-existing.txt; then
+              echo "跳过已存在：${name}"
+              continue
+            fi
+            code=$(curl -sS -o /tmp/gitee-attach.json -w '%{http_code}' \
+              -X POST "${api}/attach_files" \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              -F "file=@${f}")
+            if [ "${code}" != "201" ] && [ "${code}" != "200" ]; then
+              echo "::error::上传 ${name} 失败（HTTP ${code}）：$(cat /tmp/gitee-attach.json)"
+              exit 1
+            fi
+            echo "已上传：${name}"
+          done
+
+      - name: 校验 Gitee 发行版资产
+        if: steps.token.outputs.enabled == 'true'
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          api="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${RELEASE_ID}"
+          curl -fsS -H "Authorization: token ${GITEE_TOKEN}" "${api}" > /tmp/gitee-final.json
+          count=$(jq '[.assets[]
+            | select(.name | test("^leadstack(_|-agent_)"))
+            | select(.name | test("\\.(tar\\.gz|zip)$"))] | length' /tmp/gitee-final.json)
+          checksum=$(jq '[.assets[] | select(.name == "checksums.txt")] | length' /tmp/gitee-final.json)
+          echo "二进制资产 ${count} 个 / checksums.txt ${checksum} 个"
+          if [ "${count}" -lt 10 ] || [ "${checksum}" -lt 1 ]; then
+            echo "::error::Gitee 资产不完整（期望 10 个归档 + checksums.txt）"
+            jq -r '.assets[].name' /tmp/gitee-final.json
+            exit 1
+          fi
