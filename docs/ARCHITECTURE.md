@@ -1580,7 +1580,7 @@ leadstack network --reset                      # 清除全部网络设置，回�
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
-| `LEADSTACK_UPDATE_REPO` | `maliang/leadstack` | 检查更新的 GitHub 仓库 |
+| `LEADSTACK_UPDATE_REPO` | `maliang/leadstack` | 检查更新的发布仓库（GitHub / Gitee） |
 | `LEADSTACK_UPDATE_API_BASE` | `https://api.github.com` | 主更新源 API 基址（测试/镜像用） |
 | `LEADSTACK_UPDATE_API_BASE_FALLBACK` | `https://gitee.com/api/v5` | 主源不可达时自动回退的 API 基址；默认仅在主源仍是官方 GitHub 时启用。显式设为空串可关闭回退 |
 | `LEADSTACK_UPDATE_CHECK_INTERVAL` | `6h` | 自动检查间隔（0 = 只在手动刷新时检查） |
