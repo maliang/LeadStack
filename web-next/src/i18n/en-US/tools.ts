@@ -53,7 +53,7 @@ const tools: Record<string, string> = {
   'terminal.connectFailed': 'Terminal connection failed',
   'terminal.connecting': 'Requesting a one-time ticket and connecting…',
   'terminal.disconnected': 'Connection closed; you can reconnect.',
-  'terminal.disabledHint': 'Start the control plane with LEADSTACK_TERMINAL_ENABLED=true to use the terminal here.',
+  'terminal.disabledHint': 'The control plane has Web terminal disabled. Set LEADSTACK_TERMINAL_ENABLED=true and restart to enable it (on by default).',
   'terminal.disabledTitle': 'Web terminal is disabled on the control plane',
   'terminal.footerHint': 'Terminal data travels over WebSocket; closing the tab or switching servers ends the session.',
   'terminal.reconnect': 'Reconnect',
@@ -80,7 +80,7 @@ const tools: Record<string, string> = {
   'tools.noPermissionHint': 'This account lacks terminal.use, so this page requests no server data. Ask an administrator to grant it, then refresh.',
   'tools.noPermissionTitle': 'Terminal permission required',
   'tools.searchPlaceholder': 'Search name or address',
-  'tools.terminalDescription': 'The terminal requires LEADSTACK_TERMINAL_ENABLED on the control plane.',
+  'tools.terminalDescription': 'The terminal is on by default; set LEADSTACK_TERMINAL_ENABLED=false on the control plane to disable it.',
   'tools.terminalTitle': 'Choose a server to open a terminal',
 }
 

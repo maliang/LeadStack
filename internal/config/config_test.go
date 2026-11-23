@@ -326,3 +326,23 @@ func TestResolveUpdateFallback(t *testing.T) {
 		t.Fatalf("显式备用源应去尾斜杠保留，实际 %q", got)
 	}
 }
+
+func TestTerminalEnabledDefaultsOn(t *testing.T) {
+	t.Setenv(EnvTerminalEnabled, "")
+	cfg, err := Load("dev", nil)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if !cfg.TerminalEnabled {
+		t.Fatal("Web 终端默认应为开启")
+	}
+
+	t.Setenv(EnvTerminalEnabled, "false")
+	cfg, err = Load("dev", nil)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	if cfg.TerminalEnabled {
+		t.Fatal("LEADSTACK_TERMINAL_ENABLED=false 应关闭终端")
+	}
+}

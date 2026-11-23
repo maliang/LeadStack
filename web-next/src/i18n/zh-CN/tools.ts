@@ -53,7 +53,7 @@ const tools: Record<string, string> = {
   'terminal.connectFailed': '终端连接失败',
   'terminal.connecting': '正在申请一次性票据并连接…',
   'terminal.disconnected': '连接已断开，可重新连接',
-  'terminal.disabledHint': '需要以 LEADSTACK_TERMINAL_ENABLED=true 启动控制端后，才能在此打开终端。',
+  'terminal.disabledHint': '控制端已关闭 Web 终端。设置 LEADSTACK_TERMINAL_ENABLED=true 后重启即可开启（默认已开启）。',
   'terminal.disabledTitle': '控制端未开启 Web 终端',
   'terminal.footerHint': '终端数据通过 WebSocket 传输；关闭标签页或切换服务器会结束会话。',
   'terminal.reconnect': '重新连接',
@@ -80,7 +80,7 @@ const tools: Record<string, string> = {
   'tools.noPermissionHint': '当前账号缺少 terminal.use 权限，本页不会请求任何服务器数据。请联系管理员开通后刷新重试。',
   'tools.noPermissionTitle': '没有终端权限',
   'tools.searchPlaceholder': '搜索名称或地址',
-  'tools.terminalDescription': '终端需要在控制端开启 LEADSTACK_TERMINAL_ENABLED。',
+  'tools.terminalDescription': '终端默认开启；控制端设置 LEADSTACK_TERMINAL_ENABLED=false 时会关闭。',
   'tools.terminalTitle': '选择服务器打开终端',
 }
 

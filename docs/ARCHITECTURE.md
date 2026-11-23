@@ -1320,7 +1320,7 @@ api_tokens(id TEXT PK, name TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL, role
 
 ## 40. Web SSH 终端
 
-**开关**：`LEADSTACK_TERMINAL_ENABLED`（默认 `false`）；关闭时端点返回 403 并提示。
+**开关**：`LEADSTACK_TERMINAL_ENABLED`（默认 `true`）；设为 `false` 时端点返回 403 并提示。默认开启不等于放权：终端仍需 `terminal.use` 权限、服务器在角色范围内，且每次打开写 `terminal.open` 审计。
 
 ```
 POST /servers/{id}/terminal-ticket   -> {data:{ticket, expires_in:60}}
@@ -1453,7 +1453,7 @@ POST /servers/import
 4. **API Token**：创建后返回一次明文；用该 token 调 API 成功且 `last_used_at` 更新；撤销后 401；明文不再出现于任何接口。
 5. **分页**：`?limit=2` 返回 `page.has_more` 与 `next_cursor`，用 cursor 取下一页不重复；不传 limit 仍返回数组。
 6. **批量导入**：导入 3 行（含 1 行重复、1 行注释）→ `created=2 failed=1`，服务器确实存在。
-7. **终端**：`LEADSTACK_TERMINAL_ENABLED=true` 时申请 ticket → WS 连接 → 执行 `echo ls-terminal-ok` → 收到该输出；关闭开关时 403；审计有 `terminal.open`。
+7. **终端**：默认开启；申请 ticket → WS 连接 → 执行 `echo ls-terminal-ok` → 收到该输出；显式 `LEADSTACK_TERMINAL_ENABLED=false` 时 403；审计有 `terminal.open`。
 8. **文件**：上传一个小文件到目标机 → 列目录可见 → 下载内容一致 → 删除后不可见（ssh 通道）。
 9. **定时任务**：创建 `* * * * *` 任务（tick 压到 1s）→ 等待后产生 run 记录且 exit_code=0；非法 cron → 400。
 10. **日志/进程/端口**：`/logs` 返回目标机文件末几行；`/processes` 与 `/ports` 返回非空结构。

@@ -221,7 +221,7 @@ type Config struct {
 	BackupPassphrase string
 	// AuditRetentionDays 是审计日志保留天数。
 	AuditRetentionDays int
-	// TerminalEnabled 是 Web 终端总开关（默认关闭）。
+	// TerminalEnabled 是 Web 终端总开关（默认开启；设为 false 可关闭）。
 	TerminalEnabled bool
 	// CronTick 是定时任务引擎的检查周期。
 	CronTick time.Duration
@@ -276,7 +276,7 @@ func Load(version string, args []string) (*Config, error) {
 	backupIncludeArtifacts := fs.Bool("backup-include-artifacts", envBoolOr(EnvBackupIncludeArtifacts, false), "备份是否包含上传制品（环境变量 "+EnvBackupIncludeArtifacts+"）")
 	backupPassphrase := fs.String("backup-passphrase", os.Getenv(EnvBackupPassphrase), "备份加密口令；留空则读 <data-dir>/backup.pass 或自动生成（环境变量 "+EnvBackupPassphrase+"）")
 	auditRetentionDays := fs.Int("audit-retention-days", envIntOr(EnvAuditRetentionDays, DefaultAuditRetentionDays), "审计日志保留天数（环境变量 "+EnvAuditRetentionDays+"）")
-	terminalEnabled := fs.Bool("terminal-enabled", envBoolOr(EnvTerminalEnabled, false), "是否启用 Web 终端（环境变量 "+EnvTerminalEnabled+"）")
+	terminalEnabled := fs.Bool("terminal-enabled", envBoolOr(EnvTerminalEnabled, true), "是否启用 Web 终端（默认开启，环境变量 "+EnvTerminalEnabled+"）")
 	cronTick := fs.Duration("cron-tick", defaultDurationOr(EnvCronTick, DefaultCronTick), "定时任务检查周期，如 1m（环境变量 "+EnvCronTick+"）")
 	fileMaxMB := fs.Int("file-max-mb", envIntOr(EnvFileMaxMB, DefaultFileMaxMB), "文件上传单文件上限 MB（环境变量 "+EnvFileMaxMB+"）")
 	updateRepo := fs.String("update-repo", envOr(EnvUpdateRepo, DefaultUpdateRepo), "检查更新的 GitHub 仓库 owner/repo（环境变量 "+EnvUpdateRepo+"）")

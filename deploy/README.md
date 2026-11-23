@@ -314,7 +314,7 @@ docker compose -f deploy/docker-compose.yml start leadstack
 
 | 变量 | 默认 | 作用 |
 |---|---|---|
-| `LEADSTACK_TERMINAL_ENABLED` | `false` | Web SSH 终端总开关。**默认关闭**；关闭时终端端点直接 403。生产建议按需临时打开，用完再关。 |
+| `LEADSTACK_TERMINAL_ENABLED` | `true` | Web SSH 终端总开关。**默认开启**；设为 `false` 时终端端点直接 403。终端仍要求 `terminal.use` 权限与服务器范围，公网暴露且不需要时可显式关闭。 |
 | `LEADSTACK_CRON_TICK` | `1m` | 定时任务引擎的检查间隔（Go duration）。默认每分钟检查一次；验收脚本会压到 `1s`。调太小会频繁扫描任务表。 |
 | `LEADSTACK_AUDIT_RETENTION_DAYS` | `180` | 审计日志保留天数，随后台清扫循环清理。审计量约等于「写操作次数」，可按机房规模估算磁盘。 |
 

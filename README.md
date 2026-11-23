@@ -443,7 +443,7 @@ zip 制品 ≤16MB；v1 只覆盖 static/php，node/SSL/反代仍在面板里配
 | 审计日志 | 写操作全记录（谁、何时、来源 IP、改了什么），敏感字段脱敏；保留 180 天 |
 | 凭证安全 | SSH 密码/私钥 AES-256-GCM 加密、接口不回显；主机密钥变更即拒绝连接 |
 | 应用敏感字段收敛 | 无 `deploy.write` 或角色范围非「全部」时，`env_json`/`init_script`/`restart_cmd` 返回 `null`（不是 403，避免泄露应用存在），仍返回 `env_keys` 键名与 `redacted` 标记 |
-| 终端开关 | 默认关闭，需 `LEADSTACK_TERMINAL_ENABLED=true` 或 `--terminal-enabled` |
+| 终端开关 | 默认开启；不需要 Web 终端时设 `LEADSTACK_TERMINAL_ENABLED=false` 或 `--terminal-enabled=false` |
 
 **日常运维**：终端（ssh 走 PTY、agent 走受控通道，尺寸自适应）、文件（SFTP / 受控通道，单文件默认 ≤8 MiB）、
 日志（路径 + 行数 + 关键字）、进程与端口（Linux `ps`/`ss`，macOS `ps -ww -axo`/`lsof`，含 `ss→netstat→lsof` 回退）、
@@ -717,7 +717,7 @@ leadstack restore --file /tmp/leadstack.lsbak --data-dir ./data # 离线恢复�
 | `LEADSTACK_BACKUP_RETENTION` | `7` | 备份保留份数 |
 | `LEADSTACK_BACKUP_INCLUDE_ARTIFACTS` | `false` | 备份是否含上传制品 |
 | `LEADSTACK_BACKUP_PASSPHRASE` | 无（用 `backup.pass`） | 备份加密口令 |
-| `LEADSTACK_TERMINAL_ENABLED` | `false` | Web 终端开关 |
+| `LEADSTACK_TERMINAL_ENABLED` | `true` | Web 终端开关；终端仍需 `terminal.use` 权限与服务器范围，不需要时设为 `false` |
 | `LEADSTACK_CRON_TICK` | `1m` | 定时任务扫描间隔 |
 | `LEADSTACK_FILE_MAX_MB` | `8` | 文件传输单文件上限 |
 | `LEADSTACK_LOGIN_MAX_ATTEMPTS` | `5` | 账号连续失败锁定阈值（0=关闭） |

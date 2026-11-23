@@ -17,7 +17,7 @@
 | **RBAC** | admin / operator / viewer 三级；越权 403；禁止自删与删除最后一个 admin；被禁用用户的 JWT 立即失效 | ✅ |
 | **用户管理** | 用户 CRUD、改角色、禁用、重置密码、本人改密码 | ✅ |
 | **API Token** | `lsk_` 前缀、明文仅创建时返回一次、库存 sha256、可撤销/过期、防角色提权 | ✅ |
-| **Web SSH 终端** | 一次性 ticket + WebSocket；ssh 通道走 PTY、agent 通道走真 PTY；xterm.js + resize 同步；默认关闭（`LEADSTACK_TERMINAL_ENABLED`） | ✅ |
+| **Web SSH 终端** | 一次性 ticket + WebSocket；ssh 通道走 PTY、agent 通道走真 PTY；xterm.js + resize 同步；默认开启，可用 `LEADSTACK_TERMINAL_ENABLED=false` 关闭 | ✅ |
 | **文件传输** | 浏览/上传/下载/删除；ssh 走 SFTP、agent 走 base64；8 类路径穿越防护 | ✅ |
 | **定时任务** | 5 字段 cron（含 `*/n`、`a-b`）、人话预览、按分钟命中判定、运行历史 | ✅ |
 | **日志查看** | 远端 `tail` + 服务端 grep 过滤，输出 ≤256KB 带截断标记 | ✅ |
