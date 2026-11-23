@@ -1984,7 +1984,7 @@ ALTER TABLE servers ADD COLUMN panel_credential_id TEXT; -- kind=baota 的凭据
 ### 57.3 鉴权与签名
 
 面板侧开关：`设置 → API 接口 → 开启`，并把**控制端出口 IP** 加入白名单。
-每次请求带 `request_time`（秒）与 `request_token = md5(md5(api_key) + request_time)`，
+每次请求带 `request_time`（秒）与 `request_token = md5(request_time + md5(api_key))`，
 同时在该请求的 Cookie 里带同一个 `request_token`（兼容校验 Cookie 的面板版本）。
 响应 `{"status":false,"msg":"…"}` 统一转成错误，避免「HTTP 200 但没做成」的假成功。
 

@@ -5,7 +5,7 @@
 //
 // 约定与限制（见 docs/ARCHITECTURE.md §57）：
 //   - 面板需在「设置 → API 接口」开启，并把控制端出口 IP 加入白名单；
-//   - 鉴权方式：`request_time` + `request_token = md5(md5(api_key) + request_time)`；
+//   - 鉴权方式：`request_time` + `request_token = md5(request_time + md5(api_key))`；
 //   - 上传走 `files?action=SaveFileBody`（base64），单文件适合 ≤ 16MB 的制品；
 //     更大的制品请改用 builtin（SSH/agent）通道，或先在面板文件管理里落盘；
 //   - 本包只依赖标准库，便于独立单测与替换（版本字段差异集中在 endpoints 常量附近）。
@@ -123,9 +123,11 @@ func (c *Client) token() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// sign 计算请求签名：md5(md5(api_key) + request_time)。
+// sign 计算请求签名：md5(request_time + md5(api_key))。
+// 顺序不能反：宝塔面板源码是 md5(request_time + api_config['token'])，
+// 其中 api_config['token'] 已保存为 md5(api_key)。
 func (c *Client) sign(requestTime string) string {
-	sum := md5.Sum([]byte(c.token() + requestTime))
+	sum := md5.Sum([]byte(requestTime + c.token()))
 	return hex.EncodeToString(sum[:])
 }
 

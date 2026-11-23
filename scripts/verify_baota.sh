@@ -67,7 +67,7 @@ SITES = []
 
 def sign(rt):
     token = hashlib.md5(API_KEY.encode()).hexdigest()
-    return hashlib.md5((token + rt).encode()).hexdigest()
+    return hashlib.md5((rt + token).encode()).hexdigest()
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):  # 安静

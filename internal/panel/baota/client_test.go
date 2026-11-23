@@ -28,7 +28,8 @@ func newMockPanel(apiKey string) *mockPanel {
 func sign(apiKey, requestTime string) string {
 	sum := md5.Sum([]byte(apiKey))
 	token := hex.EncodeToString(sum[:])
-	s2 := md5.Sum([]byte(token + requestTime))
+	// 与面板源码一致：md5(request_time + md5(api_key))。
+	s2 := md5.Sum([]byte(requestTime + token))
 	return hex.EncodeToString(s2[:])
 }
 
