@@ -28,7 +28,6 @@ import {
 import { useI18n } from '@/i18n'
 import { api, type BatchAction, type BatchResultItem, type Server, type ServerGroup } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
-import { pushToast } from '@/lib/toast'
 import {
   CUSTOM_GROUP_VALUE,
   MAX_BATCH_TAG_LENGTH,
@@ -280,12 +279,17 @@ function closeAccounts(): void {
   accountsTarget.value = null
 }
 
-function openEditForm(id: string): void {
+async function openEditForm(id: string): Promise<void> {
   const target = servers.value.find((server) => server.id === id)
   if (!target || !canWrite.value) return
-  formTarget.value = target
   actionNotice.value = null
-  formOpen.value = true
+  try {
+    // 列表接口不含 notes/custom_fields；编辑必须取详情，避免保存时把档案清空。
+    formTarget.value = await api.server(id)
+    formOpen.value = true
+  } catch (caught) {
+    actionNotice.value = errorMessage(caught, t('server.detail.loadFailed'))
+  }
 }
 
 /* ---------------- 宝塔面板一键登录 ---------------- */
@@ -346,7 +350,6 @@ async function handleFormSaved(saved: Server): Promise<void> {
   const message = t(edited ? 'server.form.saved' : 'server.form.created', { name: saved.name })
   actionNotice.value = message
   onboardId.value = edited ? null : saved.id
-  pushToast({ tone: 'success', title: message })
   await refresh()
 }
 </script>

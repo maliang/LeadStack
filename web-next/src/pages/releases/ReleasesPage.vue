@@ -19,7 +19,6 @@ import {
 } from '@/lib/deploy-domain'
 import { errorMessage } from '@/lib/errors'
 import { formatRelativeTime } from '@/lib/format'
-import { pushToast } from '@/lib/toast'
 
 /**
  * 发布列表页：全量发布单 + 筛选 + 发起发布（含计划预览）。
@@ -82,7 +81,6 @@ async function submitRelease(payload: Parameters<typeof create>[0]): Promise<voi
     app: releaseAppLabel(created, appNames.value),
     version: created.version,
   })
-  pushToast({ tone: 'success', title: notice.value })
 }
 
 onMounted(() => {

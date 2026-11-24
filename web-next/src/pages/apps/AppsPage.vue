@@ -10,7 +10,6 @@ import { useI18n } from '@/i18n'
 import type { AppItem, CreateAppPayload } from '@/lib/api'
 import { deployModeLabelKey, filterApps, releaseStatusLabelKey, releaseStatusTone } from '@/lib/deploy-domain'
 import { formatRelativeTime } from '@/lib/format'
-import { pushToast } from '@/lib/toast'
 
 /**
  * 应用列表页（挂载在 AppShell 默认 slot → .ls-main__inner）。
@@ -65,7 +64,6 @@ async function submitApp(payload: CreateAppPayload): Promise<void> {
   notice.value = editing.value
     ? t('apps.saved', { name: payload.name })
     : t('apps.created', { name: payload.name })
-  pushToast({ tone: 'success', title: notice.value })
   dialog.value = null
   editing.value = null
 }
@@ -76,7 +74,6 @@ async function confirmDelete(): Promise<void> {
   const ok = await remove(target.id)
   if (!ok) return
   notice.value = t('apps.deleted', { name: target.name })
-  pushToast({ tone: 'success', title: notice.value })
   deleting.value = null
 }
 

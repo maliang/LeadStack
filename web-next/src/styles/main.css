@@ -7797,7 +7797,7 @@ body.ls-scroll-locked {
    层级高于模态遮罩，保证「失败提示」不会藏在弹窗后面。 */
 .ls-toaster {
   position: fixed;
-  top: 0.75rem;
+  top: calc(var(--ls-topbar-height) + 0.5rem);
   left: 50%;
   bottom: auto;
   z-index: 200;

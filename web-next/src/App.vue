@@ -81,14 +81,17 @@ const feedbackSeen = new Map<string, number>()
 
 function scanFormFeedback(): void {
   const nodes = document.querySelectorAll<HTMLElement>(
-    '.ls-ok-hint, .ls-inline-error, .ls-adminpage__form-error',
+    '.ls-ok-hint, .ls-inline-error, .ls-adminpage__form-error, .ls-notice--success, .ls-notice--error',
   )
   const now = Date.now()
   for (const node of Array.from(nodes)) {
     if (node.closest('.ls-toaster')) continue
     const text = (node.textContent ?? '').trim()
     if (text.length < 2 || text.length > 300) continue
-    const tone = node.classList.contains('ls-ok-hint') ? 'success' : 'error'
+    const tone =
+      node.classList.contains('ls-ok-hint') || node.classList.contains('ls-notice--success')
+        ? 'success'
+        : 'error'
     const key = `${tone}:${text}`
     if ((feedbackSeen.get(key) ?? 0) > now - 3000) continue
     feedbackSeen.set(key, now)

@@ -5,7 +5,6 @@ import { useI18n } from '@/i18n'
 import { api, type Server } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import { formatBytes } from '@/lib/format'
-import { pushToast } from '@/lib/toast'
 
 /**
  * 「备份」标签：以 MySQL/MariaDB 逻辑备份为主。
@@ -65,7 +64,6 @@ async function backup(): Promise<void> {
     anchor.remove()
     setTimeout(() => URL.revokeObjectURL(url), 10_000)
     notice.value = t('server.database.done', { name: filename, size: formatBytes(blob.size) })
-    pushToast({ tone: 'success', title: notice.value })
   } catch (caught) {
     error.value = errorMessage(caught, t('server.database.failed'))
   } finally {
