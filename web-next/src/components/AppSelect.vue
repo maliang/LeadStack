@@ -46,6 +46,16 @@ function readOptions(): void {
   }))
   const serialized = JSON.stringify(next)
   if (serialized !== JSON.stringify(items.value)) items.value = next
+  // 空值且没有「全部/请选择」空选项时，默认落到第一项，避免下拉显示空白。
+  // 筛选类下拉的第一项通常是「全部」，表单类下拉的第一项是合理默认值。
+  if (
+    model.value === '' &&
+    next.length > 0 &&
+    !next.some((item) => item.value === '') &&
+    !props.disabled
+  ) {
+    void nextTick(() => emit('update:modelValue', next[0].value))
+  }
 }
 
 function onNativeChange(event: Event): void {
