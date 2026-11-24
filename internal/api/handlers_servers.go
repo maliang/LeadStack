@@ -435,21 +435,38 @@ func (a *API) handleServerPanelLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	loginURL, err := client.LoginURL(r.Context())
 	insecureFallback := false
-	if err != nil && !secret.InsecureSkipVerify && isPanelCertificateError(err) {
-		// 宝塔默认使用自签证书。登录只是生成一次性 URL，不应因为控制端没有
-		// 安装面板 CA 就直接失败；这里做一次「仅本次登录」的跳过校验重试。
-		// 不写回凭据，避免静默降低后续部署/探测通道的安全性。
-		fallback, ferr := baota.New(baota.Config{
-			BaseURL:            secret.PanelURL,
+	tryLogin := func(baseURL string, insecure bool) bool {
+		attempt, berr := baota.New(baota.Config{
+			BaseURL:            baseURL,
 			APIKey:             secret.APIKey,
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: insecure,
 		})
-		if ferr == nil {
-			if retryURL, retryErr := fallback.LoginURL(r.Context()); retryErr == nil {
-				loginURL, insecureFallback = retryURL, true
-				err = nil
-				a.logger.Warn("宝塔面板证书校验失败，已为本次登录跳过校验", "server_id", id)
+		if berr != nil {
+			return false
+		}
+		nextURL, lerr := attempt.LoginURL(r.Context())
+		if lerr != nil {
+			return false
+		}
+		loginURL, insecureFallback, err = nextURL, insecure, nil
+		return true
+	}
+	// 常见现场：面板实际只监听 HTTPS，但录入的是 http:// 地址，表现为
+	// connection reset by peer。仅登录场景自动尝试同主机同端口的 HTTPS。
+	if err != nil && strings.HasPrefix(strings.ToLower(secret.PanelURL), "http://") {
+		httpsURL := "https://" + strings.TrimPrefix(secret.PanelURL, "http://")
+		for _, insecure := range []bool{secret.InsecureSkipVerify, true} {
+			if tryLogin(httpsURL, insecure) {
+				a.logger.Warn("宝塔面板 HTTP 登录失败，已自动改用 HTTPS", "server_id", id)
+				break
 			}
+		}
+	}
+	// 宝塔默认使用自签证书。登录只是生成一次性 URL，不应因为控制端没有
+	// 安装面板 CA 就直接失败；这里做一次「仅本次登录」的跳过校验重试。
+	if err != nil && !secret.InsecureSkipVerify && isPanelCertificateError(err) {
+		if tryLogin(secret.PanelURL, true) {
+			a.logger.Warn("宝塔面板证书校验失败，已为本次登录跳过校验", "server_id", id)
 		}
 	}
 	if err != nil {

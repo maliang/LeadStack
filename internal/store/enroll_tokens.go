@@ -80,7 +80,10 @@ func (s *Store) FindEnrollTokenByHash(ctx context.Context, tokenHash string, now
 	}
 	t.UsedAt = intPtr(usedAt)
 	t.ServerID = strPtr(serverID)
-	if t.ExpiresAt <= nowMS {
+	// 已使用（已绑定服务器）的令牌是 agent 的长期重连凭据：过期时间只在
+	// 「首次接入」前生效。否则控制端升级/重启导致 agent 重连时，一旦 TTL 到期
+	// 就会被拒绝，表现为每次升级后节点全部离线。
+	if t.ExpiresAt <= nowMS && t.UsedAt == nil {
 		return nil, fmt.Errorf("接入令牌 %s: %w", t.ID, ErrExpired)
 	}
 	return &t, nil
