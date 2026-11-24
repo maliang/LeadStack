@@ -10,9 +10,7 @@ import ServerLoginTab from '@/components/server-detail/ServerLoginTab.vue'
 import ServerChecksTab from '@/components/server-detail/ServerChecksTab.vue'
 import ServerSecurityAudit from '@/components/server-detail/ServerSecurityAudit.vue'
 import ServerDatabaseBackupTab from '@/components/server-detail/ServerDatabaseBackupTab.vue'
-import ServerFilesPanel from '@/components/server-tools/ServerFilesPanel.vue'
 import ServerLogsPanel from '@/components/server-tools/ServerLogsPanel.vue'
-import ServerTerminalPanel from '@/components/server-tools/ServerTerminalPanel.vue'
 import { useCan } from '@/composables/useCan'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 import { useI18n } from '@/i18n'
@@ -44,7 +42,7 @@ import {
 } from '@/lib/server-metrics'
 
 /**
- * 服务器详情页：概览 / 一键登录 / 访问账号 / 安全 / 终端 / 文件 / 日志 /
+ * 服务器详情页：概览 / 一键登录 / 访问账号 / 安全 / 日志 /
  * 数据库备份 / SSH 登录信息（最后）。
  *
  * 本页是唯一的数据 owner：详情、登录信息、一键登录、面板、档案、检测项的
@@ -61,15 +59,13 @@ const TABS: { key: ServerDetailTab; labelKey: string }[] = [
   { key: 'login', labelKey: 'server.tab.login' },
   { key: 'accounts', labelKey: 'server.tab.accounts' },
   { key: 'checks', labelKey: 'server.tab.checks' },
-  { key: 'terminal', labelKey: 'server.tab.terminal' },
-  { key: 'files', labelKey: 'server.tab.files' },
   { key: 'logs', labelKey: 'server.tab.logs' },
   { key: 'backups', labelKey: 'server.tab.backups' },
   { key: 'access', labelKey: 'server.tab.access' },
 ]
 
 /** 需要 terminal.use 的面板；缺权限时只渲染说明，不挂载组件。 */
-const TOOL_TABS: readonly ServerDetailTab[] = ['terminal', 'files', 'logs']
+const TOOL_TABS: readonly ServerDetailTab[] = ['logs']
 
 const route = useRoute()
 const router = useRouter()
@@ -698,7 +694,7 @@ onMounted(() => {
           />
         </div>
 
-        <!-- 终端 / 文件 / 日志：缺 terminal.use 时只给说明，绝不挂载面板（避免发请求）。 -->
+        <!-- 日志：缺 terminal.use 时只给说明，绝不挂载面板（避免发请求）。 -->
         <div
           v-else-if="TOOL_TABS.includes(tab) && !canTerminal"
           class="ls-banner ls-banner--warning"
@@ -709,12 +705,6 @@ onMounted(() => {
             <p class="ls-banner__text">{{ t('server.detail.needTerminalHint') }}</p>
           </div>
         </div>
-        <ServerTerminalPanel
-          v-else-if="tab === 'terminal'"
-          :server-id="serverId"
-          :allowed="canTerminal"
-        />
-        <ServerFilesPanel v-else-if="tab === 'files'" :server-id="serverId" :allowed="canTerminal" />
         <ServerLogsPanel v-else-if="tab === 'logs'" :server-id="serverId" :allowed="canTerminal" />
       </div>
     </template>

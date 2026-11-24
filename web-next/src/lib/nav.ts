@@ -45,8 +45,6 @@ export const NAV_GROUPS: NavGroup[] = [
     key: 'ops',
     labelKey: 'nav.group.ops',
     items: [
-      { to: '/terminal', labelKey: 'nav.terminal', icon: 'terminal', permission: 'terminal.use' },
-      { to: '/files', labelKey: 'nav.files', icon: 'folder', permission: 'terminal.use' },
       {
         to: '/scheduled-tasks',
         labelKey: 'nav.scheduledTasks',

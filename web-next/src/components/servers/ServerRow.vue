@@ -6,8 +6,6 @@ import { useI18n } from '@/i18n'
 import type { Server } from '@/lib/api'
 import { formatRelativeTime, serverAddress, usageTone } from '@/lib/format'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
-import ServerTerminalPanel from '@/components/server-tools/ServerTerminalPanel.vue'
-import ServerFilesPanel from '@/components/server-tools/ServerFilesPanel.vue'
 
 /**
  * 列表行：摘要 + 可展开的内嵌终端（左）与文件浏览（右）。
@@ -44,7 +42,6 @@ function onSelect(event: Event): void {
   emit('select', props.server.id, (event.target as HTMLInputElement).checked)
 }
 
-const panelsId = computed(() => `server-panels-${props.server.id}`)
 const address = computed(() => serverAddress(props.server))
 const detailTarget = computed(() => ({ name: 'server-detail', params: { id: props.server.id } }))
 const lastSeen = computed(() =>
@@ -117,28 +114,6 @@ function openDetailFromRow(event: MouseEvent): void {
 
       <div class="ls-srv-row__actions">
         <button
-          :id="`server-${server.id}-terminal`"
-          class="ls-btn ls-srv-row__action"
-          type="button"
-          :aria-expanded="expanded"
-          :aria-controls="panelsId"
-          @click.stop.prevent="emit('toggle', server.id)"
-        >
-          <AppIcon name="terminal" size="0.875rem" />
-          {{ t('servers.expandTerminal') }}
-        </button>
-        <button
-          :id="`server-${server.id}-files`"
-          class="ls-btn ls-srv-row__action"
-          type="button"
-          :aria-expanded="expanded"
-          :aria-controls="panelsId"
-          @click.stop.prevent="emit('toggle', server.id)"
-        >
-          <AppIcon name="folder" size="0.875rem" />
-          {{ t('servers.expandFiles') }}
-        </button>
-        <button
           v-if="props.panelAllowed"
           :id="`server-${server.id}-panel`"
           class="ls-btn ls-srv-row__action ls-srv-row__panel"
@@ -170,22 +145,5 @@ function openDetailFromRow(event: MouseEvent): void {
       </div>
     </div>
 
-    <div v-if="expanded" :id="panelsId" class="ls-srv-row__panels">
-      <section class="ls-srv-panel" :aria-label="`${server.name} · ${t('nav.terminal')}`">
-        <h3 class="ls-srv-panel__title">
-          <AppIcon name="terminal" size="0.875rem" />
-          {{ t('nav.terminal') }}
-        </h3>
-        <ServerTerminalPanel :server-id="server.id" :allowed="terminalAllowed" />
-      </section>
-
-      <section class="ls-srv-panel" :aria-label="`${server.name} · ${t('nav.files')}`">
-        <h3 class="ls-srv-panel__title">
-          <AppIcon name="folder" size="0.875rem" />
-          {{ t('nav.files') }}
-        </h3>
-        <ServerFilesPanel :server-id="server.id" :allowed="terminalAllowed" />
-      </section>
-    </div>
   </li>
 </template>

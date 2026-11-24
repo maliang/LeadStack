@@ -705,7 +705,7 @@ async function run() {
     await page.waitForSelector('.ls-detail__title', { timeout: 15000 })
     check('详情页渲染标题', (await page.locator('.ls-detail__title').innerText()).includes('alpha-node'))
     check('详情只拉一次 /servers/{id}', state.detailCalls === 1, `${state.detailCalls} 次`)
-    check('九个 tab 都在', (await page.locator('.ls-tabs__btn').count()) === 9, String(await page.locator('.ls-tabs__btn').count()))
+    check('七个 tab 都在', (await page.locator('.ls-tabs__btn').count()) === 7, String(await page.locator('.ls-tabs__btn').count()))
     await shot(page, '01-overview')
     check('概览 tab 默认选中', (await page.locator('#server-tab-overview').getAttribute('aria-selected')) === 'true')
 
@@ -896,40 +896,8 @@ async function run() {
     const activeTab = await page.evaluate(() => document.activeElement && document.activeElement.id)
     check('ArrowRight 焦点回到 tabs 内', String(activeTab).startsWith('server-tab-'), String(activeTab))
 
-    // 8) 深链：?tab=terminal 直达终端（整页刷新＝用户直接粘贴地址）
-    state.ticketCalls = 0
-    await page.goto(`${base}/#/servers/srv-alpha?tab=terminal`, { waitUntil: 'domcontentloaded' })
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('#server-tab-terminal[aria-selected="true"]', { timeout: 15000 })
-    await page.waitForSelector('.ls-srv-term', { timeout: 15000 })
-    await page.waitForTimeout(400)
-    check(
-      '?tab=terminal 直达打开终端 tab',
-      (await page.locator('#server-tab-terminal').getAttribute('aria-selected')) === 'true',
-    )
-    await shot(page, '07-terminal')
-    check('终端 tab 只申请一次 terminal-ticket', state.ticketCalls === 1, `${state.ticketCalls} 次`)
-    check('URL 保留 ?tab=terminal', page.url().includes('?tab=terminal'), page.url().split('#')[1] || '')
-    check('320px 下选中的终端 tab 在可视区', await activeTabVisible())
-    check('320px 终端 tab 无横向滚动', (await noHorizontalScroll()).overflow <= 0)
-
-    // 9) 深链：?tab=files 打开文件 tab
-    state.filesCalls = 0
-    await page.goto(`${base}/#/servers/srv-alpha?tab=files`, { waitUntil: 'domcontentloaded' })
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('#server-tab-files[aria-selected="true"]', { timeout: 15000 })
-    await page.waitForSelector('.ls-srv-files__list', { timeout: 15000 })
-    check(
-      '?tab=files 打开文件 tab',
-      (await page.locator('#server-tab-files').getAttribute('aria-selected')) === 'true',
-    )
-    await shot(page, '08-files')
-    check('320px 下选中的文件 tab 在可视区', await activeTabVisible())
-    check('文件 tab 只请求一次 /files', state.filesCalls === 1, `${state.filesCalls} 次`)
-    check('文件面板列出目录与文件', (await page.locator('.ls-srv-files__entry').count()) === 2)
-    check('320px 文件 tab 无横向滚动', (await noHorizontalScroll()).overflow <= 0)
-
     // 10) 切 tab 写回 URL（replace，不新增历史）
+    await page.click('#server-tab-overview')
     state.logsCalls = 0
     const historyBefore = await page.evaluate(() => history.length)
     await page.click('#server-tab-logs')
@@ -1242,72 +1210,6 @@ async function run() {
       (await page.locator('.ls-notice').count()) >= 1 && notFoundText.includes('不存在'),
       notFoundText.replace(/\s+/g, ' ').slice(0, 80),
     )
-
-    // 12) 无 terminal.use：三个 tab 可见、只给说明、不发任何请求
-    const limitedState = {
-      server: structuredClone(SERVER),
-      permissions: ['server.read', 'server.write', 'server.update', 'server.edit'],
-      detailCalls: 0,
-      accessCalls: 0,
-      panelCalls: 0,
-      loginCalls: 0,
-      checkCalls: 0,
-      ticketCalls: 0,
-      filesCalls: 0,
-      logsCalls: 0,
-      patchBodies: [],
-      metricsCalls: [],
-      metricsMode: 'ok',
-      connectionCalls: 0,
-      connectionMode: 'ok',
-      hostCalls: 0,
-      upgradeCalls: 0,
-      upgradeMode: 'ok',
-      upgradeBodies: [],
-    }
-    const limitedContext = await browser.newContext({ viewport: { width: 320, height: 800 } })
-    await installMockApi(limitedContext, limitedState)
-    const limitedPage = await limitedContext.newPage()
-    const limitedErrors = []
-    limitedPage.on('pageerror', (error) => limitedErrors.push(error.message))
-    try {
-      await limitedPage.goto(`${base}/#/login`, { waitUntil: 'domcontentloaded' })
-      await limitedPage.waitForSelector('#login-username', { timeout: 15000 })
-      await limitedPage.fill('#login-username', 'admin')
-      await limitedPage.fill('#login-password', PASSWORD)
-      await limitedPage.click('#login-submit')
-      await limitedPage.waitForSelector('.ls-shell', { timeout: 15000 })
-      await limitedPage.goto(`${base}/#/servers/srv-alpha?tab=terminal`, { waitUntil: 'domcontentloaded' })
-      await limitedPage.waitForSelector('.ls-detail__title', { timeout: 15000 })
-      await limitedPage.waitForSelector('.ls-banner--warning', { timeout: 5000 })
-      check('缺权限时九个 tab 仍可见', (await limitedPage.locator('.ls-tabs__btn').count()) === 9)
-      check(
-        '缺权限时 ?tab=terminal 仍选中终端',
-        (await limitedPage.locator('#server-tab-terminal').getAttribute('aria-selected')) === 'true',
-      )
-      check(
-        '缺权限内容区给「需要终端权限」说明',
-        (await limitedPage.locator('.ls-banner--warning').innerText()).includes('需要终端权限'),
-      )
-      check('缺权限不挂载终端面板', (await limitedPage.locator('.ls-srv-term').count()) === 0)
-      check('缺权限不发 terminal-ticket', limitedState.ticketCalls === 0, `${limitedState.ticketCalls} 次`)
-      check('缺权限不发 /files', limitedState.filesCalls === 0, `${limitedState.filesCalls} 次`)
-      check('缺权限不发 /logs', limitedState.logsCalls === 0, `${limitedState.logsCalls} 次`)
-
-      await limitedPage.click('#server-tab-files')
-      await limitedPage.waitForTimeout(300)
-      check('缺权限切文件 tab 也不发请求', limitedState.filesCalls === 0, `${limitedState.filesCalls} 次`)
-      check(
-        '缺权限文件 tab 同样给说明',
-        (await limitedPage.locator('.ls-banner--warning').innerText()).includes('需要终端权限'),
-      )
-      await limitedPage.click('#server-tab-logs')
-      await limitedPage.waitForTimeout(300)
-      check('缺权限切日志 tab 也不发请求', limitedState.logsCalls === 0, `${limitedState.logsCalls} 次`)
-      check('缺权限页面无未捕获异常', limitedErrors.length === 0, limitedErrors.join(' | ').slice(0, 120))
-    } finally {
-      await limitedContext.close().catch(() => {})
-    }
 
     // 13) 只读（仅 server.read）：指标仍可见，写操作按钮全隐且零请求
     const readonlyState = {

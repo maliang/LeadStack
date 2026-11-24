@@ -50,6 +50,8 @@ const NON_MENU_ROUTES = new Set(['/login', '/forbidden', '/about'])
 const INTERNALIZED_ROUTES = new Map([
   ['/groups', '分组已内化到服务器详情「分组」tab'],
   ['/backups', '备份已内化到服务器详情「备份」tab'],
+  ['/terminal', '终端入口已从 UI 移除（产品收紧），保留直达路由兼容旧书签'],
+  ['/files', '文件入口已从 UI 移除（产品收紧），保留直达路由兼容旧书签'],
 ])
 
 function fail(message) {
