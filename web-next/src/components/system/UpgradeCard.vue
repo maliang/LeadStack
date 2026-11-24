@@ -166,6 +166,7 @@ async function pollStatus(): Promise<void> {
       if (outcome === 'success') {
         const settled: UpdateStatus = { ...status, phase: 'success', target_version: target }
         job.value = settled
+        window.dispatchEvent(new CustomEvent('leadstack:upgrade-status', { detail: settled }))
         pollError.value = null
         pendingTarget = null
         stopPolling()
@@ -182,6 +183,8 @@ async function pollStatus(): Promise<void> {
       }
     }
     job.value = status
+    // 设置页是当前 owner：把状态广播给顶栏，避免两边各轮询一次抢进度。
+    window.dispatchEvent(new CustomEvent('leadstack:upgrade-status', { detail: status }))
     pollError.value = null
     // 终态必须停表：否则事件循环里永远有一个 2s 定时器在转。
     if (isTerminalPhase(status.phase)) {

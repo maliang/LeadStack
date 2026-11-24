@@ -166,6 +166,19 @@ export function useUpgradeCenter() {
         startFastPoll()
       }
     })
+    // 设置页 UpgradeCard 轮询到的状态通过事件同步给顶栏；两边显示同一帧。
+    window.addEventListener('leadstack:upgrade-status', (event) => {
+      const data = (event as CustomEvent<UpdateStatus>).detail
+      if (!data) return
+      status.value = data
+      if (isTerminalPhase(data.phase)) {
+        active.value = false
+        pendingTarget = null
+        stopFastPoll()
+        return
+      }
+      active.value = true
+    })
   }
 
   watch(
