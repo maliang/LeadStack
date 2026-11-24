@@ -278,6 +278,38 @@ func (u *upgrader) downloadWithFallback(ctx context.Context, primary, fallback, 
 	return fmt.Errorf("下载升级包失败（已尝试 %d 个源）：%s", len(urls), strings.Join(errs, "；"))
 }
 
+const (
+	agentDownloadMinBps = 64 << 10
+	agentDownloadWindow = 5 * time.Second
+)
+
+type agentSlowGuard struct {
+	r         io.Reader
+	lastAt    time.Time
+	lastBytes int64
+	total     int64
+}
+
+func (r *agentSlowGuard) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.total += int64(n)
+	now := time.Now()
+	if r.lastAt.IsZero() {
+		r.lastAt = now
+		return n, err
+	}
+	if now.Sub(r.lastAt) >= agentDownloadWindow {
+		delta := r.total - r.lastBytes
+		bps := float64(delta) / now.Sub(r.lastAt).Seconds()
+		r.lastAt = now
+		r.lastBytes = r.total
+		if bps < agentDownloadMinBps {
+			return n, fmt.Errorf("下载速度过慢（%.0f KiB/s），切换备用源", bps/1024)
+		}
+	}
+	return n, err
+}
+
 // download 把升级包下载到 dst，同时计算并校验 sha256（hex 小写）。
 func (u *upgrader) download(ctx context.Context, rawURL, wantSHA string, dst *os.File) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -299,7 +331,7 @@ func (u *upgrader) download(ctx context.Context, rawURL, wantSHA string, dst *os
 
 	hasher := sha256.New()
 	limited := io.LimitReader(resp.Body, upgradeMaxBytes+1)
-	n, err := io.Copy(io.MultiWriter(dst, hasher), limited)
+	n, err := io.Copy(io.MultiWriter(dst, hasher), &agentSlowGuard{r: limited})
 	if err != nil {
 		return fmt.Errorf("下载升级包中断: %w", err)
 	}

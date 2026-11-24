@@ -401,9 +401,9 @@ download() { # download <url> <目标文件>
 	case "$DOWNLOAD_TOOL" in
 		curl)
 			if [ -n "$PROGRESS_ARG" ]; then
-				curl -fL "$PROGRESS_ARG" --retry 3 --connect-timeout 15 -o "$_dl_dest" "$_dl_url"
+				curl -fL "$PROGRESS_ARG" --retry 3 --connect-timeout 15 --speed-limit 65536 --speed-time 10 -o "$_dl_dest" "$_dl_url"
 			else
-				curl -fsSL --retry 3 --connect-timeout 15 -o "$_dl_dest" "$_dl_url"
+				curl -fsSL --retry 3 --connect-timeout 15 --speed-limit 65536 --speed-time 10 -o "$_dl_dest" "$_dl_url"
 			fi
 			;;
 		wget)

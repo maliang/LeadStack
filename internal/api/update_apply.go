@@ -521,6 +521,40 @@ func (a *API) downloadReleaseAsset(ctx context.Context, asset UpdateAsset, versi
 	return "", "", fmt.Errorf("下载升级包失败（已尝试 %d 个源）：%s", len(urls), strings.Join(errs, "；"))
 }
 
+// downloadMinBytesPerSec / downloadSpeedWindow：GitHub 慢于该速度时主动中断，
+// 让 downloadReleaseAsset 立即切到 Gitee，而不是挂在 10 分钟整体超时上。
+const (
+	downloadMinBytesPerSec = 64 << 10
+	downloadSpeedWindow    = 5 * time.Second
+)
+
+type slowDownloadGuard struct {
+	r         io.Reader
+	lastAt    time.Time
+	lastBytes int64
+	total     int64
+}
+
+func (r *slowDownloadGuard) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.total += int64(n)
+	now := time.Now()
+	if r.lastAt.IsZero() {
+		r.lastAt = now
+		return n, err
+	}
+	if now.Sub(r.lastAt) >= downloadSpeedWindow {
+		delta := r.total - r.lastBytes
+		bps := float64(delta) / now.Sub(r.lastAt).Seconds()
+		r.lastAt = now
+		r.lastBytes = r.total
+		if bps < downloadMinBytesPerSec {
+			return n, fmt.Errorf("下载速度过慢（%.0f KiB/s，低于 %d KiB/s），切换备用源", bps/1024, downloadMinBytesPerSec/1024)
+		}
+	}
+	return n, err
+}
+
 // downloadURLTo 下载单个 URL 到目标路径：临时文件 + 原子 rename，失败不留半截文件。
 func (a *API) downloadURLTo(ctx context.Context, rawURL, dst string) (int64, error) {
 	tmp := dst + ".tmp"
@@ -545,7 +579,7 @@ func (a *API) downloadURLTo(ctx context.Context, rawURL, dst string) (int64, err
 		_ = file.Close()
 		_ = os.Remove(tmp)
 	}()
-	written, err := io.Copy(file, resp.Body)
+	written, err := io.Copy(file, &slowDownloadGuard{r: resp.Body})
 	if err != nil {
 		return 0, fmt.Errorf("写入升级包失败: %w", err)
 	}
