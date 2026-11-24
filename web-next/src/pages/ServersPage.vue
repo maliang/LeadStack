@@ -271,6 +271,10 @@ function openCreateForm(): void {
 const accountsTarget = ref<Server | null>(null)
 const onboardId = ref<string | null>(null)
 
+function filterByTag(tag: string): void {
+  filters.value = { ...filters.value, tag }
+}
+
 function openAccounts(id: string): void {
   accountsTarget.value = servers.value.find((server) => server.id === id) ?? null
 }
@@ -516,6 +520,7 @@ async function handleFormSaved(saved: Server): Promise<void> {
         @edit="openEditForm"
         @open-panel="openPanel"
         @open-accounts="openAccounts"
+        @filter-tag="filterByTag"
       />
     </div>
 
@@ -535,6 +540,7 @@ async function handleFormSaved(saved: Server): Promise<void> {
         @edit="openEditForm"
         @open-panel="openPanel"
         @open-accounts="openAccounts"
+        @filter-tag="filterByTag"
       />
     </ul>
 

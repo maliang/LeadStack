@@ -9306,3 +9306,26 @@ body.ls-scroll-locked {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.ls-srv-row__inline-edit,
+.ls-srv-card__inline-edit {
+  flex: none;
+  min-height: 1.5rem;
+  padding: 0 var(--ls-space-1);
+  font-size: var(--ls-text-2xs);
+}
+
+.ls-chip--button {
+  border: 0;
+  cursor: pointer;
+}
+
+.ls-chip--button:hover {
+  background: var(--ls-primary-soft);
+  color: var(--ls-primary);
+}
+
+.ls-chip--button:focus-visible {
+  outline: none;
+  box-shadow: var(--ls-focus-ring);
+}

@@ -74,17 +74,6 @@ function selectStatus(event: Event): void {
         </option>
       </AppSelect>
 
-      <AppSelect
-        id="servers-filter-tag"
-        class="ls-input ls-servers-toolbar__select"
-        :aria-label="t('s.0518')"
-        :value="filters.tag"
-        @change="patch({ tag: ($event.target as HTMLSelectElement).value })"
-      >
-        <option value="">{{ t('s.0378') }}</option>
-        <option v-for="tag in tags" :key="tag" :value="tag">{{ tag }}</option>
-      </AppSelect>
-
       <input
         id="servers-search-input"
         class="ls-input ls-servers-toolbar__search"

@@ -33,6 +33,7 @@ const emit = defineEmits<{
   (event: 'edit', id: string): void
   (event: 'open-panel', id: string): void
   (event: 'open-accounts', id: string): void
+  (event: 'filter-tag', tag: string): void
 }>()
 
 const { t } = useI18n()
@@ -86,6 +87,16 @@ function openDetailFromRow(event: MouseEvent): void {
         <h2 class="ls-srv-row__name" :title="server.name">
           <RouterLink class="ls-srv-row__name-link" :to="detailTarget" @click.stop>{{ server.name }}</RouterLink>
         </h2>
+        <button
+          v-if="props.canEdit"
+          :id="`server-${server.id}-edit`"
+          class="ls-btn ls-btn--small ls-srv-row__inline-edit"
+          type="button"
+          @click.stop.prevent="emit('edit', server.id)"
+        >
+          <AppIcon name="settings" size="0.75rem" />
+          {{ t('common.edit') }}
+        </button>
         <span class="ls-srv-row__address" :title="address">{{ address }}</span>
         <span v-if="server.mode" class="ls-chip ls-chip--muted ls-srv-row__mode">{{ server.mode }}</span>
       </div>
@@ -94,9 +105,16 @@ function openDetailFromRow(event: MouseEvent): void {
         <span v-for="group in server.group_names" :key="group" class="ls-chip" :title="group">
           {{ group }}
         </span>
-        <span v-for="tag in server.tags" :key="tag" class="ls-chip ls-chip--muted" :title="`#${tag}`">
+        <button
+          v-for="tag in server.tags"
+          :key="tag"
+          class="ls-chip ls-chip--muted ls-chip--button"
+          type="button"
+          :title="`${t('servers.filterByTag')} #${tag}`"
+          @click.stop.prevent="emit('filter-tag', tag)"
+        >
           #{{ tag }}
-        </span>
+        </button>
         <span class="ls-srv-row__seen">{{ t('s.0538') }} · {{ lastSeen }}</span>
         <span v-if="server.metrics_summary" class="ls-srv-metrics">
           <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.cpu_pct)}`">
@@ -131,16 +149,6 @@ function openDetailFromRow(event: MouseEvent): void {
         >
           <AppIcon name="users" size="0.875rem" />
           {{ t('servers.accessAccounts') }}
-        </button>
-        <button
-          v-if="props.canEdit"
-          :id="`server-${server.id}-edit`"
-          class="ls-btn ls-srv-row__action"
-          type="button"
-          @click.stop.prevent="emit('edit', server.id)"
-        >
-          <AppIcon name="settings" size="0.875rem" />
-          {{ t('common.edit') }}
         </button>
       </div>
     </div>

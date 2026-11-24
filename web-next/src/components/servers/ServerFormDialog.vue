@@ -72,7 +72,6 @@ const tags = ref<string[]>([])
 const tagDraft = ref('')
 const notes = ref('')
 const customRows = ref<{ key: string; value: string }[]>([])
-const canGroupWrite = computed(() => can('group.write'))
 
 const credentials = ref<Credential[]>([])
 const credentialsState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -266,16 +265,8 @@ async function buildGroup(): Promise<{ group: string; groupIds: string[] }> {
     if (name === '') return { group: '', groupIds: [] }
     const existing = serverGroups.value.find((item) => item.name === name)
     if (existing) return { group: existing.name, groupIds: [existing.id] }
-    if (!canGroupWrite.value) return { group: name, groupIds: [] }
-    // 自定义输入的分组在保存服务器时自动落库，避免出现「只有文本、没有分组」。
-    try {
-      const created = await api.createServerGroup({ name, description: '' })
-      serverGroups.value = [...serverGroups.value, created]
-      return { group: created.name, groupIds: [created.id] }
-    } catch {
-      // 并发创建/无 group.write 时退回文本分组，不阻断服务器保存。
-      return { group: name, groupIds: [] }
-    }
+    // 历史文本分组：下拉只展示、不提供手动输入；保存时保留原文本。
+    return { group: name, groupIds: [] }
   }
   return { group: selectedGroupName.value || props.server?.group || '', groupIds: [form.groupChoice] }
 }
@@ -585,17 +576,13 @@ watch(
             <option v-for="group in serverGroups" :key="group.id" :value="group.id">
               {{ group.name }}（{{ group.member_count }}）
             </option>
-            <option :value="CUSTOM_GROUP">{{ t('server.form.groupCustom') }}</option>
+            <option
+              v-if="form.groupChoice === CUSTOM_GROUP && form.customGroup"
+              :value="CUSTOM_GROUP"
+            >
+              {{ t('server.form.legacyGroup', { name: form.customGroup }) }}
+            </option>
           </AppSelect>
-          <input
-            v-if="form.groupChoice === CUSTOM_GROUP"
-            v-model="form.customGroup"
-            class="ls-input"
-            type="text"
-            autocomplete="off"
-            :placeholder="t('server.form.groupPlaceholder')"
-            :aria-label="t('server.form.groupCustom')"
-          />
           <span class="ls-field__hint">{{ t('server.form.groupHint') }}</span>
           <span v-if="groupsState === 'error'" class="ls-field__error" role="alert">
             {{ groupsError }}

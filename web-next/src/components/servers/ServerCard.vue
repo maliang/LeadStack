@@ -27,6 +27,7 @@ const emit = defineEmits<{
   (event: 'edit', id: string): void
   (event: 'open-panel', id: string): void
   (event: 'open-accounts', id: string): void
+  (event: 'filter-tag', tag: string): void
 }>()
 
 const { t } = useI18n()
@@ -61,6 +62,16 @@ const mode = computed(() => props.server.mode.trim())
       <h2 :id="titleId" class="ls-srv-card__title" :title="server.name">
         <RouterLink class="ls-srv-card__title-link" :to="detailTarget">{{ server.name }}</RouterLink>
       </h2>
+      <button
+        v-if="props.canEdit"
+        :id="`server-card-${server.id}-edit`"
+        class="ls-btn ls-btn--small ls-srv-card__inline-edit"
+        type="button"
+        @click="emit('edit', server.id)"
+      >
+        <AppIcon name="settings" size="0.75rem" />
+        {{ t('common.edit') }}
+      </button>
       <span class="ls-srv-status" :class="`ls-srv-status--${serverStatusTone(server.status)}`">
         <span class="ls-srv-status__dot" aria-hidden="true" />
         {{ t(serverStatusLabelKey(server.status)) }}
@@ -99,9 +110,16 @@ const mode = computed(() => props.server.mode.trim())
 
     <div v-if="groupLabels.length > 0 || server.tags.length > 0" class="ls-srv-card__chips">
       <span v-for="group in groupLabels" :key="group" class="ls-chip" :title="group">{{ group }}</span>
-      <span v-for="tag in server.tags" :key="tag" class="ls-chip ls-chip--muted" :title="`#${tag}`">
+      <button
+        v-for="tag in server.tags"
+        :key="tag"
+        class="ls-chip ls-chip--muted ls-chip--button"
+        type="button"
+        :title="`${t('servers.filterByTag')} #${tag}`"
+        @click="emit('filter-tag', tag)"
+      >
         #{{ tag }}
-      </span>
+      </button>
     </div>
 
     <div class="ls-srv-card__foot">
@@ -125,16 +143,6 @@ const mode = computed(() => props.server.mode.trim())
         {{ t('servers.accessAccounts') }}
       </button>
       <RouterLink class="ls-btn ls-btn--small" :to="detailTarget">{{ t('servers.viewDetail') }}</RouterLink>
-      <button
-        v-if="props.canEdit"
-        :id="`server-card-${server.id}-edit`"
-        class="ls-btn ls-btn--small"
-        type="button"
-        @click="emit('edit', server.id)"
-      >
-        <AppIcon name="settings" size="0.875rem" />
-        {{ t('common.edit') }}
-      </button>
     </div>
   </article>
 </template>
