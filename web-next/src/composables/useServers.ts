@@ -1,5 +1,5 @@
 import { onScopeDispose, ref, watch, type Ref } from 'vue'
-import { api, type Server, type ServerStatus } from '@/lib/api'
+import { api, type Server, type ServerStatus, type ServerStatusSnapshot } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import { t } from '@/i18n'
 
@@ -9,8 +9,9 @@ import { t } from '@/i18n'
  * 参考宝塔面板的实时状态刷新：列表指标属于快照数据，轮询要足够密（10s）
  * 且在页面重新可见时立即补一次，不能等下一个定时器。
  *
- * 筛选是纯前端行为（旧界面的分组/状态/标签/关键字语义），这里只导出纯函数，
- * 组件不各写一套过滤或状态映射；接口仍然只有 api.servers()，不新增后端查询参数。
+ * 筛选是纯前端行为（旧界面的分组/状态/标签/关键字语义），这里只导出纯函数。
+ * 首次/手动刷新走完整 GET /servers；定时轮询只走轻量 GET /servers/status，
+ * 合并 status/last_seen/agent_version/last_error/metrics_summary，适合大量服务器。
  */
 
 /** 列表自动刷新间隔。 */
@@ -130,6 +131,8 @@ export interface UseServers {
   /** 正在进行一次请求（手动重试按钮的禁用/旋转态） */
   refreshing: Ref<boolean>
   refresh: () => Promise<void>
+  /** 只刷新轻量状态/指标，不重拉整页列表 */
+  refreshStatus: () => Promise<void>
 }
 
 export interface UseServersOptions {
@@ -149,6 +152,7 @@ export function useServers(options: UseServersOptions = {}): UseServers {
   const refreshing = ref(false)
 
   let inflight: Promise<void> | null = null
+  let statusInflight: Promise<void> | null = null
   let disposed = false
   let timer: ReturnType<typeof setInterval> | null = null
 
@@ -177,14 +181,40 @@ export function useServers(options: UseServersOptions = {}): UseServers {
     return inflight
   }
 
+  const refreshStatus = (): Promise<void> => {
+    if (!allowed() || !loaded.value) return refresh()
+    if (statusInflight) return statusInflight
+    statusInflight = (async () => {
+      try {
+        const statuses = await api.serverStatuses()
+        if (disposed) return
+        const byID = new Map<string, ServerStatusSnapshot>(statuses.map((item) => [item.id, item]))
+        servers.value = servers.value.map((server) => {
+          const next = byID.get(server.id)
+          if (!next) return server
+          const { metrics_summary: metrics, ...rest } = next
+          return { ...server, ...rest, ...(metrics ? { metrics_summary: metrics } : {}) }
+        })
+        error.value = null
+      } catch (caught) {
+        if (disposed) return
+        // 轻量轮询失败不清空已有列表，只在顶部显示可重试错误。
+        error.value = errorMessage(caught, t('common.error'))
+      } finally {
+        if (!disposed) statusInflight = null
+      }
+    })()
+    return statusInflight
+  }
+
   timer = setInterval(() => {
     if (!allowed()) return
     if (document.visibilityState === 'hidden') return
-    void refresh()
+    void refreshStatus()
   }, SERVERS_POLL_MS)
 
   const onVisible = (): void => {
-    if (document.visibilityState === 'visible' && allowed()) void refresh()
+    if (document.visibilityState === 'visible' && allowed()) void refreshStatus()
   }
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', onVisible)
@@ -206,5 +236,5 @@ export function useServers(options: UseServersOptions = {}): UseServers {
 
   if (allowed()) void refresh()
 
-  return { servers, status, error, loaded, refreshing, refresh }
+  return { servers, status, error, loaded, refreshing, refresh, refreshStatus }
 }

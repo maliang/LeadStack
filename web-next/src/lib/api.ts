@@ -562,6 +562,16 @@ export interface Server {
  * 这是唯一回显 SSH 明文密码的接口：服务端每次读取都会写一条 `server.access` 审计，
  * 因此前端只在卡片挂载/手动重试时读取一次，禁止放进轮询。
  */
+/** GET /servers/status 的轻量快照：列表高频轮询只合并这些字段。 */
+export interface ServerStatusSnapshot {
+  id: string
+  status: ServerStatus
+  last_seen_at: number | null
+  agent_version: string | null
+  last_error: string | null
+  metrics_summary: MetricsSummary | null
+}
+
 export interface ServerAccess {
   server_id: string
   name: string
@@ -3069,6 +3079,25 @@ export const api = {
 
   createServer(payload: CreateServerPayload): Promise<Server> {
     return request<unknown>('/servers', { method: 'POST', body: payload }).then(normalizeServer)
+  },
+
+  /** GET /servers/status —— 轻量状态快照，供大量服务器列表高频轮询 */
+  serverStatuses(): Promise<ServerStatusSnapshot[]> {
+    return request<unknown>('/servers/status').then((raw) => {
+      const list = Array.isArray(raw) ? raw : extractList(raw, ['servers', 'items'])
+      return list.map((item) => {
+        const entry = toRecord(item) ?? {}
+        const lastSeenAt = toNumber(entry.last_seen_at)
+        return {
+          id: toText(entry.id) ?? '',
+          status: normalizeStatus(entry.status, lastSeenAt),
+          last_seen_at: lastSeenAt,
+          agent_version: toText(entry.agent_version),
+          last_error: toText(entry.last_error),
+          metrics_summary: normalizeMetrics(entry.metrics_summary) ?? normalizeMetrics(entry),
+        }
+      })
+    })
   },
 
   server(id: string): Promise<Server> {

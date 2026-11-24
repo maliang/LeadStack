@@ -4,14 +4,13 @@ import AppIcon from '@/components/AppIcon.vue'
 import { useApps } from '@/composables/useApps'
 import { useAuth } from '@/composables/useAuth'
 import { useCan } from '@/composables/useCan'
-import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
+import { serverStatusLabelKey, serverStatusTone, useServers } from '@/composables/useServers'
 import { useI18n } from '@/i18n'
 import {
   api,
   type AlertSummary,
   type CheckSummary,
   type Release,
-  type Server,
   type SystemInfo,
 } from '@/lib/api'
 import {
@@ -154,10 +153,17 @@ const infoRes = useResource<SystemInfo>(() => api.systemInfo(), {
   enabled: () => canViewServers.value,
   fallback: t('dashboard.kpi.loadFailed'),
 })
-const serversRes = useResource<Server[]>(() => api.servers({}), {
-  enabled: () => canViewServers.value,
-  fallback: t('dashboard.attention.loadFailed'),
-})
+// 服务器块复用列表 owner：首次/手动拉整页，定时只拉 /servers/status 轻量快照。
+const serversStore = useServers({ enabled: () => canViewServers.value })
+const serversRes = {
+  data: serversStore.servers,
+  state: computed(() => serversStore.status.value),
+  error: serversStore.error,
+  loaded: serversStore.loaded,
+  refreshing: serversStore.refreshing,
+  refresh: serversStore.refresh,
+  refreshStatus: serversStore.refreshStatus,
+}
 const checksRes = useResource<CheckSummary>(() => api.checksSummary(), {
   enabled: () => canViewChecks.value,
   fallback: t('dashboard.checks.loadFailed'),

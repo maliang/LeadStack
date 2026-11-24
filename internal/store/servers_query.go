@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -238,4 +239,46 @@ func (s *Store) FindLocalAgentServer(ctx context.Context, nowMS int64) (*Server,
 		return nil, err
 	}
 	return srv, nil
+}
+
+// ServerStatusRow 是列表页轻量轮询需要的字段（不含 tags/分组/主机信息等重字段）。
+type ServerStatusRow struct {
+	ID           string
+	Mode         string
+	Status       string
+	LastSeenAt   *int64
+	AgentVersion *string
+	LastError    *string
+}
+
+// ListServerStatuses 返回所有服务器的状态快照，供 GET /servers/status 高频轮询。
+func (s *Store) ListServerStatuses(ctx context.Context) ([]ServerStatusRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, mode, status, last_seen_at, agent_version, last_error
+		   FROM servers ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("查询服务器状态: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]ServerStatusRow, 0, 64)
+	for rows.Next() {
+		var (
+			row      ServerStatusRow
+			lastSeen sql.NullInt64
+			ver      sql.NullString
+			lastErr  sql.NullString
+		)
+		if err := rows.Scan(&row.ID, &row.Mode, &row.Status, &lastSeen, &ver, &lastErr); err != nil {
+			return nil, fmt.Errorf("扫描服务器状态: %w", err)
+		}
+		row.LastSeenAt = intPtr(lastSeen)
+		row.AgentVersion = strPtr(ver)
+		row.LastError = strPtr(lastErr)
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历服务器状态: %w", err)
+	}
+	return out, nil
 }

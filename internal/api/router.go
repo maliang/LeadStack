@@ -57,6 +57,7 @@ func (a *API) Router() http.Handler {
 			permServerRead := a.RequirePerm(auth.PermServerRead)
 			r.With(permServerRead).Get("/groups", a.handleListGroups)
 			r.With(permServerRead).Get("/servers", a.handleListServers)
+			r.With(permServerRead).Get("/servers/status", a.handleListServerStatuses)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}", a.handleGetServer)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}/access", a.handleServerAccess)
 			r.With(permServerRead, inScope).Get("/servers/{serverID}/panel", a.handleServerPanel)
