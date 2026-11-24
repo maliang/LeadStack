@@ -292,6 +292,7 @@ const servers: Record<string, string> = {
   'server.accounts.copyField': 'Copy {field}',
   'server.accounts.copyAll': 'Copy account',
   'server.accounts.copyFailed': 'Copy failed — select the text manually',
+  'server.accounts.colActions': 'Actions',
   'server.accounts.runScript': 'One-click login',
   'server.accounts.running': 'Running…',
   'server.accounts.runFailed': 'Failed to run the login script',

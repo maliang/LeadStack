@@ -19,6 +19,14 @@ export interface AppFormValues {
   healthcheckPort: string
   restartCmd: string
   envJson: string
+  /** inplace: 接管既有目录 */
+  targetDir: string
+  /** inplace: 同步时保留的路径 */
+  keepPaths: string
+  /** 首版初始化脚本 */
+  initScript: string
+  /** 失败/健康检查失败时回滚脚本 */
+  rollbackScript: string
 }
 
 export type AppFormErrors = Partial<Record<keyof AppFormValues, string>>
@@ -34,6 +42,10 @@ export function emptyAppForm(): AppFormValues {
     healthcheckPort: '',
     restartCmd: '',
     envJson: '',
+    targetDir: '',
+    keepPaths: '',
+    initScript: '',
+    rollbackScript: '',
   }
 }
 
@@ -48,6 +60,10 @@ export function appFormFromItem(app: AppItem): AppFormValues {
     healthcheckPort: app.healthcheck_port === null ? '' : String(app.healthcheck_port),
     restartCmd: app.restart_cmd ?? '',
     envJson: app.env_json ?? '',
+    targetDir: app.target_dir ?? '',
+    keepPaths: app.keep_paths ?? '',
+    initScript: app.init_script ?? '',
+    rollbackScript: app.rollback_script ?? '',
   }
 }
 
@@ -77,6 +93,10 @@ export function appPayloadFromForm(values: AppFormValues): CreateAppPayload {
     healthcheck_port: parseHealthcheckPort(values.healthcheckPort),
     restart_cmd: values.restartCmd.trim() || null,
     env_json: values.envJson.trim() || null,
+    target_dir: values.targetDir.trim() || null,
+    keep_paths: values.keepPaths.trim() || null,
+    init_script: values.initScript.trim() || null,
+    rollback_script: values.rollbackScript.trim() || null,
   }
 }
 

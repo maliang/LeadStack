@@ -9329,3 +9329,98 @@ body.ls-scroll-locked {
   outline: none;
   box-shadow: var(--ls-focus-ring);
 }
+
+/* 访问账号只读表格 */
+.ls-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.ls-table {
+  width: 100%;
+  min-width: 44rem;
+  border-collapse: collapse;
+  font: 400 var(--ls-text-sm) / 1.5 var(--ls-font-sans);
+}
+
+.ls-table th,
+.ls-table td {
+  padding: var(--ls-space-2);
+  border-bottom: 1px solid var(--ls-border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.ls-table th {
+  color: var(--ls-text-subtle);
+  font-size: var(--ls-text-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ls-table__mono {
+  font-family: var(--ls-font-mono);
+  font-size: var(--ls-text-xs);
+  white-space: nowrap;
+}
+
+.ls-table__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-1);
+}
+
+/* 服务器列表环形指标 */
+.ls-metric-ring {
+  --ring-color: var(--ls-brand-500);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+  min-width: 3.25rem;
+}
+
+.ls-metric-ring--warn {
+  --ring-color: var(--ls-warning);
+}
+
+.ls-metric-ring--danger {
+  --ring-color: var(--ls-danger);
+}
+
+.ls-metric-ring__circle {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  background: conic-gradient(var(--ring-color) var(--pct, 0deg), var(--ls-surface-muted) 0);
+  position: relative;
+}
+
+.ls-metric-ring__circle::after {
+  content: '';
+  position: absolute;
+  inset: 0.28rem;
+  border-radius: 50%;
+  background: var(--ls-surface);
+}
+
+.ls-metric-ring__value {
+  position: relative;
+  z-index: 1;
+  color: var(--ls-text);
+  font: 600 var(--ls-text-2xs) / 1 var(--ls-font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+.ls-metric-ring__label {
+  color: var(--ls-text-subtle);
+  font: 500 var(--ls-text-2xs) / 1.2 var(--ls-font-sans);
+}
+
+.ls-metric-ring__total {
+  color: var(--ls-text-subtle);
+  font: 400 var(--ls-text-2xs) / 1.2 var(--ls-font-mono);
+  white-space: nowrap;
+}

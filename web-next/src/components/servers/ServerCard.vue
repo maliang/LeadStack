@@ -4,7 +4,8 @@ import { RouterLink } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { useI18n } from '@/i18n'
 import type { Server } from '@/lib/api'
-import { formatOs, formatRelativeTime, serverAddress, usageTone } from '@/lib/format'
+import { formatBytes, formatOs, serverAddress } from '@/lib/format'
+import ServerMetricRing from './ServerMetricRing.vue'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 
 /** 卡片视图：一眼回答「这台机器是谁、通不通、在哪」。展开终端/文件只在列表视图提供。 */
@@ -38,14 +39,15 @@ function onSelect(event: Event): void {
 
 const titleId = computed(() => `server-card-${props.server.id}-title`)
 const detailTarget = computed(() => ({ name: 'server-detail', params: { id: props.server.id } }))
-const lastSeen = computed(() =>
-  props.server.last_seen_at ? formatRelativeTime(props.server.last_seen_at) : t('s.0543'),
-)
+
 const groupLabels = computed(() => {
   if (props.server.group_names.length > 0) return props.server.group_names
   return props.server.group ? [props.server.group] : []
 })
 const mode = computed(() => props.server.mode.trim())
+const address = computed(() => (props.server.mode === 'agent' ? props.server.host : serverAddress(props.server)))
+const memTotal = computed(() => formatBytes(props.server.host_info?.mem_total_bytes ?? null))
+const diskTotal = computed(() => formatBytes(props.server.host_info?.disk_total_bytes ?? null))
 </script>
 
 <template>
@@ -78,9 +80,9 @@ const mode = computed(() => props.server.mode.trim())
       </span>
     </header>
 
-    <p class="ls-srv-card__address" :title="serverAddress(server)">
+    <p class="ls-srv-card__address" :title="address">
       <AppIcon name="server" size="0.875rem" />
-      <span class="ls-srv-card__address-text">{{ serverAddress(server) }}</span>
+      <span class="ls-srv-card__address-text">{{ address }}</span>
       <span v-if="mode" class="ls-chip ls-chip--muted ls-srv-card__mode">{{ mode }}</span>
     </p>
 
@@ -89,22 +91,12 @@ const mode = computed(() => props.server.mode.trim())
         <dt>{{ t('s.0534') }}</dt>
         <dd :title="formatOs(server.os, server.arch)">{{ formatOs(server.os, server.arch) }}</dd>
       </div>
-      <div class="ls-srv-meta__item">
-        <dt>{{ t('s.0538') }}</dt>
-        <dd>{{ lastSeen }}</dd>
-      </div>
     </dl>
 
     <div v-if="server.metrics_summary" class="ls-srv-metrics ls-srv-card__metrics">
-      <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.cpu_pct)}`">
-        {{ t('servers.metricCpu') }} {{ server.metrics_summary.cpu_pct === null ? '—' : `${server.metrics_summary.cpu_pct.toFixed(0)}%` }}
-      </span>
-      <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.mem_used_pct)}`">
-        {{ t('servers.metricMem') }} {{ server.metrics_summary.mem_used_pct === null ? '—' : `${server.metrics_summary.mem_used_pct.toFixed(0)}%` }}
-      </span>
-      <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.disk_used_pct)}`">
-        {{ t('servers.metricDisk') }} {{ server.metrics_summary.disk_used_pct === null ? '—' : `${server.metrics_summary.disk_used_pct.toFixed(0)}%` }}
-      </span>
+      <ServerMetricRing :label="t('servers.metricCpu')" :value="server.metrics_summary.cpu_pct" />
+      <ServerMetricRing :label="t('servers.metricMem')" :value="server.metrics_summary.mem_used_pct" :total="memTotal" />
+      <ServerMetricRing :label="t('servers.metricDisk')" :value="server.metrics_summary.disk_used_pct" :total="diskTotal" />
     </div>
     <p v-else class="ls-srv-card__metrics ls-field__hint">{{ t('servers.metricsPending') }}</p>
 

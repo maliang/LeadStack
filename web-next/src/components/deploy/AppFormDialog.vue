@@ -103,10 +103,30 @@ const modeHint = computed(() => {
         <span v-if="errors.slug" class="ls-field__error" role="alert">{{ t(errors.slug) }}</span>
         <span v-else class="ls-field__hint">{{ t('apps.form.slugHint') }}</span>
       </label>
-      <label class="ls-field" for="app-form-root">
-        <span class="ls-field__label">{{ t('apps.form.root') }}</span>
+      <label v-if="form.deployMode !== 'inplace'" class="ls-field" for="app-form-root">
+        <span class="ls-field__label">{{ form.deployMode === 'script' ? t('apps.form.workDir') : t('apps.form.root') }}</span>
         <input id="app-form-root" v-model="form.root" class="ls-input" type="text" autocomplete="off" :placeholder="t('apps.form.rootPlaceholder')" />
-        <span class="ls-field__hint">{{ t('apps.form.rootHint') }}</span>
+        <span class="ls-field__hint">{{ form.deployMode === 'script' ? t('apps.form.workDirHint') : t('apps.form.rootHint') }}</span>
+      </label>
+      <label v-if="form.deployMode === 'inplace'" class="ls-field" for="app-form-target-dir">
+        <span class="ls-field__label">{{ t('apps.form.targetDir') }}</span>
+        <input id="app-form-target-dir" v-model="form.targetDir" class="ls-input" type="text" autocomplete="off" placeholder="/www/wwwroot/app" />
+        <span class="ls-field__hint">{{ t('apps.form.targetDirHint') }}</span>
+      </label>
+      <label v-if="form.deployMode === 'inplace'" class="ls-field" for="app-form-keep-paths">
+        <span class="ls-field__label">{{ t('apps.form.keepPaths') }}</span>
+        <input id="app-form-keep-paths" v-model="form.keepPaths" class="ls-input" type="text" autocomplete="off" placeholder="storage/,public/uploads/,.env" />
+        <span class="ls-field__hint">{{ t('apps.form.keepPathsHint') }}</span>
+      </label>
+      <label v-if="form.deployMode !== 'release'" class="ls-field" for="app-form-init-script">
+        <span class="ls-field__label">{{ t('apps.form.initScript') }}</span>
+        <textarea id="app-form-init-script" v-model="form.initScript" class="ls-input ls-textarea" rows="3" spellcheck="false" :placeholder="t('apps.form.scriptPlaceholder')" />
+        <span class="ls-field__hint">{{ t('apps.form.initScriptHint') }}</span>
+      </label>
+      <label v-if="form.deployMode !== 'release'" class="ls-field" for="app-form-rollback-script">
+        <span class="ls-field__label">{{ t('apps.form.rollbackScript') }}</span>
+        <textarea id="app-form-rollback-script" v-model="form.rollbackScript" class="ls-input ls-textarea" rows="3" spellcheck="false" :placeholder="t('apps.form.scriptPlaceholder')" />
+        <span class="ls-field__hint">{{ t('apps.form.rollbackScriptHint') }}</span>
       </label>
       <div class="ls-field">
         <span id="app-form-mode-label" class="ls-field__label">{{ t('apps.form.deployMode') }}</span>
@@ -127,7 +147,7 @@ const modeHint = computed(() => {
         </div>
         <span class="ls-field__hint">{{ modeHint }}</span>
       </div>
-      <label class="ls-field" for="app-form-restart">
+      <label v-if="form.deployMode !== 'script'" class="ls-field" for="app-form-restart">
         <span class="ls-field__label">{{ t('apps.form.restartCmd') }}</span>
         <input id="app-form-restart" v-model="form.restartCmd" class="ls-input" type="text" autocomplete="off" :placeholder="t('apps.form.restartCmdPlaceholder')" />
         <span class="ls-field__hint">{{ t('apps.form.restartCmdHint') }}</span>

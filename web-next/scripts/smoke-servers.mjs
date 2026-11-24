@@ -510,9 +510,18 @@ async function run() {
     // 2a) 列表项基础监控信息
     const firstRowText = await page.locator('.ls-srv-row').first().innerText()
     check(
-      '列表项显示 CPU / 内存 / 磁盘指标',
-      firstRowText.includes('CPU 13%') && firstRowText.includes('内存 33%') && firstRowText.includes('磁盘 40%'),
+      '列表项显示环形 CPU / 内存 / 磁盘指标',
+      (await page.locator('.ls-srv-row').first().locator('.ls-metric-ring').count()) === 3 &&
+        firstRowText.includes('13%') && firstRowText.includes('33%') && firstRowText.includes('40%'),
       firstRowText.replace(/\s+/g, ' ').slice(0, 140),
+    )
+
+    check(
+      'agent 行只显示 IP（不拼端口）、不再显示最后心跳',
+      (await page.locator('.ls-srv-row__address').first().innerText()).trim() === '10.0.0.11' &&
+        !firstRowText.includes('最后') &&
+        !firstRowText.includes('心跳'),
+      `${await page.locator('.ls-srv-row__address').first().innerText()} / ${firstRowText.replace(/\s+/g, ' ').slice(0, 100)}`,
     )
 
     // 2b) 宝塔 API 一键登录：只有绑定了面板凭据的行显示入口

@@ -4,7 +4,8 @@ import { RouterLink, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { useI18n } from '@/i18n'
 import type { Server } from '@/lib/api'
-import { formatRelativeTime, serverAddress, usageTone } from '@/lib/format'
+import { formatBytes, serverAddress } from '@/lib/format'
+import ServerMetricRing from './ServerMetricRing.vue'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 
 /**
@@ -43,11 +44,11 @@ function onSelect(event: Event): void {
   emit('select', props.server.id, (event.target as HTMLInputElement).checked)
 }
 
-const address = computed(() => serverAddress(props.server))
+const address = computed(() => (props.server.mode === 'agent' ? props.server.host : serverAddress(props.server)))
+const memTotal = computed(() => formatBytes(props.server.host_info?.mem_total_bytes ?? null))
+const diskTotal = computed(() => formatBytes(props.server.host_info?.disk_total_bytes ?? null))
 const detailTarget = computed(() => ({ name: 'server-detail', params: { id: props.server.id } }))
-const lastSeen = computed(() =>
-  props.server.last_seen_at ? formatRelativeTime(props.server.last_seen_at) : t('s.0543'),
-)
+
 const openDetail = (): void => {
   void router.push(detailTarget.value)
 }
@@ -115,17 +116,10 @@ function openDetailFromRow(event: MouseEvent): void {
         >
           #{{ tag }}
         </button>
-        <span class="ls-srv-row__seen">{{ t('s.0538') }} · {{ lastSeen }}</span>
         <span v-if="server.metrics_summary" class="ls-srv-metrics">
-          <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.cpu_pct)}`">
-            {{ t('servers.metricCpu') }} {{ server.metrics_summary.cpu_pct === null ? '—' : `${server.metrics_summary.cpu_pct.toFixed(0)}%` }}
-          </span>
-          <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.mem_used_pct)}`">
-            {{ t('servers.metricMem') }} {{ server.metrics_summary.mem_used_pct === null ? '—' : `${server.metrics_summary.mem_used_pct.toFixed(0)}%` }}
-          </span>
-          <span class="ls-srv-metric" :class="`ls-srv-metric--${usageTone(server.metrics_summary.disk_used_pct)}`">
-            {{ t('servers.metricDisk') }} {{ server.metrics_summary.disk_used_pct === null ? '—' : `${server.metrics_summary.disk_used_pct.toFixed(0)}%` }}
-          </span>
+          <ServerMetricRing :label="t('servers.metricCpu')" :value="server.metrics_summary.cpu_pct" />
+          <ServerMetricRing :label="t('servers.metricMem')" :value="server.metrics_summary.mem_used_pct" :total="memTotal" />
+          <ServerMetricRing :label="t('servers.metricDisk')" :value="server.metrics_summary.disk_used_pct" :total="diskTotal" />
         </span>
         <span v-else class="ls-srv-row__seen">{{ t('servers.metricsPending') }}</span>
       </div>

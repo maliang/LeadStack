@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import AppModal from '@/components/AppModal.vue'
-import ServerAccountsTab from '@/components/server-detail/ServerAccountsTab.vue'
+import ServerAccountsTable from '@/components/server-detail/ServerAccountsTable.vue'
 import { useI18n } from '@/i18n'
 import type { Server } from '@/lib/api'
 
@@ -21,6 +21,6 @@ const { t } = useI18n()
     size="lg"
     @close="emit('close')"
   >
-    <ServerAccountsTab :server="server" :can-write="canWrite" />
+    <ServerAccountsTable :server="server" :can-write="canWrite" />
   </AppModal>
 </template>

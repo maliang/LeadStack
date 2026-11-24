@@ -292,6 +292,7 @@ const servers: Record<string, string> = {
   'server.accounts.copyField': '复制{field}',
   'server.accounts.copyAll': '复制整条',
   'server.accounts.copyFailed': '复制失败，请手动选择文本',
+  'server.accounts.colActions': '操作',
   'server.accounts.runScript': '一键登录',
   'server.accounts.running': '正在执行…',
   'server.accounts.runFailed': '执行登录脚本失败',

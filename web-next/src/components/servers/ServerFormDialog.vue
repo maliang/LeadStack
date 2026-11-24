@@ -70,6 +70,7 @@ const form = reactive({
 
 const tags = ref<string[]>([])
 const tagDraft = ref('')
+const canGroupWrite = computed(() => can('group.write'))
 const notes = ref('')
 const customRows = ref<{ key: string; value: string }[]>([])
 
@@ -265,8 +266,15 @@ async function buildGroup(): Promise<{ group: string; groupIds: string[] }> {
     if (name === '') return { group: '', groupIds: [] }
     const existing = serverGroups.value.find((item) => item.name === name)
     if (existing) return { group: existing.name, groupIds: [existing.id] }
-    // 历史文本分组：下拉只展示、不提供手动输入；保存时保留原文本。
-    return { group: name, groupIds: [] }
+    if (!canGroupWrite.value) return { group: name, groupIds: [] }
+    // 保存时自动把没有的分组名称落库，随后绑定 group_ids。
+    try {
+      const created = await api.createServerGroup({ name, description: '' })
+      serverGroups.value = [...serverGroups.value, created]
+      return { group: created.name, groupIds: [created.id] }
+    } catch {
+      return { group: name, groupIds: [] }
+    }
   }
   return { group: selectedGroupName.value || props.server?.group || '', groupIds: [form.groupChoice] }
 }
@@ -576,13 +584,18 @@ watch(
             <option v-for="group in serverGroups" :key="group.id" :value="group.id">
               {{ group.name }}（{{ group.member_count }}）
             </option>
-            <option
-              v-if="form.groupChoice === CUSTOM_GROUP && form.customGroup"
-              :value="CUSTOM_GROUP"
-            >
-              {{ t('server.form.legacyGroup', { name: form.customGroup }) }}
-            </option>
+            <option :value="CUSTOM_GROUP">{{ t('server.form.groupCustom') }}</option>
+
           </AppSelect>
+          <input
+            v-if="form.groupChoice === CUSTOM_GROUP"
+            v-model="form.customGroup"
+            class="ls-input"
+            type="text"
+            autocomplete="off"
+            :placeholder="t('server.form.groupPlaceholder')"
+            :aria-label="t('server.form.groupCustom')"
+          />
           <span class="ls-field__hint">{{ t('server.form.groupHint') }}</span>
           <span v-if="groupsState === 'error'" class="ls-field__error" role="alert">
             {{ groupsError }}
