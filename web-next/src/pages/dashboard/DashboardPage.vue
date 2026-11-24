@@ -42,7 +42,7 @@ import { formatRelativeTime, formatUptime } from '@/lib/format'
 /** 「需要关注」最多列出多少台机器（与旧版一致）。 */
 const ATTENTION_LIMIT = 6
 /** 各区块轮询间隔：与旧版一致。 */
-const POLL_MS = 10_000
+const POLL_MS = 5_000
 
 type BlockState = 'loading' | 'ready' | 'error'
 

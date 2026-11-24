@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import ServerFormDialog from '@/components/servers/ServerFormDialog.vue'
@@ -154,10 +154,10 @@ const address = computed(() => (server.value ? serverAddress(server.value) : '')
 
 /* 详情读取 --------------------------------------------------------- */
 
-async function loadServer(initial = false): Promise<void> {
+async function loadServer(initial = false, background = false): Promise<void> {
   if (initial) {
     status.value = 'loading'
-  } else {
+  } else if (!background) {
     refreshing.value = true
   }
   loadError.value = null
@@ -309,11 +309,11 @@ async function openPanel(): Promise<void> {
  * 拉一次指标：时间窗 → from/to 毫秒，step 由用户选择。
  * 后端在 step=raw 且跨度 > 6h 时会自动降级并回传实际 step，这里不覆盖用户选择。
  */
-async function loadMetrics(): Promise<void> {
+async function loadMetrics(silent = false): Promise<void> {
   if (!canRead.value) return
   metricsRequest += 1
   const token = metricsRequest
-  metricsLoading.value = true
+  if (!silent) metricsLoading.value = true
   metricsError.value = null
   const range = metricsRange(metricsWindow.value)
   metricsFrom.value = range.from
@@ -331,9 +331,44 @@ async function loadMetrics(): Promise<void> {
     metrics.value = null
     metricsError.value = errorMessage(error, t('servers.detail.metrics.loadFailed'))
   } finally {
-    if (token === metricsRequest) metricsLoading.value = false
+    if (token === metricsRequest && !silent) metricsLoading.value = false
   }
 }
+
+/* 实时刷新：概览页在可见时每 10s 拉指标、每 15s 拉一次详情状态。
+ * 宝塔面板的实时页也是「轻量接口高频轮询 + 页面隐藏暂停」；避免在后台空转。 */
+let overviewMetricsTimer: ReturnType<typeof setInterval> | null = null
+let overviewDetailTimer: ReturnType<typeof setInterval> | null = null
+
+const onOverviewVisible = (): void => {
+  if (document.visibilityState !== 'visible' || tab.value !== 'overview') return
+  void loadMetrics(true)
+  void loadServer(false, true)
+}
+
+function stopOverviewPolling(): void {
+  if (overviewMetricsTimer !== null) clearInterval(overviewMetricsTimer)
+  if (overviewDetailTimer !== null) clearInterval(overviewDetailTimer)
+  overviewMetricsTimer = null
+  overviewDetailTimer = null
+  document.removeEventListener('visibilitychange', onOverviewVisible)
+}
+
+function startOverviewPolling(): void {
+  stopOverviewPolling()
+  if (tab.value !== 'overview') return
+  document.addEventListener('visibilitychange', onOverviewVisible)
+  overviewMetricsTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden') return
+    void loadMetrics(true)
+  }, 10_000)
+  overviewDetailTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden') return
+    void loadServer(false, true)
+  }, 15_000)
+}
+
+watch(tab, () => startOverviewPolling())
 
 /* 主机信息刷新：成功后用返回的 HostInfo 覆盖展示 -------------------- */
 
@@ -523,7 +558,10 @@ async function onServerSaved(): Promise<void> {
 
 onMounted(() => {
   void loadServer(true)
+  startOverviewPolling()
 })
+
+onBeforeUnmount(stopOverviewPolling)
 </script>
 
 <template>

@@ -4,14 +4,17 @@ import { errorMessage } from '@/lib/errors'
 import { t } from '@/i18n'
 
 /**
- * 服务器列表的数据 owner：加载、30s 轮询、骨架/空/失败三态。
+ * 服务器列表的数据 owner：加载、10s 轮询、骨架/空/失败三态。
+ *
+ * 参考宝塔面板的实时状态刷新：列表指标属于快照数据，轮询要足够密（10s）
+ * 且在页面重新可见时立即补一次，不能等下一个定时器。
  *
  * 筛选是纯前端行为（旧界面的分组/状态/标签/关键字语义），这里只导出纯函数，
  * 组件不各写一套过滤或状态映射；接口仍然只有 api.servers()，不新增后端查询参数。
  */
 
 /** 列表自动刷新间隔。 */
-export const SERVERS_POLL_MS = 30_000
+export const SERVERS_POLL_MS = 10_000
 
 /** 视图偏好（卡片/列表）的 localStorage 键；默认列表。 */
 export const SERVERS_VIEW_STORAGE_KEY = 'leadstack.servers.view'
@@ -180,6 +183,13 @@ export function useServers(options: UseServersOptions = {}): UseServers {
     void refresh()
   }, SERVERS_POLL_MS)
 
+  const onVisible = (): void => {
+    if (document.visibilityState === 'visible' && allowed()) void refresh()
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisible)
+  }
+
   // 权限可能在会话刷新后才到位：从「不允许」变「允许」时补一次拉取。
   watch(allowed, (on) => {
     if (on) void refresh()
@@ -189,6 +199,9 @@ export function useServers(options: UseServersOptions = {}): UseServers {
     disposed = true
     if (timer !== null) clearInterval(timer)
     timer = null
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   })
 
   if (allowed()) void refresh()
