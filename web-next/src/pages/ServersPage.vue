@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AppSelect from '@/components/AppSelect.vue'
+import { RouterLink } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
 import ServerBatchBar from '@/components/servers/ServerBatchBar.vue'
@@ -27,6 +28,7 @@ import {
 import { useI18n } from '@/i18n'
 import { api, type BatchAction, type BatchResultItem, type Server, type ServerGroup } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
+import { pushToast } from '@/lib/toast'
 import {
   CUSTOM_GROUP_VALUE,
   MAX_BATCH_TAG_LENGTH,
@@ -268,6 +270,7 @@ function openCreateForm(): void {
 }
 
 const accountsTarget = ref<Server | null>(null)
+const onboardId = ref<string | null>(null)
 
 function openAccounts(id: string): void {
   accountsTarget.value = servers.value.find((server) => server.id === id) ?? null
@@ -340,7 +343,10 @@ async function handleFormSaved(saved: Server): Promise<void> {
   const edited = formTarget.value !== null
   formOpen.value = false
   formTarget.value = null
-  actionNotice.value = t(edited ? 'server.form.saved' : 'server.form.created', { name: saved.name })
+  const message = t(edited ? 'server.form.saved' : 'server.form.created', { name: saved.name })
+  actionNotice.value = message
+  onboardId.value = edited ? null : saved.id
+  pushToast({ tone: 'success', title: message })
   await refresh()
 }
 </script>
@@ -385,6 +391,17 @@ async function handleFormSaved(saved: Server): Promise<void> {
         </button>
       </div>
     </header>
+
+    <div v-if="onboardId" id="servers-onboard-banner" class="ls-banner ls-banner--warning" role="status">
+      <AppIcon name="info" size="1rem" />
+      <div class="ls-banner__body">
+        <p class="ls-banner__title">{{ t('servers.onboardBannerTitle') }}</p>
+        <p class="ls-banner__text">{{ t('servers.onboardBannerText') }}</p>
+      </div>
+      <RouterLink class="ls-btn ls-btn--small" :to="{ name: 'server-detail', params: { id: onboardId }, query: { tab: 'overview' } }">
+        {{ t('servers.onboardBannerAction') }}
+      </RouterLink>
+    </div>
 
     <div v-if="actionNotice" id="servers-action-notice" class="ls-notice ls-notice--success" role="status">
       <p class="ls-notice__title">{{ actionNotice }}</p>

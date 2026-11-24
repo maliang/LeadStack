@@ -7,11 +7,9 @@ import ServerOverviewTab from '@/components/server-detail/ServerOverviewTab.vue'
 import ServerAccessTab from '@/components/server-detail/ServerAccessTab.vue'
 import ServerAccountsTab from '@/components/server-detail/ServerAccountsTab.vue'
 import ServerLoginTab from '@/components/server-detail/ServerLoginTab.vue'
-import ServerMetaTab from '@/components/server-detail/ServerMetaTab.vue'
 import ServerChecksTab from '@/components/server-detail/ServerChecksTab.vue'
 import ServerSecurityAudit from '@/components/server-detail/ServerSecurityAudit.vue'
-import GroupsPage from '@/pages/ops/GroupsPage.vue'
-import BackupsPage from '@/pages/ops/BackupsPage.vue'
+import ServerDatabaseBackupTab from '@/components/server-detail/ServerDatabaseBackupTab.vue'
 import ServerFilesPanel from '@/components/server-tools/ServerFilesPanel.vue'
 import ServerLogsPanel from '@/components/server-tools/ServerLogsPanel.vue'
 import ServerTerminalPanel from '@/components/server-tools/ServerTerminalPanel.vue'
@@ -30,18 +28,14 @@ import {
   type TestConnectionResult,
 } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
+import { pushToast } from '@/lib/toast'
 import { serverAddress } from '@/lib/format'
 import {
   SERVER_DETAIL_TAB_QUERY,
   normalizeServerDetailTab,
   type ServerDetailTab,
 } from '@/router'
-import {
-  checksForServer,
-  loginResultMode,
-  metaFieldsFromRows,
-  type MetaRow,
-} from '@/lib/server-detail'
+import { checksForServer, loginResultMode } from '@/lib/server-detail'
 import {
   isSha256Hex,
   metricsRange,
@@ -50,8 +44,8 @@ import {
 } from '@/lib/server-metrics'
 
 /**
- * 服务器详情页：概览 / 一键登录 / 访问账号 / 服务器档案 / 安全 / 终端 / 文件 / 日志 /
- * 分组 / 备份 / SSH 登录信息（最后）。
+ * 服务器详情页：概览 / 一键登录 / 访问账号 / 安全 / 终端 / 文件 / 日志 /
+ * 数据库备份 / SSH 登录信息（最后）。
  *
  * 本页是唯一的数据 owner：详情、登录信息、一键登录、面板、档案、检测项的
  * 异步状态都在这里，各 tab 组件只负责渲染与派发。这样「登录信息收起即丢弃」
@@ -66,12 +60,10 @@ const TABS: { key: ServerDetailTab; labelKey: string }[] = [
   { key: 'overview', labelKey: 'server.tab.overview' },
   { key: 'login', labelKey: 'server.tab.login' },
   { key: 'accounts', labelKey: 'server.tab.accounts' },
-  { key: 'meta', labelKey: 'server.tab.meta' },
   { key: 'checks', labelKey: 'server.tab.checks' },
   { key: 'terminal', labelKey: 'server.tab.terminal' },
   { key: 'files', labelKey: 'server.tab.files' },
   { key: 'logs', labelKey: 'server.tab.logs' },
-  { key: 'groups', labelKey: 'server.tab.groups' },
   { key: 'backups', labelKey: 'server.tab.backups' },
   { key: 'access', labelKey: 'server.tab.access' },
 ]
@@ -150,13 +142,6 @@ const connectionError = ref<string | null>(null)
 const upgradeBusy = ref(false)
 const upgradeResult = ref<AgentUpgradeResult | null>(null)
 const upgradeError = ref<string | null>(null)
-
-/* 服务器档案 ------------------------------------------------------- */
-const metaSaving = ref(false)
-const metaError = ref<string | null>(null)
-const metaNotice = ref<string | null>(null)
-const metaReloadError = ref<string | null>(null)
-const metaSavedAt = ref(0)
 
 /* 检测 ------------------------------------------------------------- */
 const checks = ref<CheckItem[]>([])
@@ -416,36 +401,6 @@ async function submitAgentUpgrade(payload: AgentUpgradeDraft): Promise<void> {
   }
 }
 
-/* 服务器档案：PATCH 后必须重新 GET 详情（PATCH 响应不含档案） --------- */
-
-async function saveMeta(payload: { notes: string; rows: MetaRow[] }): Promise<void> {
-  if (metaSaving.value) return
-  metaSaving.value = true
-  metaError.value = null
-  metaNotice.value = null
-  metaReloadError.value = null
-  try {
-    await api.updateServer(serverId.value, {
-      notes: payload.notes,
-      custom_fields: metaFieldsFromRows(payload.rows),
-    })
-  } catch (error) {
-    metaError.value = errorMessage(error, t('server.meta.saveFailed'))
-    metaSaving.value = false
-    return
-  }
-  // PATCH 响应里的档案字段不可信，一律以重新读回详情为准。
-  try {
-    server.value = await api.server(serverId.value)
-    metaSavedAt.value += 1
-    metaNotice.value = t('server.meta.saved')
-  } catch (error) {
-    metaReloadError.value = errorMessage(error, '')
-  } finally {
-    metaSaving.value = false
-  }
-}
-
 /* 检测：只读，进入 tab 时按需拉一次 --------------------------------- */
 
 async function loadChecks(): Promise<void> {
@@ -523,9 +478,6 @@ watch(serverId, () => {
   upgradeBusy.value = false
   upgradeResult.value = null
   upgradeError.value = null
-  metaError.value = null
-  metaNotice.value = null
-  metaReloadError.value = null
   checks.value = []
   checksLoaded.value = false
   checksError.value = null
@@ -568,6 +520,8 @@ function openEdit(): void {
 
 async function onServerSaved(): Promise<void> {
   editOpen.value = false
+  const message = t('server.form.saved', { name: server.value?.name ?? '' })
+  pushToast({ tone: 'success', title: message })
   await loadServer(false)
 }
 
@@ -703,8 +657,7 @@ onMounted(() => {
           :server="server"
           :can-write="canWrite"
         />
-        <GroupsPage v-else-if="tab === 'groups'" />
-        <BackupsPage v-else-if="tab === 'backups'" />
+        <ServerDatabaseBackupTab v-else-if="tab === 'backups'" :server="server" :can-write="canWrite" />
         <ServerAccessTab
           v-else-if="tab === 'access'"
           :title="t('server.access.title')"
@@ -734,17 +687,6 @@ onMounted(() => {
           @save="saveLoginScript"
           @open-panel="openPanel"
           @panel-saved="loadServer(false)"
-        />
-        <ServerMetaTab
-          v-else-if="tab === 'meta'"
-          :server="server"
-          :saving="metaSaving"
-          :error="metaError"
-          :notice="metaNotice"
-          :reload-error="metaReloadError"
-          :can-write="canWrite"
-          :saved-at="metaSavedAt"
-          @save="saveMeta"
         />
         <div v-else-if="tab === 'checks'" class="ls-detail__stack">
           <ServerSecurityAudit :server-id="serverId" :can-run="canRead" :can-harden="canWrite" />

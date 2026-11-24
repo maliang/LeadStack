@@ -26,7 +26,7 @@ import { writeClipboard } from '@/lib/clipboard'
  *   所以编辑时只读；只有 SSH 模式才允许改地址/端口。
  * - 宝塔面板：绑定 kind=baota 的 API 密钥凭证；绑定后列表出现「宝塔登录」。
  * - 分组：下拉选已管理分组（写 group_ids），也可切换「自定义」直接输入文本。
- * - 标签：输入逗号 / 空格 / 换行即转成可删除的标签块。
+ * - 标签：输入逗号 / 换行即转成可删除的标签块；空格保留在标签内容里。
  */
 const props = withDefaults(
   defineProps<{
@@ -70,6 +70,9 @@ const form = reactive({
 
 const tags = ref<string[]>([])
 const tagDraft = ref('')
+const notes = ref('')
+const customRows = ref<{ key: string; value: string }[]>([])
+const canGroupWrite = computed(() => can('group.write'))
 
 const credentials = ref<Credential[]>([])
 const credentialsState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -110,6 +113,8 @@ function hydrate(server: Server): void {
   form.hostKeyPolicy = 'accept-new'
   tags.value = [...server.tags]
   tagDraft.value = ''
+  notes.value = server.notes ?? ''
+  customRows.value = Object.entries(server.custom_fields ?? {}).map(([key, value]) => ({ key, value }))
   // 先按 group_ids 匹配；历史数据只有文本 group 时落到「自定义」。
   form.groupChoice = server.group_ids[0] ?? (server.group ? CUSTOM_GROUP : '')
   form.customGroup = server.group ?? ''
@@ -160,7 +165,7 @@ function selectMode(mode: 'agent' | 'ssh'): void {
 
 function addTags(raw: string): void {
   const next = [...tags.value]
-  for (const part of raw.split(/[,，\s]+/)) {
+  for (const part of raw.split(/[,，\n]+/)) {
     const value = part.trim()
     if (value === '' || [...value].length > MAX_BATCH_TAG_LENGTH) continue
     if (next.includes(value)) continue
@@ -173,10 +178,11 @@ function addTags(raw: string): void {
 function onTagInput(event: Event): void {
   const input = event.target as HTMLInputElement
   const raw = input.value
-  if (/[,，\s]/.test(raw)) {
-    const parts = raw.split(/[,，\s]+/)
+  // 只把逗号/中文逗号当分隔符；空格是标签内容的一部分，不能一输入就切断。
+  if (/[,，]/.test(raw)) {
+    const parts = raw.split(/[,，]+/)
     const pending = parts.pop() ?? ''
-    addTags(parts.join(' '))
+    for (const part of parts) addTags(part)
     tagDraft.value = pending.trim()
     input.value = tagDraft.value
     return
@@ -234,11 +240,42 @@ function validate(): boolean {
   return Object.keys(next).length === 0
 }
 
-function buildGroup(): { group: string; groupIds: string[] } {
+function addCustomRow(): void {
+  if (customRows.value.length >= 32) return
+  customRows.value = [...customRows.value, { key: '', value: '' }]
+}
+
+function removeCustomRow(index: number): void {
+  customRows.value = customRows.value.filter((_, i) => i !== index)
+}
+
+function customFields(): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const row of customRows.value) {
+    const key = row.key.trim()
+    if (key !== '') out[key] = row.value.trim()
+  }
+  return out
+}
+
+async function buildGroup(): Promise<{ group: string; groupIds: string[] }> {
   // PATCH 语义：空串表示清除；null/缺省表示不改。所以这里统一返回空串而不是 null。
   if (form.groupChoice === '') return { group: '', groupIds: [] }
   if (form.groupChoice === CUSTOM_GROUP) {
-    return { group: form.customGroup.trim(), groupIds: [] }
+    const name = form.customGroup.trim()
+    if (name === '') return { group: '', groupIds: [] }
+    const existing = serverGroups.value.find((item) => item.name === name)
+    if (existing) return { group: existing.name, groupIds: [existing.id] }
+    if (!canGroupWrite.value) return { group: name, groupIds: [] }
+    // 自定义输入的分组在保存服务器时自动落库，避免出现「只有文本、没有分组」。
+    try {
+      const created = await api.createServerGroup({ name, description: '' })
+      serverGroups.value = [...serverGroups.value, created]
+      return { group: created.name, groupIds: [created.id] }
+    } catch {
+      // 并发创建/无 group.write 时退回文本分组，不阻断服务器保存。
+      return { group: name, groupIds: [] }
+    }
   }
   return { group: selectedGroupName.value || props.server?.group || '', groupIds: [form.groupChoice] }
 }
@@ -291,7 +328,7 @@ async function submit(): Promise<void> {
   error.value = null
   if (!validate()) return
   busy.value = true
-  const group = buildGroup()
+  const group = await buildGroup()
   const tagsValue = tags.value.slice(0, MAX_BATCH_TAGS)
   try {
     if (props.server) {
@@ -300,6 +337,8 @@ async function submit(): Promise<void> {
         tags: tagsValue,
         group: group.group,
         group_ids: group.groupIds,
+        notes: notes.value,
+        custom_fields: customFields(),
       }
       // agent 模式的 host/port 由 agent 上报，不参与连接；编辑时不提交，避免无意义变更。
       if (props.server.mode === 'ssh') {
@@ -519,6 +558,24 @@ watch(
           <span class="ls-field__hint">{{ t('server.form.policyHint') }}</span>
         </label>
       </fieldset>
+
+      <template v-if="editing">
+        <label class="ls-field" for="server-form-notes">
+          <span class="ls-field__label">{{ t('server.meta.notes') }}</span>
+          <textarea id="server-form-notes" v-model="notes" class="ls-input ls-textarea" rows="3" maxlength="2000" />
+          <span class="ls-field__hint">{{ t('server.meta.notesHint') }}</span>
+        </label>
+        <div class="ls-field">
+          <span class="ls-field__label">{{ t('server.meta.customFields') }}</span>
+          <div v-for="(row, index) in customRows" :key="index" class="ls-form__row">
+            <input v-model="row.key" class="ls-input" type="text" maxlength="40" :placeholder="t('server.meta.fieldKey')" :aria-label="t('server.meta.fieldKey')" />
+            <input v-model="row.value" class="ls-input" type="text" maxlength="200" :placeholder="t('server.meta.fieldValue')" :aria-label="t('server.meta.fieldValue')" />
+            <button class="ls-btn ls-btn--small" type="button" @click="removeCustomRow(index)">{{ t('common.delete') }}</button>
+          </div>
+          <button class="ls-btn ls-btn--small" type="button" :disabled="customRows.length >= 32" @click="addCustomRow">{{ t('server.meta.addField') }}</button>
+          <span class="ls-field__hint">{{ t('server.meta.customFieldsHint') }}</span>
+        </div>
+      </template>
 
       <div class="ls-form__row">
         <label class="ls-field" for="server-form-group">

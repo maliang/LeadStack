@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import AppSelect from '@/components/AppSelect.vue'
 import type { AppItem, CreateAppPayload } from '@/lib/api'
 import {
   appFormFromItem,
@@ -109,15 +108,25 @@ const modeHint = computed(() => {
         <input id="app-form-root" v-model="form.root" class="ls-input" type="text" autocomplete="off" :placeholder="t('apps.form.rootPlaceholder')" />
         <span class="ls-field__hint">{{ t('apps.form.rootHint') }}</span>
       </label>
-      <label class="ls-field" for="app-form-mode">
-        <span class="ls-field__label">{{ t('apps.form.deployMode') }}</span>
-        <AppSelect id="app-form-mode" v-model="form.deployMode" class="ls-input">
-          <option v-for="option in modeOptions" :key="option.value" :value="option.value">
+      <div class="ls-field">
+        <span id="app-form-mode-label" class="ls-field__label">{{ t('apps.form.deployMode') }}</span>
+        <div id="app-form-mode" class="ls-mode-picker" role="radiogroup" aria-labelledby="app-form-mode-label">
+          <button
+            v-for="option in modeOptions"
+            :id="`app-form-mode-${option.value}`"
+            :key="option.value"
+            class="ls-mode-picker__item"
+            :class="{ 'is-active': form.deployMode === option.value }"
+            type="button"
+            role="radio"
+            :aria-checked="form.deployMode === option.value"
+            @click="form.deployMode = option.value"
+          >
             {{ t(option.key) }}
-          </option>
-        </AppSelect>
+          </button>
+        </div>
         <span class="ls-field__hint">{{ modeHint }}</span>
-      </label>
+      </div>
       <label class="ls-field" for="app-form-restart">
         <span class="ls-field__label">{{ t('apps.form.restartCmd') }}</span>
         <input id="app-form-restart" v-model="form.restartCmd" class="ls-input" type="text" autocomplete="off" :placeholder="t('apps.form.restartCmdPlaceholder')" />

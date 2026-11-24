@@ -8,6 +8,12 @@ import { api, type UpdateInfo, type UpdateStatus } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import { renderReleaseNotes } from '@/lib/release-notes'
 import {
+  clearUpgradeSession,
+  markUpgradeActive,
+  onUpgradeSessionChange,
+  readUpgradeSession,
+} from '@/lib/upgrade-session'
+import {
   formatBytes,
   formatDateTime,
   isTerminalPhase,
@@ -135,6 +141,7 @@ function stopPolling(): void {
 
 function settleTerminal(status: UpdateStatus): void {
   uploadPct.value = null
+  clearUpgradeSession()
   if (status.phase !== 'success') return
   const next = status.current_version ?? status.target_version
   if (info.value && next) {
@@ -169,6 +176,7 @@ async function pollStatus(): Promise<void> {
         job.value = { ...status, phase: 'rolled_back', rolled_back: true, target_version: target }
         pollError.value = null
         pendingTarget = null
+        clearUpgradeSession()
         stopPolling()
         return
       }
@@ -178,6 +186,7 @@ async function pollStatus(): Promise<void> {
     // 终态必须停表：否则事件循环里永远有一个 2s 定时器在转。
     if (isTerminalPhase(status.phase)) {
       pendingTarget = null
+      clearUpgradeSession()
       stopPolling()
       settleTerminal(status)
     }
@@ -227,6 +236,7 @@ async function submitApply(): Promise<void> {
     jobStarted.value = true
     // 202 只回 job_id；目标版本由本地记住，供重启后无 job 时判定终态。
     pendingTarget = version
+    markUpgradeActive(version)
     startPolling()
   } catch (caught) {
     applyError.value = errorMessage(caught, t('upgrade.applyFailedTitle'))
@@ -284,6 +294,7 @@ async function submitUpload(): Promise<void> {
     uploadNotice.value = t('upgrade.jobAccepted')
     job.value = result.status.phase !== 'idle' ? result.status : null
     pendingTarget = result.status.target_version ?? pendingTarget
+    if (pendingTarget) markUpgradeActive(pendingTarget)
     pollError.value = null
     jobStarted.value = true
     // 202 后与 applyUpdate 同一条轮询链路。
@@ -308,12 +319,29 @@ function cancelUpload(): void {
   uploadAbort?.abort()
 }
 
+let stopSessionWatch: (() => void) | null = null
+
 onMounted(() => {
   if (!allowed.value) return
   void loadInfo()
+  // 刷新/从右上角发起升级：同一份 localStorage 标记恢复轮询。
+  const session = readUpgradeSession()
+  if (session) {
+    jobStarted.value = true
+    pendingTarget = session.target
+    startPolling()
+  }
+  stopSessionWatch = onUpgradeSessionChange((next) => {
+    if (next && !jobStarted.value) {
+      jobStarted.value = true
+      pendingTarget = next.target
+      startPolling()
+    }
+  })
 })
 
 onBeforeUnmount(() => {
+  stopSessionWatch?.()
   stopPolling()
   uploadSeq += 1
   uploadAbort?.abort()

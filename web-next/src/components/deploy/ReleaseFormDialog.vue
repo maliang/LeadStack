@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import AppSelect from '@/components/AppSelect.vue'
+import AppIcon from '@/components/AppIcon.vue'
 import { api, type AppItem, type DeployTemplate, type ReleasePreview, type Server } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import {
@@ -44,6 +45,10 @@ const attempted = ref(false)
 const preview = ref<ReleasePreview | null>(null)
 const previewing = ref(false)
 const previewError = ref<string | null>(null)
+const artifactInput = ref<HTMLInputElement | null>(null)
+const artifactUploading = ref(false)
+const artifactError = ref<string | null>(null)
+const artifactName = ref('')
 
 watch(
   () => props.open,
@@ -54,6 +59,10 @@ watch(
     attempted.value = false
     preview.value = null
     previewError.value = null
+    artifactError.value = null
+    artifactName.value = ''
+    artifactUploading.value = false
+    if (artifactInput.value) artifactInput.value.value = ''
   },
   { immediate: true },
 )
@@ -66,6 +75,28 @@ function toggleServer(id: string): void {
   if (index === -1) form.serverIds.push(id)
   else form.serverIds.splice(index, 1)
   if (form.serverIds.length < 2 && form.strategy === 'canary') form.strategy = 'all'
+}
+
+function pickArtifact(): void {
+  artifactInput.value?.click()
+}
+
+async function onArtifactFile(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file || artifactUploading.value) return
+  artifactUploading.value = true
+  artifactError.value = null
+  try {
+    const artifact = await api.uploadArtifact(file)
+    form.artifactId = artifact.id
+    artifactName.value = `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MiB`
+  } catch (caught) {
+    artifactError.value = errorMessage(caught, t('apps.releaseForm.artifactUploadFailed'))
+  } finally {
+    artifactUploading.value = false
+  }
 }
 
 function previewPayload(): { app_id: string; template_id: string; version: string; artifact_id?: string; server_ids: string[] } {
@@ -140,8 +171,18 @@ function submit(): void {
       </div>
       <label class="ls-field" for="release-form-artifact">
         <span class="ls-field__label">{{ t('apps.releaseForm.artifact') }}</span>
-        <input id="release-form-artifact" v-model="form.artifactId" class="ls-input" type="text" autocomplete="off" />
-        <span class="ls-field__hint">{{ t('apps.releaseForm.artifactHint') }}</span>
+        <div class="ls-inline-actions">
+          <input id="release-form-artifact" v-model="form.artifactId" class="ls-input" type="text" autocomplete="off" />
+          <button id="release-form-artifact-upload" class="ls-btn" type="button" :disabled="artifactUploading" :aria-busy="artifactUploading" @click="pickArtifact">
+            <span v-if="artifactUploading" class="ls-spinner" aria-hidden="true" />
+            <AppIcon v-else name="plus" size="0.875rem" />
+            {{ artifactUploading ? t('apps.releaseForm.artifactUploading') : t('apps.releaseForm.artifactUpload') }}
+          </button>
+          <input ref="artifactInput" class="ls-srv-files__file" type="file" @change="onArtifactFile" />
+        </div>
+        <span v-if="artifactName" class="ls-field__hint">{{ artifactName }}</span>
+        <span v-if="artifactError" class="ls-field__error" role="alert">{{ artifactError }}</span>
+        <span v-else class="ls-field__hint">{{ t('apps.releaseForm.artifactHint') }}</span>
       </label>
 
       <fieldset class="ls-form__group">

@@ -2010,6 +2010,8 @@ ALTER TABLE servers ADD COLUMN panel_credential_id TEXT; -- kind=baota 的凭据
 - `POST /api/v1/credentials/{id}/test` → `{"ok":true,"message":"面板连接正常"}`；失败也是 200 + `ok:false`（把面板原因原样带出）
 - `POST /api/v1/servers/{id}/security/audit` → `{"score":…,"findings":[…]}`：
   通过 agent/SSH 只读检查 SSH root/密码登录、防火墙、fail2ban、`/etc/shadow` 权限与无密码账号；
+- `POST /api/v1/servers/{id}/database/backup`（server.write）→ `application/sql` 附件：
+  通过 agent/SSH 在目标机执行 `mysqldump`，密码只放 `MYSQL_PWD` 环境变量，不写库、不写审计；
 - `POST /api/v1/servers/{id}/security/harden`（server.write）→ `{"changed":[…]}`：
   只做低风险幂等加固（文件权限、SSH 尝试次数策略、fail2ban 已安装时启动），不启用防火墙、不重启 sshd；
 - `POST /api/v1/servers/{id}/panel-login` → `{"url":"https://面板/login?tmp_token=…","expires_in":120}`：

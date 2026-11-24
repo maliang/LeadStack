@@ -1,7 +1,13 @@
 import { computed, ref, watch } from 'vue'
 import { api, type UpdateInfo, type UpdateStatus } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
-import { isTerminalPhase, phaseProgress, phaseLabelKey } from '@/lib/upgrade'
+import { isTerminalPhase, phaseProgress, phaseLabelKey, resolveLostJobOutcome } from '@/lib/upgrade'
+import {
+  clearUpgradeSession,
+  markUpgradeActive,
+  onUpgradeSessionChange,
+  readUpgradeSession,
+} from '@/lib/upgrade-session'
 import { useCan } from '@/composables/useCan'
 import { useI18n } from '@/i18n'
 
@@ -21,6 +27,7 @@ const loaded = ref(false)
 let statusTimer: ReturnType<typeof setInterval> | null = null
 let statusAbort: AbortController | null = null
 let statusInFlight = false
+let pendingTarget: string | null = null
 let started = false
 
 export function useUpgradeCenter() {
@@ -59,8 +66,27 @@ export function useUpgradeCenter() {
     try {
       const data = await api.updateStatus({ signal: controller.signal })
       status.value = data
+      if (active.value && data.phase === 'idle' && pendingTarget) {
+        const outcome = resolveLostJobOutcome(data, pendingTarget)
+        if (outcome) {
+          status.value = {
+            ...data,
+            phase: outcome === 'success' ? 'success' : 'rolled_back',
+            target_version: pendingTarget,
+            rolled_back: outcome === 'rolled_back',
+          }
+          pendingTarget = null
+          active.value = false
+          clearUpgradeSession()
+          stopFastPoll()
+          void loadInfo(true)
+          return
+        }
+      }
       if (active.value && isTerminalPhase(data.phase)) {
         active.value = false
+        pendingTarget = null
+        clearUpgradeSession()
         stopFastPoll()
         if (data.phase === 'success') {
           const next = data.current_version ?? data.target_version
@@ -103,6 +129,8 @@ export function useUpgradeCenter() {
     error.value = null
     try {
       await api.applyUpdate({ version })
+      markUpgradeActive(version)
+      pendingTarget = version
       active.value = true
       startFastPoll()
       await loadStatus()
@@ -114,13 +142,30 @@ export function useUpgradeCenter() {
     }
   }
 
+  function onSettingsPage(): boolean {
+    return typeof window !== 'undefined' && window.location.hash.startsWith('#/settings')
+  }
+
   function start(): void {
     if (started || !allowed.value) return
     started = true
-    // 顶栏只负责「有更新提示」；升级状态仅在用户从顶栏确认后轮询，
-    // 避免与设置页 UpgradeCard 的 status mock/轮询互相抢答。
     void loadInfo()
     setInterval(() => void loadInfo(), 5 * 60_000)
+    // 刷新后若 localStorage 里仍有升级会话，立即恢复进度轮询；设置页也会读同一标记。
+    const session = readUpgradeSession()
+    // 设置页由 UpgradeCard 负责状态轮询；顶栏不再重复请求同一接口，避免两边抢进度。
+    if (session && !onSettingsPage()) {
+      pendingTarget = session.target
+      active.value = true
+      startFastPoll()
+    }
+    onUpgradeSessionChange((next) => {
+      if (next && !active.value && !onSettingsPage()) {
+        pendingTarget = next.target
+        active.value = true
+        startFastPoll()
+      }
+    })
   }
 
   watch(

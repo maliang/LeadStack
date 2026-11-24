@@ -2774,6 +2774,8 @@ export interface CreateServerPayload {
 export interface CreateEnrollTokenPayload {
   note: string
   ttl_s: number
+  /** 先添加服务器再接入时，把令牌预绑定到这台服务器。 */
+  server_id?: string
 }
 
 export interface InstallScriptPayload {
@@ -4039,6 +4041,41 @@ export const api = {
     const filename = match
       ? decodeURIComponent(match[1].replace(/"/g, ''))
       : path.split('/').pop() || 'download'
+    return { blob: await response.blob(), filename }
+  },
+
+  /** POST /servers/{id}/database/backup —— 目标机 mysqldump，返回 SQL 附件 */
+  async backupServerDatabase(
+    serverId: string,
+    payload: { engine: 'mysql'; host: string; port: number; user: string; password: string; database: string },
+  ): Promise<RemoteFileDownload> {
+    const token = getToken()
+    const response = await fetch(`${API_PREFIX}/servers/${encodeURIComponent(serverId)}/database/backup`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/sql',
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok) {
+      let message = t('s.0593', { '0': response.status })
+      try {
+        const body = (await response.json()) as ErrorEnvelope
+        if (body?.error?.message) message = body.error.message
+      } catch {
+        /* ignore */
+      }
+      if (response.status === 401) {
+        clearToken()
+        unauthorizedHandler?.()
+      }
+      throw new ApiError(response.status, 'database_backup_failed', message)
+    }
+    const disposition = response.headers.get('Content-Disposition') ?? ''
+    const match = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition)
+    const filename = match ? decodeURIComponent(match[1].replace(/"/g, '')) : 'database-backup.sql'
     return { blob: await response.blob(), filename }
   },
 

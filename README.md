@@ -56,7 +56,7 @@ Go 单二进制 + 内嵌 Web 控制台 + 轻量 agent，跨平台、开箱即用
 
 **服务器列表** —— 状态、CPU / 内存 / 磁盘快照、标签与分组筛选、批量操作；绑定宝塔面板 API 密钥的机器直接显示「宝塔登录」。编辑弹窗里标签按逗号/空格/换行转成可删除标签块，分组支持下拉选择或自定义输入，分组管理已内化到服务器详情。右上角账号菜单提供「用户信息（姓名 / 电话 / 备注）」与「修改密码」，退出登录也收在菜单里。
 
-**服务器详情** —— 概览、一键登录、访问账号、服务器档案、安全、终端、文件、日志、分组、备份；SSH 登录信息放在最后一个标签页。
+**服务器详情** —— 概览、一键登录、访问账号、安全、终端、文件、日志、MySQL/MariaDB 数据库备份；SSH 登录信息放在最后一个标签页。离线服务器会显示接入指引。
 
 ![服务器详情](docs/images/server-detail.png)
 
@@ -865,7 +865,7 @@ make dev               # 开发模式（另开 make web-dev 走前端热更新�
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check      # Docker 构建 + 容器内健康检查 + 备份校验
 node scripts/capture-screenshots.mjs   # 重采 README 截图（需带演示数据的控制端）
-node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3335 校验总数）
+node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3385 校验总数）
 ```
 
 > **内嵌前端 = `web-next/`**：`make build` 先构建 `web-next/dist/`，再由 `make web-embed` 复制到 `internal/webui/dist/`、经 `go:embed` 打进二进制。

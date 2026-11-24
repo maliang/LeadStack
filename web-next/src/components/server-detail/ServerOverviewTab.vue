@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
+import { useCan } from '@/composables/useCan'
+import { api } from '@/lib/api'
+import { errorMessage } from '@/lib/errors'
+import { writeClipboard } from '@/lib/clipboard'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 import { useI18n } from '@/i18n'
 import type {
@@ -78,6 +82,8 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const { can } = useCan()
+const canEnroll = computed(() => can('enroll.manage'))
 
 const hasPanel = computed(() => (props.server.panel_credential_id ?? '') !== '')
 const lastSeen = computed(() =>
@@ -87,6 +93,37 @@ const modeLabel = computed(() => (props.server.mode === 'agent' ? t('s.1095') : 
 const createdAt = computed(() =>
   props.server.created_at ? formatDateTime(props.server.created_at) : t('common.na'),
 )
+const needsOnboarding = computed(() => props.server.status !== 'online')
+const onboardingCommand = ref('')
+const onboardingBusy = ref(false)
+const onboardingError = ref<string | null>(null)
+const onboardingCopied = ref(false)
+
+async function generateOnboarding(): Promise<void> {
+  if (onboardingBusy.value) return
+  onboardingBusy.value = true
+  onboardingError.value = null
+  try {
+    const token = await api.createEnrollToken({
+      note: `server ${props.server.name}`,
+      ttl_s: 3600,
+      server_id: props.server.id,
+    })
+    if (!token.token) throw new Error(t('server.onboard.tokenMissing'))
+    const script = await api.installScript({ token: token.token, server_url: '' })
+    onboardingCommand.value = script.command
+  } catch (caught) {
+    onboardingError.value = errorMessage(caught, t('server.onboard.generateFailed'))
+  } finally {
+    onboardingBusy.value = false
+  }
+}
+
+async function copyOnboarding(): Promise<void> {
+  onboardingCopied.value = await writeClipboard(onboardingCommand.value)
+  if (onboardingCopied.value) setTimeout(() => (onboardingCopied.value = false), 1600)
+}
+
 const groupLabels = computed(() => {
   if (props.server.group_names.length > 0) return props.server.group_names
   return props.server.group ? [props.server.group] : []
@@ -200,6 +237,44 @@ function submitUpgrade(): void {
         <p class="ls-banner__text">{{ server.last_error }}</p>
       </div>
     </div>
+
+    <section v-if="needsOnboarding" id="server-onboarding" class="ls-card" :aria-label="t('server.onboard.title')">
+      <header class="ls-card__head">
+        <div class="ls-card__heading">
+          <h2 class="ls-card__title">
+            <AppIcon name="info" size="1rem" />
+            {{ t('server.onboard.title') }}
+          </h2>
+          <p class="ls-card__subtitle">{{ t('server.onboard.hint') }}</p>
+        </div>
+        <span class="ls-chip ls-chip--warning">{{ t('server.onboard.offline') }}</span>
+      </header>
+      <ol class="ls-onboard__steps">
+        <li>{{ server.mode === 'agent' ? t('server.onboard.agentStep1') : t('server.onboard.sshStep1') }}</li>
+        <li>{{ server.mode === 'agent' ? t('server.onboard.agentStep2') : t('server.onboard.sshStep2') }}</li>
+        <li>{{ t('server.onboard.step3') }}</li>
+      </ol>
+      <p v-if="onboardingError" class="ls-inline-error" role="alert">{{ onboardingError }}</p>
+      <template v-if="server.mode === 'agent' && canEnroll">
+        <div class="ls-card__actions">
+          <button id="server-onboard-generate" class="ls-btn ls-btn--primary" type="button" :disabled="onboardingBusy" :aria-busy="onboardingBusy" @click="generateOnboarding">
+            <span v-if="onboardingBusy" class="ls-spinner" aria-hidden="true" />
+            <AppIcon v-else name="key-round" size="0.875rem" />
+            {{ onboardingBusy ? t('server.onboard.generating') : t('server.onboard.generate') }}
+          </button>
+          <button v-if="onboardingCommand" id="server-onboard-copy" class="ls-btn" type="button" @click="copyOnboarding">
+            <AppIcon name="copy" size="0.875rem" />
+            {{ onboardingCopied ? t('common.copied') : t('server.onboard.copy') }}
+          </button>
+        </div>
+        <pre v-if="onboardingCommand" id="server-onboard-command" class="ls-server-form__command">{{ onboardingCommand }}</pre>
+        <p v-if="onboardingCommand" class="ls-field__hint">{{ t('server.onboard.commandHint') }}</p>
+      </template>
+      <p v-else-if="server.mode === 'agent'" class="ls-field__hint">{{ t('server.onboard.needEnrollPermission') }}</p>
+      <div v-else class="ls-card__actions">
+        <button class="ls-btn ls-btn--primary" type="button" @click="emit('test-connection')">{{ t('server.onboard.testSsh') }}</button>
+      </div>
+    </section>
 
     <section class="ls-card" :aria-label="t('s.1093')">
       <header class="ls-card__head">

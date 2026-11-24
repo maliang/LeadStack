@@ -673,10 +673,10 @@ body.ls-scroll-locked {
   display: grid;
   flex: none;
   place-items: center;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 1.5rem;
+  height: 1.5rem;
   border-radius: var(--ls-radius-full);
-  background: var(--ls-primary-soft);
+  background: transparent;
   color: var(--ls-primary);
   font: 600 var(--ls-text-xs) / 1 var(--ls-font-sans);
 }
@@ -7793,18 +7793,32 @@ body.ls-scroll-locked {
   }
 }
 
-/* 全局提示容器（A27）：固定在右下角，错误常驻并可复制请求编号。
+/* 全局提示容器（A27）：固定在顶部居中，错误常驻并可复制请求编号。
    层级高于模态遮罩，保证「失败提示」不会藏在弹窗后面。 */
 .ls-toaster {
   position: fixed;
-  right: 1rem;
-  bottom: 1rem;
+  top: 0.75rem;
+  left: 50%;
+  bottom: auto;
   z-index: 200;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 0.5rem;
-  width: min(28rem, calc(100vw - 2rem));
+  width: min(32rem, calc(100vw - 2rem));
+  transform: translateX(-50%);
   pointer-events: none;
+}
+
+.ls-toaster > .ls-notice {
+  width: 100%;
+  box-shadow: var(--ls-shadow-lg);
+  animation: ls-toast-in 160ms ease-out;
+}
+
+@keyframes ls-toast-in {
+  from { opacity: 0; transform: translateY(-0.35rem); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .ls-toaster > * {
@@ -7820,10 +7834,12 @@ body.ls-scroll-locked {
 
 @media (max-width: 480px) {
   .ls-toaster {
+    top: 0.5rem;
     right: 0.5rem;
     left: 0.5rem;
-    bottom: 0.5rem;
+    bottom: auto;
     width: auto;
+    transform: none;
   }
 }
 
@@ -8731,11 +8747,11 @@ body.ls-scroll-locked {
   align-items: center;
   gap: var(--ls-space-2);
   max-width: 14rem;
-  height: calc(var(--ls-topbar-height) - var(--ls-space-2));
-  max-height: 2.75rem;
+  height: 2rem;
+  max-height: calc(var(--ls-topbar-height) - var(--ls-space-2));
   min-height: 0;
-  padding: 0 var(--ls-space-1);
-  border: 1px solid transparent;
+  padding: 0;
+  border: 0;
   border-radius: var(--ls-radius-md);
   background: transparent;
   color: inherit;
@@ -9185,4 +9201,108 @@ body.ls-scroll-locked {
 .ls-upgrade__history-time {
   margin-left: auto;
   color: var(--ls-text-subtle);
+}
+
+.ls-onboard__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-1);
+  margin: 0 0 var(--ls-space-3);
+  padding-left: 1.25rem;
+  color: var(--ls-text-muted);
+  font: 400 var(--ls-text-sm) / 1.6 var(--ls-font-sans);
+}
+
+.ls-chip--warning {
+  background: var(--ls-warning-soft);
+  color: var(--ls-warning);
+}
+
+/* 发布模式：三段按钮比下拉更适合三个互斥模式，也避免弹窗内下拉层被遮挡。 */
+.ls-mode-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-1);
+  padding: var(--ls-space-1);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-surface-muted);
+}
+
+.ls-mode-picker__item {
+  flex: 1 1 7rem;
+  min-height: var(--ls-hit-size);
+  padding: 0 var(--ls-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--ls-radius-sm);
+  background: transparent;
+  color: var(--ls-text-muted);
+  font: 500 var(--ls-text-sm) / 1.4 var(--ls-font-sans);
+  cursor: pointer;
+}
+
+.ls-mode-picker__item:hover {
+  color: var(--ls-text);
+}
+
+.ls-mode-picker__item.is-active {
+  border-color: var(--ls-primary);
+  background: var(--ls-surface);
+  color: var(--ls-primary);
+}
+
+.ls-mode-picker__item:focus-visible {
+  outline: none;
+  box-shadow: var(--ls-focus-ring);
+}
+
+.ls-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-1);
+}
+
+.ls-inline-actions .ls-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.ls-security-overview {
+  margin-bottom: var(--ls-space-3);
+}
+
+.ls-security-overview__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-1);
+  margin-bottom: var(--ls-space-2);
+}
+
+.ls-security-overview__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ls-security-overview__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+  padding: var(--ls-space-1) 0;
+  border-bottom: 1px solid var(--ls-border);
+}
+
+.ls-security-overview__name {
+  flex: 1 1 10rem;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ls-text);
+  font: 600 var(--ls-text-sm) / 1.4 var(--ls-font-sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

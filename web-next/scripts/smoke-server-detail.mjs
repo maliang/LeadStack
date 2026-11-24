@@ -705,7 +705,7 @@ async function run() {
     await page.waitForSelector('.ls-detail__title', { timeout: 15000 })
     check('详情页渲染标题', (await page.locator('.ls-detail__title').innerText()).includes('alpha-node'))
     check('详情只拉一次 /servers/{id}', state.detailCalls === 1, `${state.detailCalls} 次`)
-    check('十一个 tab 都在', (await page.locator('.ls-tabs__btn').count()) === 11, String(await page.locator('.ls-tabs__btn').count()))
+    check('九个 tab 都在', (await page.locator('.ls-tabs__btn').count()) === 9, String(await page.locator('.ls-tabs__btn').count()))
     await shot(page, '01-overview')
     check('概览 tab 默认选中', (await page.locator('#server-tab-overview').getAttribute('aria-selected')) === 'true')
 
@@ -785,31 +785,6 @@ async function run() {
     check('terminal 态渲染命令', (await page.locator('.ls-code').innerText()).includes('bt 14'))
     check('命令带复制按钮', (await page.locator('button', { hasText: '复制命令' }).count()) >= 1)
     check('320px 登录结果无横向滚动', (await noHorizontalScroll()).overflow <= 0)
-
-    // 5) 服务器档案：PATCH 后必须重新读回详情
-    await page.click('#server-tab-meta')
-    await page.waitForSelector('#server-meta-notes', { timeout: 5000 })
-    const beforeDetail = state.detailCalls
-    await shot(page, '05-meta')
-    check('档案回填 notes', (await page.inputValue('#server-meta-notes')).includes('存量备注'))
-    await page.fill('#server-meta-notes', '改过的备注 2000 上限')
-    await page.locator('button', { hasText: '添加字段' }).first().click()
-    await page.locator('.ls-meta-row__key').last().fill('datacenter')
-    await page.locator('.ls-meta-row__value').last().fill('shanghai')
-    await page.locator('.ls-card button.ls-btn--primary', { hasText: '保存档案' }).first().click()
-    await page.waitForTimeout(600)
-    const patch = state.patchBodies[0] || {}
-    check('PATCH 带 notes', patch.notes === '改过的备注 2000 上限', String(patch.notes))
-    const patchFields = patch.custom_fields || {}
-    check(
-      'PATCH 带 custom_fields（保留原字段 + 新字段）',
-      patchFields.location === 'beijing' && patchFields.datacenter === 'shanghai',
-      JSON.stringify(patchFields),
-    )
-    check('保存后重新读回详情', state.detailCalls === beforeDetail + 1, `${beforeDetail} → ${state.detailCalls}`)
-    check('读回后草稿跟着更新', (await page.inputValue('#server-meta-notes')) === '改过的备注 2000 上限')
-    const narrowMeta = await noHorizontalScroll()
-    check('320px 档案页无横向滚动', narrowMeta.overflow <= 0, `溢出 ${narrowMeta.overflow}px`)
 
     // 5b) 登录脚本编辑：行内 textarea + 示例插入 + 保存/清空/超限
     console.log('')
@@ -1305,7 +1280,7 @@ async function run() {
       await limitedPage.goto(`${base}/#/servers/srv-alpha?tab=terminal`, { waitUntil: 'domcontentloaded' })
       await limitedPage.waitForSelector('.ls-detail__title', { timeout: 15000 })
       await limitedPage.waitForSelector('.ls-banner--warning', { timeout: 5000 })
-      check('缺权限时十一个 tab 仍可见', (await limitedPage.locator('.ls-tabs__btn').count()) === 11)
+      check('缺权限时九个 tab 仍可见', (await limitedPage.locator('.ls-tabs__btn').count()) === 9)
       check(
         '缺权限时 ?tab=terminal 仍选中终端',
         (await limitedPage.locator('#server-tab-terminal').getAttribute('aria-selected')) === 'true',

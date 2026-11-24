@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineComponent, watch } from 'vue'
+import { computed, defineComponent, onBeforeUnmount, onMounted, watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import { SConfigProvider, useTheme } from '@vean/ui'
 import type { ConfigProviderThemeOptions } from '@vean/ui'
@@ -7,6 +7,7 @@ import type { ConfigProviderThemeOptions } from '@vean/ui'
 import AppShell from '@/components/AppShell.vue'
 import AppToaster from '@/components/AppToaster.vue'
 import { applyBrandVars } from '@/theme/palette'
+import { pushToast } from '@/lib/toast'
 import { setLanguage, useI18n } from '@/i18n'
 import { applyDocumentTitle } from '@/router'
 import {
@@ -65,6 +66,58 @@ const BrandThemeBridge = defineComponent({
     )
     return () => null
   },
+})
+
+/**
+ * 表单反馈桥：把各表单已有的行内成功/失败提示同步成顶部居中 Toast。
+ *
+ * 表单组件很多且各自维护 inline 提示；逐页改容易漏。这里只观察
+ * 「表单级」三类节点（ls-ok-hint / ls-inline-error / ls-adminpage__form-error），
+ * 同一文案 3 秒内去重，避免 MutationObserver 反复触发刷屏。
+ */
+let feedbackObserver: MutationObserver | null = null
+let feedbackRaf = 0
+const feedbackSeen = new Map<string, number>()
+
+function scanFormFeedback(): void {
+  const nodes = document.querySelectorAll<HTMLElement>(
+    '.ls-ok-hint, .ls-inline-error, .ls-adminpage__form-error',
+  )
+  const now = Date.now()
+  for (const node of Array.from(nodes)) {
+    if (node.closest('.ls-toaster')) continue
+    const text = (node.textContent ?? '').trim()
+    if (text.length < 2 || text.length > 300) continue
+    const tone = node.classList.contains('ls-ok-hint') ? 'success' : 'error'
+    const key = `${tone}:${text}`
+    if ((feedbackSeen.get(key) ?? 0) > now - 3000) continue
+    feedbackSeen.set(key, now)
+    pushToast({ tone, title: text, sticky: false })
+  }
+  for (const [key, ts] of feedbackSeen) {
+    if (ts < now - 10_000) feedbackSeen.delete(key)
+  }
+}
+
+onMounted(() => {
+  feedbackObserver = new MutationObserver(() => {
+    if (feedbackRaf !== 0) return
+    feedbackRaf = window.requestAnimationFrame(() => {
+      feedbackRaf = 0
+      scanFormFeedback()
+    })
+  })
+  feedbackObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  })
+})
+
+onBeforeUnmount(() => {
+  feedbackObserver?.disconnect()
+  feedbackObserver = null
+  if (feedbackRaf !== 0) window.cancelAnimationFrame(feedbackRaf)
 })
 
 const { language } = useI18n()

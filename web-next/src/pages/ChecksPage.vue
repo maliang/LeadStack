@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import AppSelect from '@/components/AppSelect.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
+import { RouterLink } from 'vue-router'
 import CheckDetailDrawer from '@/components/checks/CheckDetailDrawer.vue'
 import CheckFormDialog from '@/components/checks/CheckFormDialog.vue'
 import ChecksRow from '@/components/checks/ChecksRow.vue'
 import { useCan } from '@/composables/useCan'
+import { serverStatusLabelKey } from '@/composables/useServers'
 import { useChecks } from '@/composables/useChecks'
 import { useI18n } from '@/i18n'
-import { api, type CheckItem, type CheckState } from '@/lib/api'
+import { api, type CheckItem, type CheckState, type Server } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import {
   CHECKS_PAGE_SIZE,
@@ -75,6 +77,33 @@ const pageChecks = computed(() => paginate(visibleChecks.value, page.value, CHEC
 const agentProbeCount = computed(
   () => checks.value.filter((check) => check.params?.probe_via === 'agent').length,
 )
+const securityServers = ref<Server[]>([])
+const securityServersLoading = ref(false)
+const securityServersError = ref<string | null>(null)
+const serverStats = computed(() => ({
+  total: securityServers.value.length,
+  online: securityServers.value.filter((server) => server.status === 'online').length,
+  agent: securityServers.value.filter((server) => server.mode === 'agent').length,
+  ssh: securityServers.value.filter((server) => server.mode === 'ssh').length,
+}))
+
+async function loadSecurityServers(): Promise<void> {
+  if (!can('server.read')) return
+  securityServersLoading.value = true
+  securityServersError.value = null
+  try {
+    securityServers.value = await api.servers()
+  } catch (caught) {
+    securityServersError.value = errorMessage(caught, t('checks.serverOverviewLoadFailed'))
+  } finally {
+    securityServersLoading.value = false
+  }
+}
+
+onMounted(() => {
+  void loadSecurityServers()
+})
+
 const drawerCheck = computed<CheckItem | null>(
   () => checks.value.find((check) => check.id === drawerId.value) ?? null,
 )
@@ -215,6 +244,37 @@ function dismissRunFeedback(): void {
     </div>
 
     <template v-else>
+      <section class="ls-card ls-security-overview" :aria-label="t('checks.serverOverviewTitle')">
+        <header class="ls-card__head">
+          <div class="ls-card__heading">
+            <h2 class="ls-card__title">{{ t('checks.serverOverviewTitle') }}</h2>
+            <p class="ls-card__subtitle">{{ t('checks.serverOverviewHint') }}</p>
+          </div>
+          <button class="ls-btn ls-btn--small" type="button" :disabled="securityServersLoading" @click="loadSecurityServers">
+            <AppIcon name="refresh" size="0.875rem" />
+            {{ t('common.refresh') }}
+          </button>
+        </header>
+        <p v-if="securityServersError" class="ls-inline-error" role="alert">{{ securityServersError }}</p>
+        <div v-else class="ls-security-overview__stats">
+          <span class="ls-chip ls-chip--muted">{{ t('checks.serverTotal', { count: serverStats.total }) }}</span>
+          <span class="ls-chip ls-chip--ok">{{ t('checks.serverOnline', { count: serverStats.online }) }}</span>
+          <span class="ls-chip ls-chip--muted">{{ t('checks.serverAgent', { count: serverStats.agent }) }}</span>
+          <span class="ls-chip ls-chip--muted">{{ t('checks.serverSsh', { count: serverStats.ssh }) }}</span>
+        </div>
+        <ul v-if="securityServers.length > 0" class="ls-security-overview__list">
+          <li v-for="server in securityServers" :key="server.id" class="ls-security-overview__row">
+            <span class="ls-security-overview__name">{{ server.name }}</span>
+            <span class="ls-chip ls-chip--muted">{{ server.mode }}</span>
+            <span class="ls-srv-status" :class="`ls-srv-status--${server.status}`">{{ t(serverStatusLabelKey(server.status)) }}</span>
+            <RouterLink class="ls-btn ls-btn--small" :to="{ name: 'server-detail', params: { id: server.id }, query: { tab: 'checks' } }">
+              {{ t('checks.openServerSecurity') }}
+            </RouterLink>
+          </li>
+        </ul>
+        <p v-else-if="!securityServersLoading" class="ls-field__hint">{{ t('checks.noServers') }}</p>
+      </section>
+
       <header class="ls-checkspage__head">
         <div class="ls-checkspage__heading">
           <h1 class="ls-checkspage__title">{{ t('checks.title') }}</h1>
