@@ -377,6 +377,10 @@ func (a *API) applyAndRestart(job *upgradeJob, backupInfo *BackupInfo, newExe st
 		fail("prepare", fmt.Errorf("定位当前可执行文件失败: %w", err))
 		return
 	}
+	if err := ensureUpgradeDirWritable(exe); err != nil {
+		fail("prepare", err)
+		return
+	}
 	timeout := a.cfg.UpgradeRollbackTimeout
 	if timeout <= 0 {
 		timeout = 120 * time.Second

@@ -88,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/maliang/leadstack/master/deploy/ins
 # 装完访问 http://<主机IP>:9000（--port 不写默认 8080）
 ```
 
-脚本会：下载并校验发布包 → 装到 `/usr/local/bin/leadstack` → 写 `0600` 环境文件 `/etc/leadstack/leadstack.env`
+脚本会：下载并校验发布包 → 装到 `/opt/leadstack/leadstack`（并建 `/usr/local/bin/leadstack` 符号链接）→ 写 `0600` 环境文件 `/etc/leadstack/leadstack.env`
 → 注册服务（Linux systemd / macOS launchd）→ **顺手把本机 agent 也装好并纳管** → 打印访问地址与初始密码。
 
 默认 `--source auto`：先走 GitHub Releases，不可达时自动回退 Gitee 镜像（`gitee.com/maliang47/leadstack`）；

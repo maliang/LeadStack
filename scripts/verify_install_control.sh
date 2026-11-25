@@ -236,7 +236,7 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
 		&& pass "systemd 单元含 User=leadstack（非 root 运行）" || fail "单元缺少 User="
 	printf '%s' "$UNIT_OUT" | grep -q "EnvironmentFile=-/etc/leadstack/leadstack.env" \
 		&& pass "单元引用环境文件（端口来自这里）" || fail "单元缺少 EnvironmentFile"
-	printf '%s' "$UNIT_OUT" | grep -q "ExecStart=/usr/local/bin/leadstack" \
+	printf '%s' "$UNIT_OUT" | grep -q "ExecStart=/opt/leadstack/leadstack" \
 		&& pass "单元 ExecStart 指向安装路径" || fail "单元 ExecStart 异常"
 	printf '%s' "$UNIT_OUT" | grep -q "ProtectSystem=strict" \
 		&& pass "单元保留加固项（ProtectSystem=strict）" || fail "单元加固项缺失"

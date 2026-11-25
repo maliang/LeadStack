@@ -22,7 +22,7 @@
 #   --admin-password P 指定初始管理员密码（写入 0600 环境文件；留空则随机生成并打印到日志）
 #   --public-url URL   目标机回连地址（反代/公网访问时必填）
 #   --trusted-proxies  可信反向代理 CIDR 列表（反代后取真实客户端 IP）
-#   --install-dir DIR  安装目录，默认 /usr/local/bin
+#   --install-dir DIR  安装目录，Linux 默认 /opt/leadstack（服务用户可写；会建 /usr/local/bin 符号链接）
 #   --env-dir DIR      环境变量目录，默认 /etc/leadstack（macOS /usr/local/etc/leadstack）
 #   --user NAME        运行服务的系统用户，默认 leadstack（仅 Linux systemd）
 #   --no-service       只装二进制与环境文件，不注册 / 不启动系统服务
@@ -131,7 +131,7 @@ LeadStack 控制端一键安装
                         leadstack_<版本>_<平台>.tar.gz，会自动跳过下载）
   --public-url URL    目标机回连地址（反代/公网访问时必填）
   --trusted-proxies  可信反代 CIDR，逗号分隔，例如 127.0.0.1/32,10.0.0.0/8
-  --install-dir DIR   二进制目录，默认 /usr/local/bin
+  --install-dir DIR   二进制目录，Linux 默认 /opt/leadstack（服务用户可写；会建 /usr/local/bin 符号链接）
   --env-dir DIR       环境文件目录，默认 /etc/leadstack
   --user NAME         服务运行用户（Linux），默认 leadstack
   --no-local-agent    不自动接入本机（默认会顺带把 agent 装到本机并纳管，免去手动跑接入命令）
@@ -177,6 +177,7 @@ RELEASE_APIS=""
 SOURCE_USED=""
 FROM_FILE="${LEADSTACK_CONTROL_BINARY:-}"
 INSTALL_DIR="$DEFAULT_INSTALL_DIR"
+INSTALL_DIR_EXPLICIT=0
 ENV_DIR_OVERRIDE=""
 DATA_DIR=""
 PORT="8080"
@@ -215,7 +216,7 @@ while [ $# -gt 0 ]; do
 		--admin-password)  need_value "$_opt" $(($# - 1)); ADMIN_PASSWORD=$2; shift 2 ;;
 		--public-url)      need_value "$_opt" $(($# - 1)); PUBLIC_URL=$2; shift 2 ;;
 		--trusted-proxies) need_value "$_opt" $(($# - 1)); TRUSTED_PROXIES=$2; shift 2 ;;
-		--install-dir)     need_value "$_opt" $(($# - 1)); INSTALL_DIR=$2; shift 2 ;;
+		--install-dir)     need_value "$_opt" $(($# - 1)); INSTALL_DIR=$2; INSTALL_DIR_EXPLICIT=1; shift 2 ;;
 		--env-dir)         need_value "$_opt" $(($# - 1)); ENV_DIR_OVERRIDE=$2; shift 2 ;;
 		--user)            need_value "$_opt" $(($# - 1)); SERVICE_USER=$2; shift 2 ;;
 		--no-service)      NO_SERVICE=1; shift ;;
@@ -294,6 +295,11 @@ ENV_DIR="$ENV_DIR_DEFAULT"
 if [ -n "$ENV_DIR_OVERRIDE" ]; then ENV_DIR="$ENV_DIR_OVERRIDE"; fi
 if [ -z "$DATA_DIR" ]; then DATA_DIR="$DATA_DIR_DEFAULT"; fi
 ENV_FILE="${ENV_DIR}/leadstack.env"
+# 控制端以非 root 服务用户运行；自升级需要 rename 可执行文件，因此 Linux 默认
+# 装到服务用户可写的专用目录，而不是 root 独占的 /usr/local/bin。
+if [ "$OS" = "linux" ] && [ "$INSTALL_DIR_EXPLICIT" -eq 0 ]; then
+	INSTALL_DIR="/opt/leadstack"
+fi
 BIN_PATH="${INSTALL_DIR}/${BIN_NAME}"
 
 # ---------------------------------------------------------------------------
@@ -829,6 +835,12 @@ install_binary_file() {
 	fi
 	[ -n "${SRC_BIN:-}" ] && [ -f "$SRC_BIN" ] || die "内部错误：没有取到可用的 ${BIN_NAME} 可执行文件"
 	run_priv install -m 0755 "$SRC_BIN" "$BIN_PATH"
+	if [ "$OS" = "linux" ] && [ "$INSTALL_DIR_EXPLICIT" -eq 0 ]; then
+		# 让运行服务的非 root 用户拥有替换自己二进制的权限（目录写权限是 rename 的前提）。
+		run_priv chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
+		run_priv chmod 0750 "$INSTALL_DIR"
+		run_priv ln -sf "$BIN_PATH" "/usr/local/bin/${BIN_NAME}"
+	fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1263,6 +1275,9 @@ uninstall_all() {
 			;;
 	esac
 
+	if [ -L "/usr/local/bin/${BIN_NAME}" ] && [ "$(readlink "/usr/local/bin/${BIN_NAME}")" = "$BIN_PATH" ]; then
+		run_priv rm -f "/usr/local/bin/${BIN_NAME}"
+	fi
 	if [ -f "$BIN_PATH" ] || [ -L "$BIN_PATH" ]; then
 		run_priv rm -f "$BIN_PATH"
 		_removed=1

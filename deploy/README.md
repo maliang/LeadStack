@@ -46,7 +46,7 @@ curl -fsSL http://<控制端>:8080/install.sh | sh -s -- --server http://<控制
 make build
 sudo useradd --system --home /var/lib/leadstack --shell /usr/sbin/nologin leadstack
 sudo install -d -o leadstack -g leadstack /var/lib/leadstack /etc/leadstack
-sudo install -m 0755 bin/leadstack /usr/local/bin/leadstack
+sudo install -m 0755 bin/leadstack /opt/leadstack/leadstack && sudo ln -sf /opt/leadstack/leadstack /usr/local/bin/leadstack
 sudo install -m 0640 leadstack.env.example /etc/leadstack/leadstack.env   # 按需修改
 sudo install -m 0644 leadstack.service /etc/systemd/system/leadstack.service
 sudo systemctl daemon-reload && sudo systemctl enable --now leadstack

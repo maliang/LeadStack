@@ -15,6 +15,23 @@ import (
 // platformUpgradeUnsupported 返回不支持自升级的原因（空串表示支持）。
 func platformUpgradeUnsupported() string { return "" }
 
+// ensureUpgradeDirWritable 在备份前检查可执行文件所在目录是否可写。
+//
+// 控制端以 leadstack 服务用户运行时，旧安装的 /usr/local/bin 属 root，
+// os.Rename 必然失败；提前给出可执行的迁移指令，而不是等到 swap 阶段报
+// “permission denied”。安装脚本新默认目录 /opt/leadstack 属服务用户。
+func ensureUpgradeDirWritable(exe string) error {
+	dir := filepath.Dir(exe)
+	f, err := os.CreateTemp(dir, ".leadstack-upgrade-probe-*")
+	if err != nil {
+		return fmt.Errorf("当前服务用户对 %s 没有写权限，无法自升级；请以 root 重新执行 install-control.sh（新版本会迁移到 /opt/leadstack），之后再升级: %w", dir, err)
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return nil
+}
+
 // swapExecutable 执行 A/B 替换：<exe> → <exe>.prev，新文件 → <exe>。
 //
 // 两步都是同一文件系统内的 rename（原子）；第二步失败会把 .prev 换回去，
