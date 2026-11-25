@@ -1385,6 +1385,10 @@ body.ls-scroll-locked {
   white-space: nowrap;
 }
 
+.ls-srv-card__mode {
+  margin-left: auto;
+}
+
 .ls-srv-meta {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -9551,10 +9555,6 @@ body.ls-scroll-locked {
   font: 400 var(--ls-text-2xs) / 1.3 var(--ls-font-mono);
 }
 
-.ls-srv-row__mode {
-  margin-left: auto;
-}
-
 .ls-rotate-up { transform: rotate(-90deg); }
 .ls-rotate-down { transform: rotate(90deg); }
 
@@ -9593,4 +9593,43 @@ body.ls-scroll-locked {
   display: inline-block;
   flex: 0 0 auto;
   vertical-align: -0.12em;
+}
+
+/* 标签筛选：未选中用浅灰底，选中用品牌主色底；覆盖 .ls-chip--button 的白底。 */
+.ls-chip--button.ls-chip--muted {
+  border: 1px solid var(--ls-border);
+  background: var(--ls-surface-muted);
+  color: var(--ls-text-muted);
+}
+
+.ls-chip--button.ls-chip--muted:hover:not(:disabled) {
+  border-color: var(--ls-border-strong);
+  background: var(--ls-surface);
+  color: var(--ls-text);
+}
+
+.ls-chip--button.ls-chip--active {
+  border: 1px solid transparent;
+  background: var(--ls-primary-fill);
+  color: var(--ls-primary-contrast);
+}
+
+.ls-chip--button.ls-chip--active:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--ls-primary-hover-bg);
+  color: var(--ls-primary-hover-contrast);
+}
+
+.ls-srv-row__side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--ls-space-1);
+  min-width: 0;
+}
+
+@media (max-width: 1023.98px) {
+  .ls-srv-row__side {
+    align-items: flex-start;
+  }
 }

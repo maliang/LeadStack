@@ -131,7 +131,7 @@ const modeLabel = computed(() =>
         :key="tag"
         class="ls-chip ls-chip--muted ls-chip--button"
         type="button"
-        :title="`${t('servers.filterByTag')} #${tag}`"
+        :title="`${t('servers.filterByTag')} ${tag}`"
         @click="emit('filter-tag', tag)"
       >
         {{ tag }}

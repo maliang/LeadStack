@@ -134,7 +134,6 @@ function openDetailFromRow(event: MouseEvent): void {
           </span>
         </div>
         <span class="ls-srv-row__address" :title="address">{{ address }}</span>
-        <span v-if="server.mode" class="ls-chip ls-chip--muted ls-srv-row__mode">{{ modeLabel }}</span>
       </div>
 
       <div class="ls-srv-row__meta">
@@ -146,7 +145,7 @@ function openDetailFromRow(event: MouseEvent): void {
           :key="tag"
           class="ls-chip ls-chip--muted ls-chip--button"
           type="button"
-          :title="`${t('servers.filterByTag')} #${tag}`"
+          :title="`${t('servers.filterByTag')} ${tag}`"
           @click.stop.prevent="emit('filter-tag', tag)"
         >
           {{ tag }}
@@ -159,7 +158,9 @@ function openDetailFromRow(event: MouseEvent): void {
         <span v-else class="ls-srv-row__seen">{{ t('servers.metricsPending') }}</span>
       </div>
 
-      <div class="ls-srv-row__actions">
+      <div class="ls-srv-row__side">
+        <span v-if="server.mode" class="ls-chip ls-chip--muted ls-srv-row__mode">{{ modeLabel }}</span>
+        <div class="ls-srv-row__actions">
         <button
           v-if="props.panelAllowed"
           :id="`server-${server.id}-panel`"
@@ -179,6 +180,7 @@ function openDetailFromRow(event: MouseEvent): void {
           <AppIcon name="users" size="0.875rem" />
           {{ t('servers.accessAccounts') }}
         </button>
+        </div>
       </div>
     </div>
 

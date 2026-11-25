@@ -64,13 +64,40 @@ export function formatUptime(seconds: number | null | undefined): string {
  * 服务器列表用的系统名称：优先使用 host_info.os_version（通常是 PRETTY_NAME，
  * 自带 CentOS/Debian/Ubuntu 等发行版名）；如果只有版本号，则补上大类名称。
  */
+const OS_ID_NAMES: Record<string, string> = {
+  ubuntu: 'Ubuntu',
+  debian: 'Debian',
+  raspbian: 'Raspbian',
+  centos: 'CentOS',
+  rocky: 'Rocky Linux',
+  almalinux: 'AlmaLinux',
+  fedora: 'Fedora',
+  rhel: 'Red Hat Enterprise Linux',
+  opensuse: 'openSUSE',
+  sles: 'SUSE Linux Enterprise',
+  alpine: 'Alpine Linux',
+  arch: 'Arch Linux',
+  manjaro: 'Manjaro',
+  gentoo: 'Gentoo',
+  nixos: 'NixOS',
+  kali: 'Kali Linux',
+  linuxmint: 'Linux Mint',
+  macos: 'macOS',
+  windows: 'Windows',
+}
+
 export function formatServerOs(server: {
   os: string | null
   host_info: { os: string | null; os_id?: string | null; os_name: string | null; os_version: string | null } | null
 }): string {
-  const version = server.host_info?.os_version?.trim() ?? ''
-  const os = (server.host_info?.os ?? server.os ?? '').trim()
-  const distro = server.host_info?.os_name?.trim() ?? ''
+  const rawVersion = server.host_info?.os_version?.trim() ?? ''
+  // 旧数据里偶尔把 os_version 写成 linux/unknown；这类泛化值不能盖掉发行版名称。
+  const version = /^(linux|unknown|n\/a|darwin|windows)$/i.test(rawVersion) ? '' : rawVersion
+  const os = (server.host_info?.os ?? server.os ?? '').trim().toLowerCase()
+  const distro =
+    server.host_info?.os_name?.trim() ||
+    OS_ID_NAMES[(server.host_info?.os_id ?? '').trim().toLowerCase()] ||
+    ''
   const osName = distro || (os === 'linux' ? 'Linux' : os === 'darwin' ? 'macOS' : os === 'windows' ? 'Windows' : os)
   if (version !== '' && osName !== '') {
     // PRETTY_NAME 通常已经包含发行版名称；只有纯版本号（如 22.04.3 LTS）时才补前缀。

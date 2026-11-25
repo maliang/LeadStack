@@ -75,7 +75,13 @@ func (c *Collector) HostInfo() (info protocol.HostInfo) {
 		if hi.KernelVersion != "" {
 			info.Kernel = hi.KernelVersion
 		}
-		info.OSVersion = hi.PlatformVersion
+		// 与 agentless 采集、BaoTa 的 GetOS 保持同一口径：优先 /etc/os-release。
+		info.OSID, info.OSName, info.OSVersion = osReleaseInfo()
+		if info.OSID == "" && info.OSName == "" {
+			info.OSID = fallbackOSID(hi.Platform)
+			info.OSName = fallbackOSName(hi.Platform)
+			info.OSVersion = hi.PlatformVersion
+		}
 		info.UptimeS = int64(hi.Uptime)
 	}
 	if info.UptimeS <= 0 {
@@ -110,6 +116,99 @@ func (c *Collector) HostInfo() (info protocol.HostInfo) {
 	info.IPAddrs = collectIPAddrs(c.log)
 
 	return info
+}
+
+// osReleaseInfo 读取 Linux 发行版标识/名称/完整版本；macOS 使用 sw_vers 口径。
+func osReleaseInfo() (id, name, version string) {
+	if runtime.GOOS == "darwin" {
+		return "macos", "macOS", "macOS " + strings.TrimSpace(runQuiet("sw_vers", "-productVersion"))
+	}
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return "", "", ""
+	}
+	values := parseOSRelease(string(data))
+	id = strings.TrimSpace(values["ID"])
+	name = strings.TrimSpace(values["NAME"])
+	version = strings.TrimSpace(values["PRETTY_NAME"])
+	if version == "" {
+		version = strings.TrimSpace(strings.Join([]string{name, values["VERSION_ID"]}, " "))
+	}
+	if name == "" {
+		name = id
+	}
+	return id, name, version
+}
+
+// parseOSRelease 解析 KEY="VALUE" / KEY=VALUE 形式，供 agent 与测试共用。
+func parseOSRelease(content string) map[string]string {
+	out := make(map[string]string)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		out[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `"'`)
+	}
+	return out
+}
+
+func fallbackOSID(platform string) string {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	switch {
+	case strings.Contains(platform, "ubuntu"):
+		return "ubuntu"
+	case strings.Contains(platform, "debian"):
+		return "debian"
+	case strings.Contains(platform, "centos"):
+		return "centos"
+	case strings.Contains(platform, "rocky"):
+		return "rocky"
+	case strings.Contains(platform, "alma"):
+		return "almalinux"
+	case strings.Contains(platform, "fedora"):
+		return "fedora"
+	case strings.Contains(platform, "redhat"), strings.Contains(platform, "rhel"):
+		return "rhel"
+	case strings.Contains(platform, "alpine"):
+		return "alpine"
+	case strings.Contains(platform, "arch"):
+		return "arch"
+	case strings.Contains(platform, "suse"):
+		return "opensuse"
+	case platform != "":
+		return platform
+	default:
+		return ""
+	}
+}
+
+func fallbackOSName(platform string) string {
+	id := fallbackOSID(platform)
+	if id == "" {
+		return ""
+	}
+	names := map[string]string{
+		"ubuntu": "Ubuntu", "debian": "Debian", "centos": "CentOS", "rocky": "Rocky Linux",
+		"almalinux": "AlmaLinux", "fedora": "Fedora", "rhel": "Red Hat Enterprise Linux",
+		"alpine": "Alpine Linux", "arch": "Arch Linux", "opensuse": "openSUSE", "macos": "macOS",
+	}
+	if name, ok := names[id]; ok {
+		return name
+	}
+	return platform
+}
+
+func runQuiet(name string, args ...string) string {
+	out, err := exec.Command(name, args...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // detectDocker 探测 Docker：优先用 `docker version --format` 拿服务端版本，
