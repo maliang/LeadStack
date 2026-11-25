@@ -9424,3 +9424,30 @@ body.ls-scroll-locked {
 .ls-modal__panel--xl {
   max-width: 56rem;
 }
+
+/* 指标条在列表/卡片内占满可用宽度：标签左、数值右，轨道自动伸展 */
+.ls-metric-bar {
+  min-width: 0;
+  width: 100%;
+}
+
+.ls-srv-row__meta .ls-srv-metrics {
+  display: grid;
+  flex: 1 0 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--ls-space-2) var(--ls-space-4);
+  width: 100%;
+}
+
+.ls-srv-card__metrics {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--ls-space-1);
+  width: 100%;
+}
+
+@media (max-width: 760px) {
+  .ls-srv-row__meta .ls-srv-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

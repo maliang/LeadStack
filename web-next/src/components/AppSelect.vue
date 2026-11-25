@@ -32,6 +32,8 @@ const emit = defineEmits<{
 
 const attrs = useAttrs()
 const nativeEl = ref<HTMLSelectElement | null>(null)
+/** SSelect 不接受空字符串 value；空选项用内部哨兵映射，对外仍 emit ''。 */
+const EMPTY_SENTINEL = '__leadstack_empty_select__'
 const items = ref<{ value: string; label: string; disabled?: boolean }[]>([])
 
 let observer: MutationObserver | null = null
@@ -39,10 +41,15 @@ let observer: MutationObserver | null = null
 function readOptions(): void {
   const el = nativeEl.value
   if (!el) return
-  const next = Array.from(el.options).map((option) => ({
+  const raw = Array.from(el.options).map((option) => ({
     value: option.value,
     label: (option.textContent ?? '').trim(),
     disabled: option.disabled,
+  }))
+  const hasEmptyOption = raw.some((item) => item.value === '')
+  const next = raw.map((item) => ({
+    ...item,
+    value: item.value === '' ? EMPTY_SENTINEL : item.value,
   }))
   const serialized = JSON.stringify(next)
   if (serialized !== JSON.stringify(items.value)) items.value = next
@@ -51,7 +58,7 @@ function readOptions(): void {
   if (
     model.value === '' &&
     next.length > 0 &&
-    !next.some((item) => item.value === '') &&
+    !hasEmptyOption &&
     !props.disabled
   ) {
     void nextTick(() => emit('update:modelValue', next[0].value))
@@ -71,7 +78,8 @@ function onNativeChange(event: Event): void {
 
 function onPick(value: string | number): void {
   const el = nativeEl.value
-  const text = String(value)
+  const picked = String(value)
+  const text = picked === EMPTY_SENTINEL ? '' : picked
   if (!el) {
     emit('update:modelValue', text)
     return
@@ -86,6 +94,7 @@ function onPick(value: string | number): void {
 }
 
 const model = computed(() => (props.modelValue === null ? '' : String(props.modelValue)))
+const displayModel = computed(() => (model.value === '' ? EMPTY_SENTINEL : model.value))
 const itemsSignature = computed(() => items.value.map((item) => `${item.value}:${item.label}`).join('\u0001'))
 
 // 受控组件：外部模型没跟上（例如异步切换失败回滚）时，把原生 select 的值同步回去。
@@ -118,7 +127,7 @@ onBeforeUnmount(() => {
     <SSelect
       :key="itemsSignature"
       v-bind="triggerAttrs"
-      :model-value="model"
+      :model-value="displayModel"
       :items="items"
       :disabled="disabled"
       :show-arrow="false"

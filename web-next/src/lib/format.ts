@@ -60,6 +60,24 @@ export function formatUptime(seconds: number | null | undefined): string {
   return t('s.0156', { '0': secs })
 }
 
+/**
+ * 服务器列表用的系统名称：优先使用 host_info.os_version（通常是 PRETTY_NAME，
+ * 自带 CentOS/Debian/Ubuntu 等发行版名）；如果只有版本号，则补上大类名称。
+ */
+export function formatServerOs(server: {
+  os: string | null
+  host_info: { os: string | null; os_version: string | null } | null
+}): string {
+  const version = server.host_info?.os_version?.trim() ?? ''
+  const os = (server.host_info?.os ?? server.os ?? '').trim()
+  const hasName = /[A-Za-z]/.test(version)
+  if (version !== '' && hasName) return version
+  const osName =
+    os === 'linux' ? 'Linux' : os === 'darwin' ? 'macOS' : os === 'windows' ? 'Windows' : os
+  if (osName !== '' && version !== '') return `${osName} ${version}`
+  return version || osName || '—'
+}
+
 export function formatOs(os: string | null, arch: string | null): string {
   const parts = [os?.trim(), arch?.trim()].filter((part): part is string => !!part)
   return parts.length > 0 ? parts.join(' / ') : '—'

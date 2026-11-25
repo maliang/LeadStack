@@ -4,7 +4,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { useI18n } from '@/i18n'
 import type { Server } from '@/lib/api'
-import { formatBytes, serverAddress } from '@/lib/format'
+import { formatBytes, formatServerOs, serverAddress } from '@/lib/format'
 import ServerMetricBar from './ServerMetricBar.vue'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 
@@ -66,7 +66,12 @@ const diskUsed = computed(() => {
   if (total && metrics.disk_used_pct !== null) return formatBytes(total * metrics.disk_used_pct / 100)
   return metrics.disk_used_pct === null ? null : `${metrics.disk_used_pct.toFixed(0)}%`
 })
-const osLabel = computed(() => props.server.host_info?.os_version?.trim() || props.server.os?.trim() || '—')
+const osLabel = computed(() => formatServerOs(props.server))
+const modeLabel = computed(() =>
+  props.server.mode === 'agent' && props.server.agent_version
+    ? `${props.server.mode} ${props.server.agent_version}`
+    : props.server.mode,
+)
 const detailTarget = computed(() => ({ name: 'server-detail', params: { id: props.server.id } }))
 
 const openDetail = (): void => {
@@ -119,7 +124,7 @@ function openDetailFromRow(event: MouseEvent): void {
           {{ t('common.edit') }}
         </button>
         <span class="ls-srv-row__address" :title="address">{{ address }}</span>
-        <span v-if="server.mode" class="ls-chip ls-chip--muted ls-srv-row__mode">{{ server.mode }}</span>
+        <span v-if="server.mode" class="ls-chip ls-chip--muted ls-srv-row__mode">{{ modeLabel }}</span>
         <span class="ls-srv-row__os" :title="osLabel">{{ osLabel }}</span>
       </div>
 
