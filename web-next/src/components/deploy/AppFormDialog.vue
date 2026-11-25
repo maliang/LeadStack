@@ -103,6 +103,26 @@ const modeHint = computed(() => {
         <span v-if="errors.slug" class="ls-field__error" role="alert">{{ t(errors.slug) }}</span>
         <span v-else class="ls-field__hint">{{ t('apps.form.slugHint') }}</span>
       </label>
+      <div class="ls-field">
+        <span id="app-form-mode-label" class="ls-field__label">{{ t('apps.form.deployMode') }}</span>
+        <div id="app-form-mode" class="ls-mode-picker" role="radiogroup" aria-labelledby="app-form-mode-label">
+          <button
+            v-for="option in modeOptions"
+            :id="`app-form-mode-${option.value}`"
+            :key="option.value"
+            class="ls-mode-picker__item"
+            :class="{ 'is-active': form.deployMode === option.value }"
+            type="button"
+            role="radio"
+            :aria-checked="form.deployMode === option.value"
+            @click="form.deployMode = option.value"
+          >
+            {{ t(option.key) }}
+          </button>
+        </div>
+        <span class="ls-field__hint">{{ modeHint }}</span>
+      </div>
+
       <label v-if="form.deployMode !== 'inplace'" class="ls-field" for="app-form-root">
         <span class="ls-field__label">{{ form.deployMode === 'script' ? t('apps.form.workDir') : t('apps.form.root') }}</span>
         <input id="app-form-root" v-model="form.root" class="ls-input" type="text" autocomplete="off" :placeholder="t('apps.form.rootPlaceholder')" />
@@ -128,25 +148,6 @@ const modeHint = computed(() => {
         <textarea id="app-form-rollback-script" v-model="form.rollbackScript" class="ls-input ls-textarea" rows="3" spellcheck="false" :placeholder="t('apps.form.scriptPlaceholder')" />
         <span class="ls-field__hint">{{ t('apps.form.rollbackScriptHint') }}</span>
       </label>
-      <div class="ls-field">
-        <span id="app-form-mode-label" class="ls-field__label">{{ t('apps.form.deployMode') }}</span>
-        <div id="app-form-mode" class="ls-mode-picker" role="radiogroup" aria-labelledby="app-form-mode-label">
-          <button
-            v-for="option in modeOptions"
-            :id="`app-form-mode-${option.value}`"
-            :key="option.value"
-            class="ls-mode-picker__item"
-            :class="{ 'is-active': form.deployMode === option.value }"
-            type="button"
-            role="radio"
-            :aria-checked="form.deployMode === option.value"
-            @click="form.deployMode = option.value"
-          >
-            {{ t(option.key) }}
-          </button>
-        </div>
-        <span class="ls-field__hint">{{ modeHint }}</span>
-      </div>
       <label v-if="form.deployMode !== 'script'" class="ls-field" for="app-form-restart">
         <span class="ls-field__label">{{ t('apps.form.restartCmd') }}</span>
         <input id="app-form-restart" v-model="form.restartCmd" class="ls-input" type="text" autocomplete="off" :placeholder="t('apps.form.restartCmdPlaceholder')" />

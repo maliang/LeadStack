@@ -661,8 +661,8 @@ async function run() {
       detail: acceptHint.slice(0, 60),
     })
     verify({
-      check: '文件选择器 accept 为 .bin,application/octet-stream,*/*（保留 */*）',
-      ok: (await page.locator('#upgrade-file').getAttribute('accept')) === '.bin,application/octet-stream,*/*',
+      check: '文件选择器 accept 支持裸二进制与 .tar.gz/.tgz/.zip（保留 */*）',
+      ok: (await page.locator('#upgrade-file').getAttribute('accept')) === '.bin,.tar.gz,.tgz,.zip,application/octet-stream,application/gzip,application/zip,*/*',
       detail: await page.locator('#upgrade-file').getAttribute('accept'),
     })
     state.info = infoFixture()

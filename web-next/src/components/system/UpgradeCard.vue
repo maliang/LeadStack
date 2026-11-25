@@ -555,7 +555,7 @@ onBeforeUnmount(() => {
             ref="fileInput"
             class="ls-upgrade__file"
             type="file"
-            accept=".bin,application/octet-stream,*/*"
+            accept=".bin,.tar.gz,.tgz,.zip,application/octet-stream,application/gzip,application/zip,*/*"
             :disabled="uploadBlocked"
             @change="onFileChange"
           />

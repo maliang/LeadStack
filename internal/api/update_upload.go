@@ -119,6 +119,15 @@ func (a *API) handleUploadUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4)~7) 魔数 → 可执行 → 版本。全部在 begin() 之前完成，失败不占坑。
+	// 发布包可能是 .tar.gz/.zip：先取出其中的 leadstack，再走原有二进制校验。
+	preparedPath, prepErr := extractUploadedBinary(upload.Path)
+	if prepErr != nil {
+		_ = os.Remove(upload.Path)
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, prepErr.Error())
+		return
+	}
+	upload.Path = preparedPath
+
 	version, err := validateUploadedBinary(upload.Path, a.version, upload.AllowMajor)
 	if err != nil {
 		_ = os.Remove(upload.Path)

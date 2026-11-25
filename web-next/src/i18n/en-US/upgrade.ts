@@ -70,7 +70,7 @@ const upgrade: Record<string, string> = {
   'upgrade.uploadTitle': 'Upgrade with a local package',
   'upgrade.uploadHint': 'In offline environments you can upload an upgrade package already on this machine.',
   'upgrade.uploadLimit': 'Validated after selection: must be larger than 0 bytes and at most 200 MiB; oversized files are rejected before upload.',
-  'upgrade.uploadAcceptHint': 'Choose the unpacked leadstack binary — .tar.gz/.zip must be extracted first.',
+  'upgrade.uploadAcceptHint': 'Supports a raw leadstack binary or a release archive (.tar.gz / .tgz / .zip); the binary is extracted automatically.',
   'upgrade.noFile': 'No file selected',
   'upgrade.chooseFile': 'Choose package',
   'upgrade.fileChosen': '{name} ({size})',

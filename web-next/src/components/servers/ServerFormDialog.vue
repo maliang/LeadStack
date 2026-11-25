@@ -577,8 +577,8 @@ watch(
       </template>
 
       <div class="ls-form__row">
-        <label class="ls-field" for="server-form-group">
-          <span class="ls-field__label">{{ t('server.form.group') }}</span>
+        <div class="ls-field">
+          <label class="ls-field__label" for="server-form-group">{{ t('server.form.group') }}</label>
           <AppSelect id="server-form-group" v-model="form.groupChoice" class="ls-input">
             <option value="">{{ t('server.form.groupNone') }}</option>
             <option v-for="group in serverGroups" :key="group.id" :value="group.id">
@@ -600,7 +600,7 @@ watch(
           <span v-if="groupsState === 'error'" class="ls-field__error" role="alert">
             {{ groupsError }}
           </span>
-        </label>
+        </div>
 
         <div class="ls-field">
           <label class="ls-field__label" for="server-form-tags">{{ t('server.form.tags') }}</label>

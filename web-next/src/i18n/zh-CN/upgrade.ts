@@ -70,7 +70,7 @@ const upgrade: Record<string, string> = {
   'upgrade.uploadTitle': '用本地升级包升级',
   'upgrade.uploadHint': '离线环境可直接上传本机已有的升级包。',
   'upgrade.uploadLimit': '选择后先校验：文件需大于 0 字节且不超过 200 MiB，超限会在上传前拦下。',
-  'upgrade.uploadAcceptHint': '请选择解压后的 leadstack 可执行文件（.tar.gz/.zip 需先解压）。',
+  'upgrade.uploadAcceptHint': '支持解压后的裸二进制，或 leadstack 发布包（.tar.gz / .tgz / .zip）；上传后自动解出二进制。',
   'upgrade.noFile': '未选择文件',
   'upgrade.chooseFile': '选择升级包',
   'upgrade.fileChosen': '{name}（{size}）',
