@@ -112,7 +112,7 @@ jobs:
           if [ -z "${release_id}" ]; then
             gh release view "${TAG}" --json body -q .body > /tmp/gitee-body.md
             jq -n --arg tag "${TAG}" --arg name "${TAG}" --rawfile body /tmp/gitee-body.md \
-              '{tag_name:$tag,name:$name,body:$body,target_commitish:"master",prerelease:false}' \
+              '{tag_name:$tag,name:$name,body:$body,target_commitish:"master",prerelease:true}' \
               > /tmp/gitee-create.json
             curl -fsS -X POST "${api}/releases" \
               -H "Authorization: token ${GITEE_TOKEN}" \
@@ -122,6 +122,8 @@ jobs:
             echo "已创建 Gitee 发行版 ${TAG}（id=${release_id}）"
           else
             echo "复用已有 Gitee 发行版 ${TAG}（id=${release_id}）"
+            # 上传完成前标记为预发布，避免 Gitee latest 提前把不完整资产暴露给升级器。
+            curl -fsS -X PATCH "${api}/releases/${release_id}"               -H "Authorization: token ${GITEE_TOKEN}"               -H 'Content-Type: application/json'               -d '{"prerelease":true}' >/dev/null || true
           fi
           printf 'id=%s\n' "${release_id}" >> "$GITHUB_OUTPUT"
 
@@ -194,7 +196,19 @@ jobs:
           UPLOAD
           chmod +x /tmp/gitee-upload-one.sh
           export API="${api}"
-          printf '%s\n' "${missing[@]}" | xargs -P 3 -n 1 /tmp/gitee-upload-one.sh
+          # 控制端包优先上传：Gitee 还在上传时，升级器至少能先拿到 leadstack 主包，
+          # 不会被 agent 包先完成、主包 404 的窗口卡住。
+          : > /tmp/gitee-upload-list.txt
+          for f in "${missing[@]}"; do
+            name="$(basename "${f}")"
+            case "${name}" in
+              leadstack_*) priority=0 ;;
+              checksums.txt) priority=1 ;;
+              *) priority=2 ;;
+            esac
+            printf '%s\t%s\n' "${priority}" "${f}" >> /tmp/gitee-upload-list.txt
+          done
+          sort -n -k1,1 /tmp/gitee-upload-list.txt | cut -f2- | xargs -P 3 -n 1 /tmp/gitee-upload-one.sh
 
       - name: 校验 Gitee 发行版资产
         if: steps.token.outputs.enabled == 'true'
@@ -215,3 +229,17 @@ jobs:
             jq -r '.assets[].name' /tmp/gitee-final.json
             exit 1
           fi
+
+      - name: 上传完成后标记正式发行版
+        if: steps.token.outputs.enabled == 'true'
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          api="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${RELEASE_ID}"
+          curl -fsS -X PATCH "${api}" \
+            -H "Authorization: token ${GITEE_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            -d '{"prerelease":false}' >/dev/null
+          echo "Gitee ${TAG:-当前} 发行版已标记为正式"
