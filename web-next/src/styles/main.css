@@ -9526,3 +9526,55 @@ body.ls-scroll-locked {
 .ls-table__sort:hover {
   color: var(--ls-text);
 }
+
+.ls-srv-row__name-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.125rem;
+}
+
+.ls-srv-row__name-line {
+  display: flex;
+  align-items: center;
+  gap: var(--ls-space-1);
+  min-width: 0;
+}
+
+.ls-srv-row__name-block .ls-srv-row__os,
+.ls-srv-card__os {
+  margin-left: 0;
+  color: var(--ls-text-subtle);
+  font: 400 var(--ls-text-2xs) / 1.3 var(--ls-font-mono);
+}
+
+.ls-srv-row__mode {
+  margin-left: auto;
+}
+
+.ls-rotate-up { transform: rotate(-90deg); }
+.ls-rotate-down { transform: rotate(90deg); }
+
+.ls-metrics__grid--security .ls-metrics__chart {
+  height: 10rem;
+}
+
+.ls-metrics__hover {
+  pointer-events: all;
+  fill: var(--ls-primary);
+  fill-opacity: 0.3;
+}
+
+.ls-metrics__hover:hover {
+  fill-opacity: 0.9;
+}
+
+.ls-metrics__axis-text {
+  fill: var(--ls-text-subtle);
+  font: 500 9px / 1 var(--ls-font-mono);
+}
+
+.ls-metrics__axis-text--x {
+  fill: var(--ls-text-subtle);
+  font-size: 8px;
+}

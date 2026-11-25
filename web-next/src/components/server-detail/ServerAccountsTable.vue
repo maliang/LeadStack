@@ -24,7 +24,9 @@ const secrets = ref<Record<string, string>>({})
 const revealed = ref<Set<string>>(new Set())
 const copied = ref<string | null>(null)
 const running = ref<string | null>(null)
-const sortKey = ref<'name' | 'address' | 'username' | 'note'>('name')
+const sortKey = ref<'name' | 'address' | 'username' | 'note' | null>(null)
+const manualOrder = ref<string[]>([])
+const ORDER_KEY = `leadstack.server.accounts.order.${props.server.id}`
 const sortDir = ref<'asc' | 'desc'>('asc')
 const formOpen = ref(false)
 const editTarget = ref<ServerAccount | null>(null)
@@ -34,12 +36,46 @@ let copiedTimer: ReturnType<typeof setTimeout> | null = null
 
 const sortedAccounts = computed(() => {
   const list = [...accounts.value]
+  if (sortKey.value === null) {
+    const rank = new Map(manualOrder.value.map((id, index) => [id, index]))
+    list.sort((left, right) => (rank.get(left.id) ?? 9999) - (rank.get(right.id) ?? 9999))
+    return list
+  }
   list.sort((left, right) => {
-    const result = left[sortKey.value].localeCompare(right[sortKey.value])
+    const result = left[sortKey.value as 'name'].localeCompare(right[sortKey.value as 'name'])
     return sortDir.value === 'asc' ? result : -result
   })
   return list
 })
+
+function readOrder(): string[] {
+  try {
+    const raw = window.localStorage.getItem(ORDER_KEY)
+    return raw ? (JSON.parse(raw) as string[]) : []
+  } catch {
+    return []
+  }
+}
+
+function applyOrder(list: ServerAccount[]): ServerAccount[] {
+  const rank = new Map(manualOrder.value.map((id, index) => [id, index]))
+  return [...list].sort((left, right) => (rank.get(left.id) ?? 9999) - (rank.get(right.id) ?? 9999))
+}
+
+function move(account: ServerAccount, delta: number): void {
+  const list = [...sortedAccounts.value]
+  const index = list.findIndex((item) => item.id === account.id)
+  const target = index + delta
+  if (index < 0 || target < 0 || target >= list.length) return
+  ;[list[index], list[target]] = [list[target], list[index]]
+  sortKey.value = null
+  manualOrder.value = list.map((item) => item.id)
+  try {
+    window.localStorage.setItem(ORDER_KEY, JSON.stringify(manualOrder.value))
+  } catch {
+    /* ignore */
+  }
+}
 
 function sortBy(key: 'name' | 'address' | 'username' | 'note'): void {
   if (sortKey.value === key) sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
@@ -53,7 +89,9 @@ async function load(): Promise<void> {
   state.value = 'loading'
   error.value = null
   try {
-    accounts.value = await api.serverAccounts(props.server.id)
+    const loaded = await api.serverAccounts(props.server.id)
+    if (manualOrder.value.length === 0) manualOrder.value = readOrder()
+    accounts.value = applyOrder(loaded)
     state.value = 'ready'
   } catch (caught) {
     error.value = errorMessage(caught, t('server.accounts.loadFailed'))
@@ -177,7 +215,16 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="ls-accounts-table">
+  <section class="ls-card ls-accounts-table" :aria-label="t('server.accounts.title')">
+    <header v-if="manage" class="ls-card__head">
+      <div class="ls-card__heading">
+        <h2 class="ls-card__title">{{ t('server.accounts.title') }}</h2>
+        <p class="ls-card__subtitle">{{ t('server.accounts.subtitle') }}</p>
+      </div>
+      <div class="ls-card__actions">
+        <span class="ls-chip ls-chip--muted">{{ t('server.accounts.count', { count: accounts.length }) }}</span>
+      </div>
+    </header>
     <div v-if="manage && canWrite" class="ls-card__actions">
       <button id="server-account-create" class="ls-btn ls-btn--small ls-btn--primary" type="button" @click="openCreate">
         <AppIcon name="plus" size="0.75rem" />
@@ -200,7 +247,7 @@ onMounted(load)
           </tr>
         </thead>
         <tbody>
-          <tr v-for="account in sortedAccounts" :key="account.id" class="ls-account" :data-account-id="account.id">
+          <tr v-for="(account, accountIndex) in sortedAccounts" :key="account.id" class="ls-account" :data-account-id="account.id">
             <td class="ls-account__name">
               {{ account.name }}
               <span v-if="Object.keys(account.custom_fields).length > 0" class="ls-field__hint">
@@ -239,6 +286,14 @@ onMounted(load)
                 <AppIcon name="copy" size="0.75rem" />
                 {{ t('server.accounts.copyAll') }}
               </button>
+              <template v-if="manage">
+                <button class="ls-icon-btn" type="button" :aria-label="t('server.accounts.moveUp')" :disabled="accountIndex === 0" @click="move(account, -1)">
+                  <AppIcon name="chevron-right" size="0.75rem" class="ls-rotate-up" />
+                </button>
+                <button class="ls-icon-btn" type="button" :aria-label="t('server.accounts.moveDown')" :disabled="accountIndex === sortedAccounts.length - 1" @click="move(account, 1)">
+                  <AppIcon name="chevron-right" size="0.75rem" class="ls-rotate-down" />
+                </button>
+              </template>
               <template v-if="manage && canWrite">
                 <button class="ls-btn ls-btn--small" type="button" @click="openEdit(account)">{{ t('common.edit') }}</button>
                 <button class="ls-btn ls-btn--small ls-btn--danger" type="button" @click="askDelete(account)">{{ t('common.delete') }}</button>
@@ -273,5 +328,5 @@ onMounted(load)
         </button>
       </template>
     </AppModal>
-  </div>
+  </section>
 </template>

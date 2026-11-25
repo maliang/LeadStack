@@ -104,12 +104,12 @@ const modeLabel = computed(() =>
         {{ t(serverStatusLabelKey(server.status)) }}
       </span>
     </header>
+    <p class="ls-srv-card__os" :title="osLabel">{{ osLabel }}</p>
 
     <p class="ls-srv-card__address" :title="address">
       <AppIcon name="server" size="0.875rem" />
       <span class="ls-srv-card__address-text">{{ address }}</span>
       <span v-if="mode" class="ls-chip ls-chip--muted ls-srv-card__mode">{{ modeLabel }}</span>
-      <span class="ls-srv-card__os" :title="osLabel">{{ osLabel }}</span>
     </p>
 
     <div v-if="server.metrics_summary" class="ls-srv-metrics ls-srv-card__metrics">
@@ -129,7 +129,7 @@ const modeLabel = computed(() =>
         :title="`${t('servers.filterByTag')} #${tag}`"
         @click="emit('filter-tag', tag)"
       >
-        #{{ tag }}
+        {{ tag }}
       </button>
     </div>
 

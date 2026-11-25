@@ -172,6 +172,10 @@ export function svgPointString(
 export type MetricUnit = 'percent' | 'bytes' | 'load' | 'number'
 
 /** 指标 key → 展示单位（契约 3.1 的点分命名，见 pkg/protocol/protocol.go）。 */
+export function isNetworkRateMetric(metric: string): boolean {
+  return metric === 'net.rx_bytes' || metric === 'net.tx_bytes'
+}
+
 export function metricUnit(metric: string): MetricUnit {
   if (metric === 'mem.used_bytes' || metric.endsWith('_bytes')) return 'bytes'
   if (metric === 'load.1' || metric.startsWith('load.')) return 'load'
@@ -182,30 +186,32 @@ export function metricUnit(metric: string): MetricUnit {
 /** 数值 → 人话（用于「最新值」，数字与单位由 format 层拼好）。 */
 export function formatMetricValue(metric: string, value: number): string {
   if (!Number.isFinite(value)) return '—'
+  const suffix = isNetworkRateMetric(metric) ? '/s' : ''
   switch (metricUnit(metric)) {
     case 'percent':
       return formatPercent(value, 1)
     case 'bytes':
-      return formatBytes(value, 1)
+      return `${formatBytes(value, 1)}${suffix}`
     case 'load':
       return formatLoad(value)
     default:
-      return Number.isInteger(value) ? String(value) : value.toFixed(2)
+      return `${Number.isInteger(value) ? String(value) : value.toFixed(2)}${suffix}`
   }
 }
 
 /** 数值 → 坐标轴短标签（少一位小数，避免 320px 下把标签挤爆）。 */
 export function formatMetricAxisValue(metric: string, value: number): string {
   if (!Number.isFinite(value)) return '—'
+  const suffix = isNetworkRateMetric(metric) ? '/s' : ''
   switch (metricUnit(metric)) {
     case 'percent':
       return formatPercent(value, 0)
     case 'bytes':
-      return formatBytes(value, 0)
+      return `${formatBytes(value, 0)}${suffix}`
     case 'load':
       return value.toFixed(1)
     default:
-      return Number.isInteger(value) ? String(value) : value.toFixed(1)
+      return `${Number.isInteger(value) ? String(value) : value.toFixed(1)}${suffix}`
   }
 }
 
@@ -252,7 +258,7 @@ export function buildMetricCharts(
 ): MetricChart[] {
   const charts: MetricChart[] = []
   for (const item of series) {
-    const points = item.points
+    const rawPoints = item.points
       .filter(
         (point) =>
           Number.isFinite(point.ts) &&
@@ -262,6 +268,20 @@ export function buildMetricCharts(
       )
       .slice()
       .sort((a, b) => a.ts - b.ts)
+    // 网络接收/发送在采集侧是累计字节计数器；图表显示每秒速率，而不是开机以来的总量。
+    let points = rawPoints
+    if (isNetworkRateMetric(item.metric) && rawPoints.length > 1) {
+      points = rawPoints
+        .slice(1)
+        .map((point, index) => {
+          const prev = rawPoints[index]
+          const seconds = (point.ts - prev.ts) / 1000
+          return {
+            ts: point.ts,
+            value: seconds > 0 ? Math.max(0, (point.value - prev.value) / seconds) : 0,
+          }
+        })
+    }
     const bounds = valueBounds(points)
     if (!bounds) continue
     const plotted = samplePoints(points)

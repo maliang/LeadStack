@@ -460,7 +460,7 @@ async function handleFormSaved(saved: Server): Promise<void> {
           :aria-pressed="filters.tags.includes(tag)"
           @click="filterByTag(tag)"
         >
-          #{{ tag }}
+          {{ tag }}
         </button>
       </div>
     </div>

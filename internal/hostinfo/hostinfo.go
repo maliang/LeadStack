@@ -80,15 +80,31 @@ cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
 [ -z "$cores" ] && cores=$(sysctl -n hw.ncpu 2>/dev/null)
 emit cpu_cores "$cores"
 
+os_name=""
 os_version=""
 if [ "$os" = "darwin" ]; then
   os_name=$(sw_vers -productName 2>/dev/null)
   os_ver=$(sw_vers -productVersion 2>/dev/null)
   os_version="$os_name $os_ver"
 else
-  os_version=$(sh -c '. /etc/os-release 2>/dev/null; printf "%s" "${PRETTY_NAME:-$NAME}"' 2>/dev/null)
+  if [ -r /etc/os-release ]; then
+    os_name=$(sh -c '. /etc/os-release 2>/dev/null; printf "%s" "${NAME:-}"' 2>/dev/null)
+    os_version=$(sh -c '. /etc/os-release 2>/dev/null; printf "%s" "${PRETTY_NAME:-$NAME}"' 2>/dev/null)
+  fi
+  if [ -z "$os_version" ] && [ -r /etc/redhat-release ]; then
+    os_version=$(cat /etc/redhat-release 2>/dev/null)
+    os_name=${os_version%% *}
+  fi
+  if [ -z "$os_version" ] && [ -r /etc/debian_version ]; then
+    os_name="Debian"
+    os_version="Debian $(cat /etc/debian_version 2>/dev/null)"
+  fi
+  if [ -z "$os_version" ] && command -v lsb_release >/dev/null 2>&1; then
+    os_version=$(lsb_release -ds 2>/dev/null | tr -d '"')
+    os_name=$(lsb_release -si 2>/dev/null)
+  fi
 fi
-emit os_name "$([ "$os" = "darwin" ] && sw_vers -productName 2>/dev/null || sh -c '. /etc/os-release 2>/dev/null; printf "%s" "${NAME:-}"' 2>/dev/null)"
+emit os_name "$os_name"
 emit os_version "$os_version"
 
 mem_total=""

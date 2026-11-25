@@ -35,6 +35,7 @@ const { t } = useI18n()
 const charts = computed(() => buildMetricCharts(props.metrics?.series ?? [], props.metricsFrom, props.metricsTo))
 const metricsEmpty = computed(() => !props.metricsLoading && props.metricsError === null && charts.value.length === 0)
 const rangeLabel = computed(() => `${formatClockTime(props.metricsFrom)} – ${formatClockTime(props.metricsTo)}`)
+const midTime = computed(() => formatClockTime((props.metricsFrom + props.metricsTo) / 2))
 </script>
 
 <template>
@@ -117,13 +118,17 @@ const rangeLabel = computed(() => `${formatClockTime(props.metricsFrom)} – ${f
               class="ls-metrics__hover"
               :cx="marker.x"
               :cy="marker.y"
-              r="5"
+              r="4"
             >
               <title>{{ formatDateTime(marker.ts) }} · {{ formatMetricValue(chart.metric, marker.value) }}</title>
             </circle>
             <circle class="ls-metrics__dot" :cx="chart.lastX" :cy="chart.lastY" r="3" />
+            <text class="ls-metrics__axis-text" x="2" y="12">{{ chart.maxLabel }}</text>
+            <text class="ls-metrics__axis-text" x="2" y="112">{{ chart.minLabel }}</text>
+            <text class="ls-metrics__axis-text ls-metrics__axis-text--x" x="2" y="116" text-anchor="start">{{ formatClockTime(metricsFrom) }}</text>
+            <text class="ls-metrics__axis-text ls-metrics__axis-text--x" :x="METRICS_CHART_WIDTH / 2" y="116" text-anchor="middle">{{ midTime }}</text>
+            <text class="ls-metrics__axis-text ls-metrics__axis-text--x" :x="METRICS_CHART_WIDTH - 2" y="116" text-anchor="end">{{ formatClockTime(metricsTo) }}</text>
           </svg>
-          <p class="ls-metrics__axis">{{ chart.minLabel }} – {{ chart.maxLabel }}</p>
         </article>
       </div>
     </template>

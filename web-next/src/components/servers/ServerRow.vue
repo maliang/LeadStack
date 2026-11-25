@@ -110,22 +110,26 @@ function openDetailFromRow(event: MouseEvent): void {
           <span class="ls-srv-status__dot" aria-hidden="true" />
           {{ t(serverStatusLabelKey(server.status)) }}
         </span>
-        <h2 class="ls-srv-row__name" :title="server.name">
-          <RouterLink class="ls-srv-row__name-link" :to="detailTarget" @click.stop>{{ server.name }}</RouterLink>
-        </h2>
-        <button
-          v-if="props.canEdit"
-          :id="`server-${server.id}-edit`"
-          class="ls-btn ls-btn--small ls-srv-row__inline-edit"
-          type="button"
-          @click.stop.prevent="emit('edit', server.id)"
-        >
-          <AppIcon name="settings" size="0.75rem" />
-          {{ t('common.edit') }}
-        </button>
+        <div class="ls-srv-row__name-block">
+          <div class="ls-srv-row__name-line">
+            <h2 class="ls-srv-row__name" :title="server.name">
+              <RouterLink class="ls-srv-row__name-link" :to="detailTarget" @click.stop>{{ server.name }}</RouterLink>
+            </h2>
+            <button
+              v-if="props.canEdit"
+              :id="`server-${server.id}-edit`"
+              class="ls-btn ls-btn--small ls-srv-row__inline-edit"
+              type="button"
+              @click.stop.prevent="emit('edit', server.id)"
+            >
+              <AppIcon name="settings" size="0.75rem" />
+              {{ t('common.edit') }}
+            </button>
+          </div>
+          <span class="ls-srv-row__os" :title="osLabel">{{ osLabel }}</span>
+        </div>
         <span class="ls-srv-row__address" :title="address">{{ address }}</span>
         <span v-if="server.mode" class="ls-chip ls-chip--muted ls-srv-row__mode">{{ modeLabel }}</span>
-        <span class="ls-srv-row__os" :title="osLabel">{{ osLabel }}</span>
       </div>
 
       <div class="ls-srv-row__meta">
@@ -140,7 +144,7 @@ function openDetailFromRow(event: MouseEvent): void {
           :title="`${t('servers.filterByTag')} #${tag}`"
           @click.stop.prevent="emit('filter-tag', tag)"
         >
-          #{{ tag }}
+          {{ tag }}
         </button>
         <span v-if="server.metrics_summary" class="ls-srv-metrics">
           <ServerMetricBar :label="t('servers.metricCpu')" :value="server.metrics_summary.cpu_pct" />
