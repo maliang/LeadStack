@@ -10,6 +10,7 @@ import { renderReleaseNotes } from '@/lib/release-notes'
 import {
   clearUpgradeSession,
   markUpgradeActive,
+  scheduleUpgradeReload,
   onUpgradeSessionChange,
   readUpgradeSession,
 } from '@/lib/upgrade-session'
@@ -147,6 +148,7 @@ function settleTerminal(status: UpdateStatus): void {
   if (info.value && next) {
     info.value = { ...info.value, current: next, has_update: info.value.latest !== next }
   }
+  scheduleUpgradeReload()
 }
 
 async function pollStatus(): Promise<void> {
@@ -181,6 +183,14 @@ async function pollStatus(): Promise<void> {
         stopPolling()
         return
       }
+    }
+    if (status.phase === 'idle' && jobStarted.value && pendingTarget) {
+      // 重启窗口内 job 已丢失但尚无 history：显示「正在重启」而不是 0%。
+      // 下一轮拿到 current_version/history 后由 resolveLostJobOutcome 收口。
+      job.value = { ...status, phase: 'restarting', target_version: pendingTarget }
+      window.dispatchEvent(new CustomEvent('leadstack:upgrade-status', { detail: job.value }))
+      pollError.value = null
+      return
     }
     job.value = status
     // 设置页是当前 owner：把状态广播给顶栏，避免两边各轮询一次抢进度。

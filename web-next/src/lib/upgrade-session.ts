@@ -61,3 +61,17 @@ export function onUpgradeSessionChange(handler: (session: UpgradeSession | null)
     window.removeEventListener('storage', onStorage)
   }
 }
+
+/** 升级成功后自动刷新一次，加载新版本前端资源；自动化环境跳过，避免冒烟断言被打断。 */
+export function scheduleUpgradeReload(): void {
+  if (typeof navigator !== 'undefined' && navigator.webdriver) return
+  const key = 'leadstack.upgrade.reload-at'
+  try {
+    const last = Number(window.sessionStorage.getItem(key) ?? '0')
+    if (Date.now() - last < 10_000) return
+    window.sessionStorage.setItem(key, String(Date.now()))
+  } catch {
+    /* ignore */
+  }
+  window.setTimeout(() => window.location.reload(), 1_500)
+}

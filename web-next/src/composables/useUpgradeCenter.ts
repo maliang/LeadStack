@@ -5,6 +5,7 @@ import { isTerminalPhase, phaseProgress, phaseLabelKey, resolveLostJobOutcome } 
 import {
   clearUpgradeSession,
   markUpgradeActive,
+  scheduleUpgradeReload,
   onUpgradeSessionChange,
   readUpgradeSession,
 } from '@/lib/upgrade-session'
@@ -79,9 +80,16 @@ export function useUpgradeCenter() {
           active.value = false
           clearUpgradeSession()
           stopFastPoll()
+          if (status.value?.phase === 'success') scheduleUpgradeReload()
           void loadInfo(true)
           return
         }
+      }
+      if (active.value && data.phase === 'idle' && pendingTarget) {
+        // 控制端重启窗口：新进程可能还没写入 history，此时不要把进度显示成 0；
+        // 用「正在重启」占位，等 history/current_version 到达再收口。
+        status.value = { ...data, phase: 'restarting' }
+        return
       }
       if (active.value && isTerminalPhase(data.phase)) {
         active.value = false
@@ -91,6 +99,7 @@ export function useUpgradeCenter() {
         if (data.phase === 'success') {
           const next = data.current_version ?? data.target_version
           if (info.value && next) info.value = { ...info.value, current: next, has_update: info.value.latest !== next }
+          scheduleUpgradeReload()
         }
         void loadInfo(true)
       }
