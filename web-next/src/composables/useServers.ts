@@ -27,12 +27,13 @@ export type ServersStatus = 'loading' | 'ready' | 'error'
 export interface ServerFilterState {
   group: string
   status: '' | ServerStatus
-  tag: string
+  /** 多选标签：空数组表示不过滤；多个标签取 OR。 */
+  tags: string[]
   keyword: string
 }
 
 export function emptyServerFilters(): ServerFilterState {
-  return { group: '', status: '', tag: '', keyword: '' }
+  return { group: '', status: '', tags: [], keyword: '' }
 }
 
 export function readServersView(): ServersView {
@@ -84,7 +85,7 @@ export function filterServers(
   return servers.filter((server) => {
     if (filters.group && !matchesGroup(server, filters.group)) return false
     if (filters.status && server.status !== filters.status) return false
-    if (filters.tag && !server.tags.includes(filters.tag)) return false
+    if (filters.tags.length > 0 && !filters.tags.some((tag) => server.tags.includes(tag))) return false
     if (keyword) {
       const haystack = [
         server.name,
@@ -104,7 +105,7 @@ export function filterServers(
 }
 
 export function hasActiveServerFilters(filters: ServerFilterState): boolean {
-  return Boolean(filters.group || filters.status || filters.tag || filters.keyword.trim())
+  return Boolean(filters.group || filters.status || filters.tags.length > 0 || filters.keyword.trim())
 }
 
 /** 状态到 i18n 文案键的映射（只此一处，toolbar / 卡片 / 行共用）。 */

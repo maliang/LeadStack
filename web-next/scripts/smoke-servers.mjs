@@ -510,8 +510,8 @@ async function run() {
     // 2a) 列表项基础监控信息
     const firstRowText = await page.locator('.ls-srv-row').first().innerText()
     check(
-      '列表项显示环形 CPU / 内存 / 磁盘指标',
-      (await page.locator('.ls-srv-row').first().locator('.ls-metric-ring').count()) === 3 &&
+      '列表项显示线性 CPU / 内存 / 磁盘指标',
+      (await page.locator('.ls-srv-row').first().locator('.ls-metric-bar').count()) === 3 &&
         firstRowText.includes('13%') && firstRowText.includes('33%') && firstRowText.includes('40%'),
       firstRowText.replace(/\s+/g, ' ').slice(0, 140),
     )

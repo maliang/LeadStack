@@ -4,8 +4,8 @@ import { RouterLink } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { useI18n } from '@/i18n'
 import type { Server } from '@/lib/api'
-import { formatBytes, formatOs, serverAddress } from '@/lib/format'
-import ServerMetricRing from './ServerMetricRing.vue'
+import { formatBytes, serverAddress } from '@/lib/format'
+import ServerMetricBar from './ServerMetricBar.vue'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 
 /** 卡片视图：一眼回答「这台机器是谁、通不通、在哪」。展开终端/文件只在列表视图提供。 */
@@ -46,8 +46,28 @@ const groupLabels = computed(() => {
 })
 const mode = computed(() => props.server.mode.trim())
 const address = computed(() => (props.server.mode === 'agent' ? props.server.host : serverAddress(props.server)))
-const memTotal = computed(() => formatBytes(props.server.host_info?.mem_total_bytes ?? null))
-const diskTotal = computed(() => formatBytes(props.server.host_info?.disk_total_bytes ?? null))
+const memTotal = computed(() => {
+  const value = props.server.host_info?.mem_total_bytes
+  return value ? formatBytes(value) : null
+})
+const diskTotal = computed(() => {
+  const value = props.server.host_info?.disk_total_bytes
+  return value ? formatBytes(value) : null
+})
+const memUsed = computed(() => {
+  const metrics = props.server.metrics_summary
+  if (!metrics) return null
+  if (metrics.mem_used_bytes !== null) return formatBytes(metrics.mem_used_bytes)
+  return metrics.mem_used_pct === null ? null : `${metrics.mem_used_pct.toFixed(0)}%`
+})
+const diskUsed = computed(() => {
+  const metrics = props.server.metrics_summary
+  const total = props.server.host_info?.disk_total_bytes
+  if (!metrics) return null
+  if (total && metrics.disk_used_pct !== null) return formatBytes(total * metrics.disk_used_pct / 100)
+  return metrics.disk_used_pct === null ? null : `${metrics.disk_used_pct.toFixed(0)}%`
+})
+const osLabel = computed(() => props.server.host_info?.os_version?.trim() || props.server.os?.trim() || '—')
 </script>
 
 <template>
@@ -84,19 +104,13 @@ const diskTotal = computed(() => formatBytes(props.server.host_info?.disk_total_
       <AppIcon name="server" size="0.875rem" />
       <span class="ls-srv-card__address-text">{{ address }}</span>
       <span v-if="mode" class="ls-chip ls-chip--muted ls-srv-card__mode">{{ mode }}</span>
+      <span class="ls-srv-card__os" :title="osLabel">{{ osLabel }}</span>
     </p>
 
-    <dl class="ls-srv-meta">
-      <div class="ls-srv-meta__item">
-        <dt>{{ t('s.0534') }}</dt>
-        <dd :title="formatOs(server.os, server.arch)">{{ formatOs(server.os, server.arch) }}</dd>
-      </div>
-    </dl>
-
     <div v-if="server.metrics_summary" class="ls-srv-metrics ls-srv-card__metrics">
-      <ServerMetricRing :label="t('servers.metricCpu')" :value="server.metrics_summary.cpu_pct" />
-      <ServerMetricRing :label="t('servers.metricMem')" :value="server.metrics_summary.mem_used_pct" :total="memTotal" />
-      <ServerMetricRing :label="t('servers.metricDisk')" :value="server.metrics_summary.disk_used_pct" :total="diskTotal" />
+      <ServerMetricBar :label="t('servers.metricCpu')" :value="server.metrics_summary.cpu_pct" />
+      <ServerMetricBar :label="t('servers.metricMem')" :value="server.metrics_summary.mem_used_pct" :used="memUsed" :total="memTotal" />
+      <ServerMetricBar :label="t('servers.metricDisk')" :value="server.metrics_summary.disk_used_pct" :used="diskUsed" :total="diskTotal" />
     </div>
     <p v-else class="ls-srv-card__metrics ls-field__hint">{{ t('servers.metricsPending') }}</p>
 

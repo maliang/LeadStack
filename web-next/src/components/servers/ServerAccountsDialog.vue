@@ -18,7 +18,7 @@ const { t } = useI18n()
   <AppModal
     :title="t('servers.accountsTitle', { name: server.name })"
     :description="t('servers.accountsHint')"
-    size="lg"
+    size="xl"
     @close="emit('close')"
   >
     <ServerAccountsTable :server="server" :can-write="canWrite" />

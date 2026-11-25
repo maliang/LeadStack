@@ -272,7 +272,10 @@ const accountsTarget = ref<Server | null>(null)
 const onboardId = ref<string | null>(null)
 
 function filterByTag(tag: string): void {
-  filters.value = { ...filters.value, tag }
+  const next = filters.value.tags.includes(tag)
+    ? filters.value.tags.filter((item) => item !== tag)
+    : [...filters.value.tags, tag]
+  filters.value = { ...filters.value, tags: next }
 }
 
 function openAccounts(id: string): void {
@@ -437,8 +440,8 @@ async function handleFormSaved(saved: Server): Promise<void> {
       @reset="resetFilters"
     />
 
-    <div v-if="canWrite && visibleServers.length > 0" class="ls-servers__selection">
-      <label class="ls-servers__select-all">
+    <div v-if="canWrite || tags.length > 0" class="ls-servers__selection">
+      <label v-if="canWrite" class="ls-servers__select-all">
         <input
           type="checkbox"
           :checked="allSelected"
@@ -447,6 +450,19 @@ async function handleFormSaved(saved: Server): Promise<void> {
         />
         <span>{{ t('serversBatch.selectAll', { count: visibleServers.length }) }}</span>
       </label>
+      <div v-if="tags.length > 0" class="ls-servers__tag-filters" role="group" :aria-label="t('servers.filterByTag')">
+        <button
+          v-for="tag in tags"
+          :key="tag"
+          class="ls-chip ls-chip--button"
+          :class="{ 'ls-chip--muted': !filters.tags.includes(tag), 'ls-chip--active': filters.tags.includes(tag) }"
+          type="button"
+          :aria-pressed="filters.tags.includes(tag)"
+          @click="filterByTag(tag)"
+        >
+          #{{ tag }}
+        </button>
+      </div>
     </div>
 
     <ServerBatchBar

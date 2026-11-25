@@ -5,7 +5,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import { useI18n } from '@/i18n'
 import type { Server } from '@/lib/api'
 import { formatBytes, serverAddress } from '@/lib/format'
-import ServerMetricRing from './ServerMetricRing.vue'
+import ServerMetricBar from './ServerMetricBar.vue'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 
 /**
@@ -45,8 +45,28 @@ function onSelect(event: Event): void {
 }
 
 const address = computed(() => (props.server.mode === 'agent' ? props.server.host : serverAddress(props.server)))
-const memTotal = computed(() => formatBytes(props.server.host_info?.mem_total_bytes ?? null))
-const diskTotal = computed(() => formatBytes(props.server.host_info?.disk_total_bytes ?? null))
+const memTotal = computed(() => {
+  const value = props.server.host_info?.mem_total_bytes
+  return value ? formatBytes(value) : null
+})
+const diskTotal = computed(() => {
+  const value = props.server.host_info?.disk_total_bytes
+  return value ? formatBytes(value) : null
+})
+const memUsed = computed(() => {
+  const metrics = props.server.metrics_summary
+  if (!metrics) return null
+  if (metrics.mem_used_bytes !== null) return formatBytes(metrics.mem_used_bytes)
+  return metrics.mem_used_pct === null ? null : `${metrics.mem_used_pct.toFixed(0)}%`
+})
+const diskUsed = computed(() => {
+  const metrics = props.server.metrics_summary
+  const total = props.server.host_info?.disk_total_bytes
+  if (!metrics) return null
+  if (total && metrics.disk_used_pct !== null) return formatBytes(total * metrics.disk_used_pct / 100)
+  return metrics.disk_used_pct === null ? null : `${metrics.disk_used_pct.toFixed(0)}%`
+})
+const osLabel = computed(() => props.server.host_info?.os_version?.trim() || props.server.os?.trim() || '—')
 const detailTarget = computed(() => ({ name: 'server-detail', params: { id: props.server.id } }))
 
 const openDetail = (): void => {
@@ -100,6 +120,7 @@ function openDetailFromRow(event: MouseEvent): void {
         </button>
         <span class="ls-srv-row__address" :title="address">{{ address }}</span>
         <span v-if="server.mode" class="ls-chip ls-chip--muted ls-srv-row__mode">{{ server.mode }}</span>
+        <span class="ls-srv-row__os" :title="osLabel">{{ osLabel }}</span>
       </div>
 
       <div class="ls-srv-row__meta">
@@ -117,9 +138,9 @@ function openDetailFromRow(event: MouseEvent): void {
           #{{ tag }}
         </button>
         <span v-if="server.metrics_summary" class="ls-srv-metrics">
-          <ServerMetricRing :label="t('servers.metricCpu')" :value="server.metrics_summary.cpu_pct" />
-          <ServerMetricRing :label="t('servers.metricMem')" :value="server.metrics_summary.mem_used_pct" :total="memTotal" />
-          <ServerMetricRing :label="t('servers.metricDisk')" :value="server.metrics_summary.disk_used_pct" :total="diskTotal" />
+          <ServerMetricBar :label="t('servers.metricCpu')" :value="server.metrics_summary.cpu_pct" />
+          <ServerMetricBar :label="t('servers.metricMem')" :value="server.metrics_summary.mem_used_pct" :used="memUsed" :total="memTotal" />
+          <ServerMetricBar :label="t('servers.metricDisk')" :value="server.metrics_summary.disk_used_pct" :used="diskUsed" :total="diskTotal" />
         </span>
         <span v-else class="ls-srv-row__seen">{{ t('servers.metricsPending') }}</span>
       </div>

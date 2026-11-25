@@ -13,7 +13,7 @@ const props = withDefaults(
   defineProps<{
     title: string
     description?: string
-    size?: 'sm' | 'md' | 'lg'
+    size?: 'sm' | 'md' | 'lg' | 'xl'
     /** danger 用红色标题，表达破坏性后果（删除 / 回滚 / 恢复） */
     tone?: 'default' | 'danger'
     /** 供端到端脚本定位的 data-testid */
