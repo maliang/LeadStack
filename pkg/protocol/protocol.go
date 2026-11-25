@@ -110,6 +110,7 @@ type Metrics struct {
 type HostInfo struct {
 	Hostname       string   `json:"hostname"`
 	OS             string   `json:"os"`
+	OSID           string   `json:"os_id"`
 	OSName         string   `json:"os_name"`
 	OSVersion      string   `json:"os_version"`
 	Kernel         string   `json:"kernel"`

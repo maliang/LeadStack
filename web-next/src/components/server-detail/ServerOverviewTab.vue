@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
+import OsIcon from '@/components/OsIcon.vue'
 import { useCan } from '@/composables/useCan'
 import { api } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
@@ -13,8 +14,10 @@ import {
   formatDateTime,
   formatOs,
   formatRelativeTime,
+  formatServerOs,
   formatUptime,
   serverAddress,
+  serverOsId,
 } from '@/lib/format'
 import {
   agentUpgradeFieldError,
@@ -120,10 +123,10 @@ const hostRows = computed<HostRow[]>(() => {
     info.disk_used_bytes !== null ? formatBytes(info.disk_used_bytes) : null,
     info.disk_total_bytes !== null ? formatBytes(info.disk_total_bytes) : null,
   ].filter((part): part is string => part !== null)
-  const osParts = [info.os, info.os_version].filter((part): part is string => !!part)
+  const osValue = formatServerOs({ os: info.os, host_info: info })
   return [
     { key: 'hostname', labelKey: 'servers.detail.host.hostname', value: info.hostname || na, mono: true },
-    { key: 'os', labelKey: 'servers.detail.host.os', value: osParts.join(' ') || na },
+    { key: 'os', labelKey: 'servers.detail.host.os', value: osValue },
     { key: 'kernel', labelKey: 'servers.detail.host.kernel', value: info.kernel || na, mono: true },
     { key: 'arch', labelKey: 'servers.detail.host.arch', value: info.arch || na, mono: true },
     { key: 'cpu', labelKey: 'servers.detail.host.cpuModel', value: info.cpu_model || na },
@@ -358,7 +361,10 @@ function submitUpgrade(): void {
       <dl v-if="hostRows.length > 0" class="ls-kv">
         <div v-for="row in hostRows" :key="row.key" class="ls-kv__row">
           <dt>{{ t(row.labelKey) }}</dt>
-          <dd :class="{ 'ls-kv__value--mono': row.mono }" :title="row.value">{{ row.value }}</dd>
+          <dd :class="{ 'ls-kv__value--mono': row.mono }" :title="row.value">
+            <OsIcon v-if="row.key === 'os' && server.host_info" :os-id="serverOsId(server)" size="0.9rem" />
+            {{ row.value }}
+          </dd>
         </div>
       </dl>
       <div v-else class="ls-card__note">

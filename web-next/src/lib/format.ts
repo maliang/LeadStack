@@ -66,18 +66,48 @@ export function formatUptime(seconds: number | null | undefined): string {
  */
 export function formatServerOs(server: {
   os: string | null
-  host_info: { os: string | null; os_name: string | null; os_version: string | null } | null
+  host_info: { os: string | null; os_id?: string | null; os_name: string | null; os_version: string | null } | null
 }): string {
   const version = server.host_info?.os_version?.trim() ?? ''
   const os = (server.host_info?.os ?? server.os ?? '').trim()
   const distro = server.host_info?.os_name?.trim() ?? ''
-  const hasName = /[A-Za-z]/.test(version)
-  if (version !== '' && hasName) return version
   const osName = distro || (os === 'linux' ? 'Linux' : os === 'darwin' ? 'macOS' : os === 'windows' ? 'Windows' : os)
-  if (osName !== '' && version !== '') return `${osName} ${version}`
+  if (version !== '' && osName !== '') {
+    // PRETTY_NAME 通常已经包含发行版名称；只有纯版本号（如 22.04.3 LTS）时才补前缀。
+    return version.toLowerCase().includes(osName.toLowerCase()) ? version : `${osName} ${version}`
+  }
   return version || osName || '—'
 }
 
+/** 把 host_info 的 os_id 归一化成前端图标键；旧 agent 没有 os_id 时按名称兜底。 */
+export function serverOsId(server: {
+  os: string | null
+  host_info: { os: string | null; os_id?: string | null; os_name: string | null; os_version: string | null } | null
+}): string {
+  const raw = (server.host_info?.os_id ?? '').trim().toLowerCase()
+  const text = `${server.host_info?.os_name ?? ''} ${server.host_info?.os_version ?? ''} ${server.host_info?.os ?? server.os ?? ''}`.toLowerCase()
+  const source = raw || text
+  if (source.includes('ubuntu')) return 'ubuntu'
+  if (source.includes('linuxmint') || source.includes('mint')) return 'linuxmint'
+  if (source.includes('kali')) return 'kali'
+  if (source.includes('raspbian')) return 'raspbian'
+  if (source.includes('debian')) return 'debian'
+  if (source.includes('centos')) return 'centos'
+  if (source.includes('rocky')) return 'rocky'
+  if (source.includes('alma')) return 'almalinux'
+  if (source.includes('fedora')) return 'fedora'
+  if (source.includes('rhel') || source.includes('red hat') || source.includes('redhat')) return 'rhel'
+  if (source.includes('opensuse') || source.includes('suse') || source.includes('sles')) return 'opensuse'
+  if (source.includes('alpine')) return 'alpine'
+  if (source.includes('arch')) return 'arch'
+  if (source.includes('manjaro')) return 'manjaro'
+  if (source.includes('gentoo')) return 'gentoo'
+  if (source.includes('nixos')) return 'nixos'
+  if (source.includes('amazon') || source.includes('alinux') || source.includes('oracle') || source.includes('opencloudos') || source.includes('tencent') || source.includes('openeuler')) return 'rhel'
+  if (source.includes('darwin') || source.includes('macos') || source.includes('mac os')) return 'macos'
+  if (source.includes('windows')) return 'windows'
+  return 'linux'
+}
 export function formatOs(os: string | null, arch: string | null): string {
   const parts = [os?.trim(), arch?.trim()].filter((part): part is string => !!part)
   return parts.length > 0 ? parts.join(' / ') : '—'

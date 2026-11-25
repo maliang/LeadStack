@@ -24,6 +24,7 @@ import (
 type Info struct {
 	Hostname       string   `json:"hostname"`
 	OS             string   `json:"os"` // linux | darwin | windows
+	OSID           string   `json:"os_id"`
 	OSName         string   `json:"os_name"`
 	OSVersion      string   `json:"os_version"`
 	Kernel         string   `json:"kernel"`
@@ -80,30 +81,44 @@ cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
 [ -z "$cores" ] && cores=$(sysctl -n hw.ncpu 2>/dev/null)
 emit cpu_cores "$cores"
 
+os_id=""
 os_name=""
 os_version=""
 if [ "$os" = "darwin" ]; then
+  os_id="macos"
   os_name=$(sw_vers -productName 2>/dev/null)
   os_ver=$(sw_vers -productVersion 2>/dev/null)
   os_version="$os_name $os_ver"
 else
   if [ -r /etc/os-release ]; then
+    os_id=$(sh -c '. /etc/os-release 2>/dev/null; printf "%s" "${ID:-}"' 2>/dev/null)
     os_name=$(sh -c '. /etc/os-release 2>/dev/null; printf "%s" "${NAME:-}"' 2>/dev/null)
     os_version=$(sh -c '. /etc/os-release 2>/dev/null; printf "%s" "${PRETTY_NAME:-$NAME}"' 2>/dev/null)
   fi
   if [ -z "$os_version" ] && [ -r /etc/redhat-release ]; then
     os_version=$(cat /etc/redhat-release 2>/dev/null)
     os_name=${os_version%% *}
+    case "$os_name" in
+      CentOS*) os_id="centos" ;;
+      Rocky*) os_id="rocky" ;;
+      AlmaLinux*) os_id="almalinux" ;;
+      Fedora*) os_id="fedora" ;;
+      Red*) os_id="rhel" ;;
+      *) os_id="rhel" ;;
+    esac
   fi
   if [ -z "$os_version" ] && [ -r /etc/debian_version ]; then
+    os_id="debian"
     os_name="Debian"
     os_version="Debian $(cat /etc/debian_version 2>/dev/null)"
   fi
   if [ -z "$os_version" ] && command -v lsb_release >/dev/null 2>&1; then
     os_version=$(lsb_release -ds 2>/dev/null | tr -d '"')
     os_name=$(lsb_release -si 2>/dev/null)
+    os_id=$(printf '%s' "$os_name" | tr '[:upper:]' '[:lower:]')
   fi
 fi
+emit os_id "$os_id"
 emit os_name "$os_name"
 emit os_version "$os_version"
 
@@ -214,6 +229,8 @@ func parseInfo(out string) Info {
 			info.Hostname = value
 		case "os":
 			info.OS = value
+		case "os_id":
+			info.OSID = value
 		case "os_name":
 			info.OSName = value
 		case "os_version":
@@ -293,6 +310,7 @@ func (i Info) ToProtocol() protocol.HostInfo {
 	return protocol.HostInfo{
 		Hostname:       i.Hostname,
 		OS:             i.OS,
+		OSID:           i.OSID,
 		OSName:         i.OSName,
 		OSVersion:      i.OSVersion,
 		Kernel:         i.Kernel,

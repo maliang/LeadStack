@@ -507,6 +507,8 @@ export interface MetricsSummary {
 export interface HostInfo {
   hostname: string | null
   os: string | null
+  /** 发行版标识，如 ubuntu / debian / centos（旧 agent 可能没有） */
+  os_id?: string | null
   /** 发行版名称，如 CentOS / Debian / Ubuntu */
   os_name: string | null
   os_version: string | null

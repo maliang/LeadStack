@@ -2402,6 +2402,9 @@ body.ls-scroll-locked {
 }
 
 .ls-kv__row dd {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   flex: 1 1 8rem;
   min-width: 0;
   margin: 0;
@@ -9577,4 +9580,17 @@ body.ls-scroll-locked {
 .ls-metrics__axis-text--x {
   fill: var(--ls-text-subtle);
   font-size: 8px;
+}
+
+.ls-srv-row__os,
+.ls-srv-card__os {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.ls-os-icon {
+  display: inline-block;
+  flex: 0 0 auto;
+  vertical-align: -0.12em;
 }

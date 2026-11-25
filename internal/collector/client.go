@@ -103,6 +103,8 @@ func toProtocolHostInfo(info hostinfo.Info) protocol.HostInfo {
 	return protocol.HostInfo{
 		Hostname:       info.Hostname,
 		OS:             info.OS,
+		OSID:           info.OSID,
+		OSName:         info.OSName,
 		OSVersion:      info.OSVersion,
 		Kernel:         info.Kernel,
 		Arch:           info.Arch,

@@ -33,6 +33,8 @@ func (f *fakeRunner) Run(_ context.Context, cmd string) (string, string, int, er
 
 const fullCollectOutput = `@@hostname@@devbox
 @@os@@linux
+@@os_id@@ubuntu
+@@os_name@@Ubuntu
 @@os_version@@Ubuntu 24.04.1 LTS
 @@kernel@@6.8.0-45-generic
 @@arch@@amd64
@@ -56,7 +58,7 @@ func TestCollectParsesAllFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if info.Hostname != "devbox" || info.OS != "linux" || info.OSVersion != "Ubuntu 24.04.1 LTS" {
+	if info.Hostname != "devbox" || info.OS != "linux" || info.OSID != "ubuntu" || info.OSName != "Ubuntu" || info.OSVersion != "Ubuntu 24.04.1 LTS" {
 		t.Fatalf("基础字段解析错误: %+v", info)
 	}
 	if info.Kernel != "6.8.0-45-generic" || info.Arch != "amd64" {
