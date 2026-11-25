@@ -31,3 +31,7 @@ func spawnUpgradeWatchdog(watchdogExe, dataDir, statePath string, state *Upgrade
 func execSelf(path string, args []string) error {
 	return errors.New("Windows 不支持进程内 exec")
 }
+
+// ensureUpgradeDirWritable 在 Windows 上不需要：平台不支持进程内自升级，
+// 真正的限制由 platformUpgradeUnsupported 提前返回。
+func ensureUpgradeDirWritable(string) error { return nil }
