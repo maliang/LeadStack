@@ -125,6 +125,13 @@ export type LostJobOutcome = 'success' | 'rolled_back'
  * 证据优先级：history[0]（最新一条）→ current_version 与本次提交目标的比对。
  * 返回 null 表示证据不足，调用方应继续轮询（进程可能还在重启）。
  */
+function sameVersion(left: string | null | undefined, right: string | null | undefined): boolean {
+  if (!left || !right) return false
+  // 构建版本通常没有 v 前缀，但 Release tag / 用户提交目标可能带 v。
+  const normalize = (value: string): string => value.trim().replace(/^v/i, '')
+  return normalize(left) === normalize(right)
+}
+
 export function resolveLostJobOutcome(
   status: Pick<UpdateStatus, 'current_version' | 'history'>,
   target: string | null,
@@ -133,13 +140,13 @@ export function resolveLostJobOutcome(
   const latest = status.history?.[0]
   if (latest) {
     // 成功：历史目标已等于当前版本，说明新版本确实生效了。
-    if (latest.outcome === 'success' && latest.target_version === status.current_version) return 'success'
+    if (latest.outcome === 'success' && sameVersion(latest.target_version, status.current_version)) return 'success'
     // 回退必须匹配本次提交目标，避免把历史里的旧回退误判成本次结果。
-    if (latest.outcome === 'rollback' && latest.target_version === target) return 'rolled_back'
+    if (latest.outcome === 'rollback' && sameVersion(latest.target_version, target)) return 'rolled_back'
     return null
   }
   // history 缺失（老数据目录 / 写历史失败）：退化为版本号比对。
-  return status.current_version === target ? 'success' : null
+  return sameVersion(status.current_version, target) ? 'success' : null
 }
 
 /** 阶段 → i18n key。服务端可能返回未知阶段（UpdatePhase 含 `| string`），统一落到 unknown。 */
