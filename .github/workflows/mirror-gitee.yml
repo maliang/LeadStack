@@ -123,7 +123,13 @@ jobs:
           else
             echo "复用已有 Gitee 发行版 ${TAG}（id=${release_id}）"
             # 上传完成前标记为预发布，避免 Gitee latest 提前把不完整资产暴露给升级器。
-            curl -fsS -X PATCH "${api}/releases/${release_id}"               -H "Authorization: token ${GITEE_TOKEN}"               -H 'Content-Type: application/json'               -d '{"prerelease":true}' >/dev/null || true
+            # Gitee PATCH 要求同时带 tag_name/name/body，不能只提交 prerelease。
+            curl -fsS -H "Authorization: token ${GITEE_TOKEN}" "${api}/releases/${release_id}" > /tmp/gitee-patch-source.json
+            jq '{tag_name,name,body,target_commitish,prerelease:true}' /tmp/gitee-patch-source.json > /tmp/gitee-patch.json
+            curl -fsS -X PATCH "${api}/releases/${release_id}" \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              -H 'Content-Type: application/json' \
+              -d @/tmp/gitee-patch.json >/dev/null || true
           fi
           printf 'id=%s\n' "${release_id}" >> "$GITHUB_OUTPUT"
 
@@ -238,8 +244,10 @@ jobs:
         run: |
           set -euo pipefail
           api="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${RELEASE_ID}"
+          curl -fsS -H "Authorization: token ${GITEE_TOKEN}" "${api}" > /tmp/gitee-patch-source.json
+          jq '{tag_name,name,body,target_commitish,prerelease:false}' /tmp/gitee-patch-source.json > /tmp/gitee-patch.json
           curl -fsS -X PATCH "${api}" \
             -H "Authorization: token ${GITEE_TOKEN}" \
             -H 'Content-Type: application/json' \
-            -d '{"prerelease":false}' >/dev/null
+            -d @/tmp/gitee-patch.json >/dev/null
           echo "Gitee ${TAG:-当前} 发行版已标记为正式"
