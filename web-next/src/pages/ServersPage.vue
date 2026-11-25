@@ -32,7 +32,6 @@ import {
   CUSTOM_GROUP_VALUE,
   MAX_BATCH_TAG_LENGTH,
   MAX_BATCH_TAGS,
-  allVisibleSelected,
   batchActionDialogKey,
   buildBatchPayload,
   buildServerNameMap,
@@ -41,8 +40,6 @@ import {
   mergeBatchResult,
   pruneSelection,
   retryPayload,
-  selectAllVisible,
-  someVisibleSelected,
   validateBatchDraft,
   type BatchDraft,
 } from '@/lib/server-batch'
@@ -82,8 +79,6 @@ const filtersActive = computed(() => hasActiveServerFilters(filters.value))
 const canWrite = computed(() => can('server.write'))
 const selectedIds = ref<string[]>([])
 const visibleIds = computed(() => visibleServers.value.map((server) => server.id))
-const allSelected = computed(() => allVisibleSelected(selectedIds.value, visibleIds.value))
-const someSelected = computed(() => someVisibleSelected(selectedIds.value, visibleIds.value))
 const selectedServers = computed(() =>
   servers.value.filter((server) => selectedIds.value.includes(server.id)),
 )
@@ -96,24 +91,6 @@ watch(visibleIds, (ids) => {
 watch(canWrite, (allowed) => {
   if (!allowed) selectedIds.value = []
 })
-
-function onSelect(id: string, checked: boolean): void {
-  const already = selectedIds.value.includes(id)
-  if (checked === already) return
-  selectedIds.value = checked
-    ? [...selectedIds.value, id]
-    : selectedIds.value.filter((item) => item !== id)
-}
-
-function toggleSelectAll(event: Event): void {
-  const checked = (event.target as HTMLInputElement).checked
-  if (checked) {
-    selectedIds.value = selectAllVisible(selectedIds.value, visibleIds.value)
-    return
-  }
-  const visible = new Set(visibleIds.value)
-  selectedIds.value = selectedIds.value.filter((id) => !visible.has(id))
-}
 
 function clearSelection(): void {
   selectedIds.value = []
@@ -441,15 +418,6 @@ async function handleFormSaved(saved: Server): Promise<void> {
     />
 
     <div v-if="canWrite || tags.length > 0" class="ls-servers__selection">
-      <label v-if="canWrite" class="ls-servers__select-all">
-        <input
-          type="checkbox"
-          :checked="allSelected"
-          :indeterminate="someSelected"
-          @change="toggleSelectAll"
-        />
-        <span>{{ t('serversBatch.selectAll', { count: visibleServers.length }) }}</span>
-      </label>
       <div v-if="tags.length > 0" class="ls-servers__tag-filters" role="group" :aria-label="t('servers.filterByTag')">
         <button
           v-for="tag in tags"
@@ -528,11 +496,8 @@ async function handleFormSaved(saved: Server): Promise<void> {
         v-for="server in visibleServers"
         :key="server.id"
         :server="server"
-        :selectable="canWrite"
-        :selected="selectedIds.includes(server.id)"
         :can-edit="canWrite"
         :panel-allowed="Boolean(server.panel_credential_id)"
-        @select="onSelect"
         @edit="openEditForm"
         @open-panel="openPanel"
         @open-accounts="openAccounts"
@@ -547,12 +512,9 @@ async function handleFormSaved(saved: Server): Promise<void> {
         :server="server"
         :expanded="expandedId === server.id"
         :terminal-allowed="terminalAllowed"
-        :selectable="canWrite"
-        :selected="selectedIds.includes(server.id)"
         :can-edit="canWrite"
         :panel-allowed="Boolean(server.panel_credential_id)"
         @toggle="toggleRow"
-        @select="onSelect"
         @edit="openEditForm"
         @open-panel="openPanel"
         @open-accounts="openAccounts"

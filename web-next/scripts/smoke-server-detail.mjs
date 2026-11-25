@@ -974,14 +974,20 @@ async function run() {
       { timeout: 10000 },
     )
     check('指标卡画了两条曲线（memory/disk）', (await page.locator('.ls-metrics__line').count()) === 2)
-    const memoryPoints = (await page.locator('.ls-metrics__line').first().getAttribute('points')) || ''
-    const memoryPointCount = memoryPoints.trim().split(/\s+/).filter(Boolean).length
-    check('polyline points 非空', memoryPoints.trim().length > 0, memoryPoints.slice(0, 40))
+    const memoryPath = (await page.locator('.ls-metrics__line').first().getAttribute('d')) || ''
+    const memoryPointCount = await page.locator('.ls-metrics__item').first().locator('.ls-metrics__point').count()
+    check('指标曲线 path 非空', memoryPath.trim().length > 0, memoryPath.slice(0, 40))
     check(
-      'polyline 点数与 mock 数据点一致',
+      '曲线点数与 mock 数据点一致',
       memoryPointCount === METRIC_POINTS,
       `${memoryPointCount} vs ${METRIC_POINTS}`,
     )
+    await page.locator('.ls-metrics__item').first().locator('svg').hover()
+    await page.waitForSelector('.ls-metrics__tooltip', { timeout: 5000 })
+    const tooltipText = (await page.locator('.ls-metrics__tooltip').innerText()).trim()
+    check('hover 曲线显示时间与数值 tooltip', tooltipText.length > 0, tooltipText)
+    await page.locator('.ls-metrics__item').first().locator('svg').hover({ position: { x: 2, y: 2 } })
+    check('曲线 hover 有十字准线', (await page.locator('.ls-metrics__crosshair').count()) === 1)
     check(
       '默认时间窗 1h（from/to 差 3600000）',
       baselineQuery !== null && baselineQuery.to - baselineQuery.from === 3600000,
@@ -1255,7 +1261,7 @@ async function run() {
       await readonlyPage.waitForSelector('.ls-metrics__grid', { timeout: 15000 })
       check(
         '只读用户仍能看到指标曲线',
-        (await readonlyPage.locator('.ls-metrics__chart polyline.ls-metrics__line').count()) === 2,
+        (await readonlyPage.locator('.ls-metrics__chart path.ls-metrics__line').count()) === 2,
       )
       check('只读用户自动拉指标', readonlyState.metricsCalls.length === 1, `${readonlyState.metricsCalls.length} 次`)
       await readonlyPage.click('#server-tab-overview')

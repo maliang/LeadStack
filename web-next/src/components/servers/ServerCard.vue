@@ -13,19 +13,15 @@ import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers
 const props = withDefaults(
   defineProps<{
     server: Server
-    /** 无 server.write 时页面传 false：多选框不渲染 */
-    selectable?: boolean
-    selected?: boolean
     /** 无 server.write 时页面传 false：编辑按钮不渲染 */
     canEdit?: boolean
     /** 绑定了宝塔面板凭据：显示「宝塔登录」入口 */
     panelAllowed?: boolean
   }>(),
-  { selectable: false, selected: false, canEdit: false, panelAllowed: false },
+  { canEdit: false, panelAllowed: false },
 )
 
 const emit = defineEmits<{
-  (event: 'select', id: string, selected: boolean): void
   (event: 'edit', id: string): void
   (event: 'open-panel', id: string): void
   (event: 'open-accounts', id: string): void
@@ -33,10 +29,6 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-
-function onSelect(event: Event): void {
-  emit('select', props.server.id, (event.target as HTMLInputElement).checked)
-}
 
 const titleId = computed(() => `server-card-${props.server.id}-title`)
 const detailTarget = computed(() => ({ name: 'server-detail', params: { id: props.server.id } }))
@@ -80,14 +72,6 @@ const modeLabel = computed(() =>
 <template>
   <article class="ls-srv-card" :aria-labelledby="titleId">
     <header class="ls-srv-card__head">
-      <label v-if="props.selectable" class="ls-srv-card__select">
-        <input
-          type="checkbox"
-          :checked="props.selected"
-          :aria-label="t('serversBatch.selectOne', { name: server.name })"
-          @change="onSelect"
-        />
-      </label>
       <h2 :id="titleId" class="ls-srv-card__title" :title="server.name">
         <RouterLink class="ls-srv-card__title-link" :to="detailTarget">{{ server.name }}</RouterLink>
       </h2>

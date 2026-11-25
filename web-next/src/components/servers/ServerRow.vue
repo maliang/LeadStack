@@ -20,9 +20,6 @@ const props = defineProps<{
   server: Server
   expanded: boolean
   terminalAllowed: boolean
-  /** 无 server.write 时页面传 false：多选框不渲染 */
-  selectable?: boolean
-  selected?: boolean
   /** 无 server.write 时页面传 false：编辑按钮不渲染 */
   canEdit?: boolean
   /** 绑定了宝塔面板凭据：显示「宝塔登录」入口 */
@@ -31,7 +28,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'toggle', id: string): void
-  (event: 'select', id: string, selected: boolean): void
   (event: 'edit', id: string): void
   (event: 'open-panel', id: string): void
   (event: 'open-accounts', id: string): void
@@ -40,10 +36,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const router = useRouter()
-
-function onSelect(event: Event): void {
-  emit('select', props.server.id, (event.target as HTMLInputElement).checked)
-}
 
 const address = computed(() => (props.server.mode === 'agent' ? props.server.host : serverAddress(props.server)))
 const memTotal = computed(() => {
@@ -100,20 +92,13 @@ function openDetailFromRow(event: MouseEvent): void {
   >
     <div class="ls-srv-row__main">
       <div class="ls-srv-row__identity">
-        <label v-if="props.selectable" class="ls-srv-row__select">
-          <input
-            type="checkbox"
-            :checked="props.selected"
-            :aria-label="t('serversBatch.selectOne', { name: server.name })"
-            @change="onSelect"
-          />
-        </label>
-        <span class="ls-srv-status" :class="`ls-srv-status--${serverStatusTone(server.status)}`">
-          <span class="ls-srv-status__dot" aria-hidden="true" />
-          {{ t(serverStatusLabelKey(server.status)) }}
-        </span>
-        <div class="ls-srv-row__name-block">
+        <OsIcon class="ls-srv-row__os-logo" :os-id="osId" size="2.5rem" />
+        <div class="ls-srv-row__identity-text">
           <div class="ls-srv-row__name-line">
+            <span class="ls-srv-status" :class="`ls-srv-status--${serverStatusTone(server.status)}`">
+              <span class="ls-srv-status__dot" aria-hidden="true" />
+              {{ t(serverStatusLabelKey(server.status)) }}
+            </span>
             <h2 class="ls-srv-row__name" :title="server.name">
               <RouterLink class="ls-srv-row__name-link" :to="detailTarget" @click.stop>{{ server.name }}</RouterLink>
             </h2>
@@ -128,12 +113,11 @@ function openDetailFromRow(event: MouseEvent): void {
               {{ t('common.edit') }}
             </button>
           </div>
-          <span class="ls-srv-row__os" :title="osLabel">
-            <OsIcon :os-id="osId" size="0.875rem" />
-            {{ osLabel }}
-          </span>
+          <div class="ls-srv-row__os-line">
+            <span class="ls-srv-row__os" :title="osLabel">{{ osLabel }}</span>
+            <span class="ls-srv-row__address" :title="address">{{ address }}</span>
+          </div>
         </div>
-        <span class="ls-srv-row__address" :title="address">{{ address }}</span>
       </div>
 
       <div class="ls-srv-row__meta">

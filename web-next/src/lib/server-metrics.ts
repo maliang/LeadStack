@@ -72,7 +72,10 @@ export function metricsRange(
 
 /** 图表 viewBox 宽度；高度按每条曲线固定，`preserveAspectRatio="none"` 铺满容器。 */
 export const METRICS_CHART_WIDTH = 600
-export const METRICS_CHART_HEIGHT = 120
+export const METRICS_CHART_HEIGHT = 160
+
+/** SVG 绘图区内边距：左侧留给 Y 轴数值，底部留给日期。 */
+export const METRICS_CHART_PADDING = { left: 46, right: 10, top: 12, bottom: 28 }
 
 export interface ValueBounds {
   min: number
@@ -121,10 +124,37 @@ export function projectPoint(
   const ratio = span > 0 ? (ts - from) / span : 1
   const spanY = bounds.max - bounds.min
   const ratioY = spanY > 0 ? (value - bounds.min) / spanY : 0.5
+  const plotWidth = Math.max(1, width - METRICS_CHART_PADDING.left - METRICS_CHART_PADDING.right)
+  const plotHeight = Math.max(1, height - METRICS_CHART_PADDING.top - METRICS_CHART_PADDING.bottom)
   return {
-    x: round2(clamp(ratio * width, 0, width)),
-    y: round2(clamp(height - ratioY * height, 0, height)),
+    x: round2(METRICS_CHART_PADDING.left + clamp(ratio, 0, 1) * plotWidth),
+    y: round2(METRICS_CHART_PADDING.top + (1 - clamp(ratioY, 0, 1)) * plotHeight),
   }
+}
+
+/** 平滑折线：Catmull-Rom 转三次贝塞尔，避免长时间窗里出现硬折角。 */
+function smoothPath(points: readonly { x: number; y: number }[]): string {
+  if (points.length === 0) return ''
+  if (points.length === 1) return `M${points[0].x},${points[0].y}`
+  let path = `M${points[0].x},${points[0].y}`
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const p0 = points[index - 1] ?? points[index]
+    const p1 = points[index]
+    const p2 = points[index + 1]
+    const p3 = points[index + 2] ?? p2
+    const cp1x = p1.x + (p2.x - p0.x) / 6
+    const cp1y = p1.y + (p2.y - p0.y) / 6
+    const cp2x = p2.x - (p3.x - p1.x) / 6
+    const cp2y = p2.y - (p3.y - p1.y) / 6
+    path += ` C${round2(cp1x)},${round2(cp1y)} ${round2(cp2x)},${round2(cp2y)} ${p2.x},${p2.y}`
+  }
+  return path
+}
+
+function formatAxisDate(ts: number): string {
+  const date = new Date(ts)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 /** 单条曲线最多画的点数：raw 窗口内的点数可达上万，等步长抽稀后仍保留尾端。 */
@@ -228,6 +258,10 @@ export interface MetricChart {
   points: MetricPoint[]
   /** polyline 的 points 属性；不足 2 点时为空串（由端点圆点兜底）。 */
   line: string
+  /** 平滑曲线 path；不足 2 点时为空串。 */
+  path: string
+  /** 曲线下方面积 path；不足 2 点时为空串。 */
+  area: string
   lastX: number
   lastY: number
   /** 最新值文案（含单位）。 */
@@ -239,6 +273,10 @@ export interface MetricChart {
   bounds: ValueBounds
   /** 每个点投影后的坐标，供 SVG hover 点显示时间/数值。 */
   markers: { x: number; y: number; ts: number; value: number }[]
+  /** Y 轴刻度（含网格线位置）。 */
+  yTicks: { y: number; label: string }[]
+  /** X 轴日期刻度。 */
+  xTicks: { x: number; label: string }[]
 }
 
 /**
@@ -287,21 +325,44 @@ export function buildMetricCharts(
     const plotted = samplePoints(points)
     const last = plotted[plotted.length - 1]
     const projected = projectPoint(last.ts, last.value, from, to, bounds, width, height)
+    const markers = plotted.map((point) => {
+      const pos = projectPoint(point.ts, point.value, from, to, bounds, width, height)
+      return { x: pos.x, y: pos.y, ts: point.ts, value: point.value }
+    })
+    const path = markers.length >= 2 ? smoothPath(markers) : ''
+    const plotBottom = height - METRICS_CHART_PADDING.bottom
+    const area = path
+      ? `${path} L${markers[markers.length - 1].x},${plotBottom} L${markers[0].x},${plotBottom} Z`
+      : ''
+    const yTicks = Array.from({ length: 5 }, (_, index) => {
+      const ratio = index / 4
+      const value = bounds.max - (bounds.max - bounds.min) * ratio
+      return {
+        y: round2(METRICS_CHART_PADDING.top + ratio * (height - METRICS_CHART_PADDING.top - METRICS_CHART_PADDING.bottom)),
+        label: formatMetricAxisValue(item.metric, value),
+      }
+    })
+    const plotWidth = width - METRICS_CHART_PADDING.left - METRICS_CHART_PADDING.right
+    const xTicks = [0, 0.5, 1].map((ratio) => ({
+      x: round2(METRICS_CHART_PADDING.left + plotWidth * ratio),
+      label: formatAxisDate(from + (to - from) * ratio),
+    }))
     charts.push({
       metric: item.metric,
       label: metricLabel(item.metric),
       points: plotted,
       line: plotted.length >= 2 ? svgPointString(plotted, from, to, bounds, width, height) : '',
+      path,
+      area,
       lastX: projected.x,
       lastY: projected.y,
       latest: formatMetricValue(item.metric, last.value),
       minLabel: formatMetricAxisValue(item.metric, bounds.min),
       maxLabel: formatMetricAxisValue(item.metric, bounds.max),
       bounds,
-      markers: plotted.map((point) => {
-        const pos = projectPoint(point.ts, point.value, from, to, bounds, width, height)
-        return { x: pos.x, y: pos.y, ts: point.ts, value: point.value }
-      }),
+      markers,
+      yTicks,
+      xTicks,
     })
   }
   return charts

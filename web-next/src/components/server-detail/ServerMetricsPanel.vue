@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { useI18n } from '@/i18n'
 import type { MetricsResponse, MetricsStep } from '@/lib/api'
 import { formatClockTime, formatDateTime } from '@/lib/format'
 import {
   METRICS_CHART_HEIGHT,
+  METRICS_CHART_PADDING,
   METRICS_CHART_WIDTH,
   METRICS_STEPS,
   METRICS_WINDOWS,
   buildMetricCharts,
   formatMetricValue,
+  type MetricChart,
   type MetricsWindow,
 } from '@/lib/server-metrics'
 
@@ -35,7 +37,38 @@ const { t } = useI18n()
 const charts = computed(() => buildMetricCharts(props.metrics?.series ?? [], props.metricsFrom, props.metricsTo))
 const metricsEmpty = computed(() => !props.metricsLoading && props.metricsError === null && charts.value.length === 0)
 const rangeLabel = computed(() => `${formatClockTime(props.metricsFrom)} – ${formatClockTime(props.metricsTo)}`)
-const midTime = computed(() => formatClockTime((props.metricsFrom + props.metricsTo) / 2))
+const hovered = ref<Record<string, MetricChart['markers'][number] | null>>({})
+
+function onChartMove(event: MouseEvent, chart: MetricChart): void {
+  const svg = event.currentTarget as SVGSVGElement
+  if (chart.markers.length === 0) return
+  const rect = svg.getBoundingClientRect()
+  if (rect.width <= 0) return
+  const x = ((event.clientX - rect.left) / rect.width) * METRICS_CHART_WIDTH
+  let nearest = chart.markers[0]
+  let distance = Math.abs(nearest.x - x)
+  for (const marker of chart.markers.slice(1)) {
+    const next = Math.abs(marker.x - x)
+    if (next < distance) {
+      nearest = marker
+      distance = next
+    }
+  }
+  hovered.value[chart.metric] = nearest
+}
+
+function clearHover(chart: MetricChart): void {
+  hovered.value[chart.metric] = null
+}
+
+function tooltipStyle(chart: MetricChart): Record<string, string> {
+  const point = hovered.value[chart.metric]
+  if (!point) return {}
+  return {
+    left: `${Math.max(12, Math.min(88, (point.x / METRICS_CHART_WIDTH) * 100))}%`,
+    top: `${Math.max(10, (point.y / METRICS_CHART_HEIGHT) * 100)}%`,
+  }
+}
 </script>
 
 <template>
@@ -102,33 +135,83 @@ const midTime = computed(() => formatClockTime((props.metricsFrom + props.metric
             <span class="ls-metrics__name" :title="chart.label">{{ chart.label }}</span>
             <span class="ls-metrics__value">{{ chart.latest }}</span>
           </header>
-          <svg
-            class="ls-metrics__chart"
-            :viewBox="`0 0 ${METRICS_CHART_WIDTH} ${METRICS_CHART_HEIGHT}`"
-            preserveAspectRatio="none"
-            role="img"
-            :aria-label="`${chart.label} ${chart.latest}`"
-            focusable="false"
-          >
-            <line class="ls-metrics__baseline" x1="0" :y1="METRICS_CHART_HEIGHT" :x2="METRICS_CHART_WIDTH" :y2="METRICS_CHART_HEIGHT" />
-            <polyline v-if="chart.line" class="ls-metrics__line" :points="chart.line" />
-            <circle
-              v-for="marker in chart.markers"
-              :key="`${chart.metric}-${marker.ts}`"
-              class="ls-metrics__hover"
-              :cx="marker.x"
-              :cy="marker.y"
-              r="4"
+          <div class="ls-metrics__plot">
+            <svg
+              class="ls-metrics__chart"
+              :viewBox="`0 0 ${METRICS_CHART_WIDTH} ${METRICS_CHART_HEIGHT}`"
+              preserveAspectRatio="none"
+              role="img"
+              :aria-label="`${chart.label} ${chart.latest}`"
+              focusable="false"
+              @mousemove="onChartMove($event, chart)"
+              @mouseleave="clearHover(chart)"
             >
-              <title>{{ formatDateTime(marker.ts) }} · {{ formatMetricValue(chart.metric, marker.value) }}</title>
-            </circle>
-            <circle class="ls-metrics__dot" :cx="chart.lastX" :cy="chart.lastY" r="3" />
-            <text class="ls-metrics__axis-text" x="2" y="12">{{ chart.maxLabel }}</text>
-            <text class="ls-metrics__axis-text" x="2" y="112">{{ chart.minLabel }}</text>
-            <text class="ls-metrics__axis-text ls-metrics__axis-text--x" x="2" y="116" text-anchor="start">{{ formatClockTime(metricsFrom) }}</text>
-            <text class="ls-metrics__axis-text ls-metrics__axis-text--x" :x="METRICS_CHART_WIDTH / 2" y="116" text-anchor="middle">{{ midTime }}</text>
-            <text class="ls-metrics__axis-text ls-metrics__axis-text--x" :x="METRICS_CHART_WIDTH - 2" y="116" text-anchor="end">{{ formatClockTime(metricsTo) }}</text>
-          </svg>
+              <g class="ls-metrics__grid-lines" aria-hidden="true">
+                <line
+                  v-for="tick in chart.yTicks"
+                  :key="`grid-${chart.metric}-${tick.y}`"
+                  :x1="METRICS_CHART_PADDING.left"
+                  :x2="METRICS_CHART_WIDTH - METRICS_CHART_PADDING.right"
+                  :y1="tick.y"
+                  :y2="tick.y"
+                />
+              </g>
+              <path v-if="chart.area" class="ls-metrics__area" :d="chart.area" />
+              <path v-if="chart.path" class="ls-metrics__line" :d="chart.path" />
+              <circle
+                v-for="marker in chart.markers"
+                v-show="chart.markers.length <= 80"
+                :key="`point-${chart.metric}-${marker.ts}`"
+                class="ls-metrics__point"
+                :cx="marker.x"
+                :cy="marker.y"
+                r="1.6"
+              />
+              <line
+                v-if="hovered[chart.metric]"
+                class="ls-metrics__crosshair"
+                :x1="hovered[chart.metric]!.x"
+                :x2="hovered[chart.metric]!.x"
+                :y1="METRICS_CHART_PADDING.top"
+                :y2="METRICS_CHART_HEIGHT - METRICS_CHART_PADDING.bottom"
+              />
+              <circle
+                v-if="hovered[chart.metric]"
+                class="ls-metrics__hover-dot"
+                :cx="hovered[chart.metric]!.x"
+                :cy="hovered[chart.metric]!.y"
+                r="3.5"
+              />
+              <circle class="ls-metrics__dot" :cx="chart.lastX" :cy="chart.lastY" r="3" />
+              <g class="ls-metrics__axis" aria-hidden="true">
+                <text
+                  v-for="tick in chart.yTicks"
+                  :key="`y-${chart.metric}-${tick.y}`"
+                  class="ls-metrics__axis-text"
+                  :x="METRICS_CHART_PADDING.left - 6"
+                  :y="tick.y + 3"
+                  text-anchor="end"
+                >{{ tick.label }}</text>
+                <text
+                  v-for="tick in chart.xTicks"
+                  :key="`x-${chart.metric}-${tick.x}`"
+                  class="ls-metrics__axis-text ls-metrics__axis-text--x"
+                  :x="tick.x"
+                  :y="METRICS_CHART_HEIGHT - 7"
+                  text-anchor="middle"
+                >{{ tick.label }}</text>
+              </g>
+            </svg>
+            <div
+              v-if="hovered[chart.metric]"
+              class="ls-metrics__tooltip"
+              :style="tooltipStyle(chart)"
+              role="status"
+            >
+              <span>{{ formatDateTime(hovered[chart.metric]!.ts) }}</span>
+              <strong>{{ formatMetricValue(chart.metric, hovered[chart.metric]!.value) }}</strong>
+            </div>
+          </div>
         </article>
       </div>
     </template>
