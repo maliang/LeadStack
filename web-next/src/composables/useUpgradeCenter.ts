@@ -160,7 +160,14 @@ export function useUpgradeCenter() {
       startFastPoll()
     }
     onUpgradeSessionChange((next) => {
-      if (next && !active.value && !onSettingsPage()) {
+      if (!next) {
+        active.value = false
+        pendingTarget = null
+        status.value = null
+        stopFastPoll()
+        return
+      }
+      if (!active.value && !onSettingsPage()) {
         pendingTarget = next.target
         active.value = true
         startFastPoll()

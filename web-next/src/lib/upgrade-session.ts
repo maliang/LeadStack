@@ -45,6 +45,8 @@ export function clearUpgradeSession(): void {
   } catch {
     /* ignore */
   }
+  // 通知另一个 owner（顶栏/设置页）停止自己的进度轮询；否则会残留「升级中 0%」。
+  window.dispatchEvent(new CustomEvent(EVENT, { detail: null }))
 }
 
 export function onUpgradeSessionChange(handler: (session: UpgradeSession | null) => void): () => void {
