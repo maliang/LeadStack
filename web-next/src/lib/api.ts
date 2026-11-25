@@ -507,6 +507,8 @@ export interface MetricsSummary {
 export interface HostInfo {
   hostname: string | null
   os: string | null
+  /** 发行版名称，如 CentOS / Debian / Ubuntu */
+  os_name: string | null
   os_version: string | null
   kernel: string | null
   arch: string | null
@@ -641,6 +643,41 @@ export interface SecurityAudit {
   score: number
   checked_at: number
   findings: SecurityFinding[]
+}
+
+export interface DatabaseBackupConfig {
+  id: string
+  server_id: string
+  databases: string[]
+  host: string
+  port: number
+  username: string
+  interval_hours: number
+  retention: number
+  enabled: boolean
+  last_run_at: number | null
+  next_run_at: number
+  last_error: string | null
+  created_at: number
+  updated_at: number
+}
+
+export interface DatabaseBackupFile {
+  name: string
+  size: number
+  mod_time: number
+}
+
+export interface SaveDatabaseBackupConfigPayload {
+  id?: string
+  databases: string[]
+  host: string
+  port: number
+  username: string
+  password?: string
+  interval_hours: number
+  retention: number
+  enabled: boolean
 }
 
 export interface TestConnectionResult {
@@ -1679,6 +1716,7 @@ function normalizeHostInfo(input: unknown): HostInfo | null {
   return {
     hostname: toText(raw.hostname),
     os: toText(raw.os),
+    os_name: toText(raw.os_name),
     os_version: toText(raw.os_version),
     kernel: toText(raw.kernel),
     arch: toText(raw.arch),
@@ -3118,6 +3156,86 @@ export const api = {
    */
   serverPanel(id: string): Promise<ServerPanel> {
     return request<unknown>(`/servers/${encodeURIComponent(id)}/panel`).then(normalizeServerPanel)
+  },
+
+  databaseBackupConfigs(serverId: string): Promise<DatabaseBackupConfig[]> {
+    return request<unknown>(`/servers/${encodeURIComponent(serverId)}/database-backups`).then((raw) => {
+      const list = Array.isArray(raw) ? raw : extractList(raw, ['configs', 'items'])
+      return list.map((item) => {
+        const entry = toRecord(item) ?? {}
+        return {
+          id: toText(entry.id) ?? '',
+          server_id: toText(entry.server_id) ?? '',
+          databases: toStringArray(entry.databases),
+          host: toText(entry.host) ?? '',
+          port: toNumber(entry.port) ?? 3306,
+          username: toText(entry.username) ?? '',
+          interval_hours: toNumber(entry.interval_hours) ?? 24,
+          retention: toNumber(entry.retention) ?? 7,
+          enabled: toBool(entry.enabled, true),
+          last_run_at: toNumber(entry.last_run_at),
+          next_run_at: toNumber(entry.next_run_at) ?? 0,
+          last_error: toText(entry.last_error),
+          created_at: toNumber(entry.created_at) ?? 0,
+          updated_at: toNumber(entry.updated_at) ?? 0,
+        }
+      })
+    })
+  },
+
+  saveDatabaseBackupConfig(
+    serverId: string,
+    payload: SaveDatabaseBackupConfigPayload,
+  ): Promise<DatabaseBackupConfig> {
+    return request<unknown>(`/servers/${encodeURIComponent(serverId)}/database-backups`, {
+      method: 'POST',
+      body: payload,
+    }).then((raw) => {
+      const entry = toRecord(raw) ?? {}
+      return {
+        id: toText(entry.id) ?? '',
+        server_id: toText(entry.server_id) ?? '',
+        databases: toStringArray(entry.databases),
+        host: toText(entry.host) ?? '',
+        port: toNumber(entry.port) ?? 3306,
+        username: toText(entry.username) ?? '',
+        interval_hours: toNumber(entry.interval_hours) ?? 24,
+        retention: toNumber(entry.retention) ?? 7,
+        enabled: toBool(entry.enabled, true),
+        last_run_at: toNumber(entry.last_run_at),
+        next_run_at: toNumber(entry.next_run_at) ?? 0,
+        last_error: toText(entry.last_error),
+        created_at: toNumber(entry.created_at) ?? 0,
+        updated_at: toNumber(entry.updated_at) ?? 0,
+      }
+    })
+  },
+
+  deleteDatabaseBackupConfig(serverId: string, configId: string): Promise<unknown> {
+    return request(`/servers/${encodeURIComponent(serverId)}/database-backups/${encodeURIComponent(configId)}`, { method: 'DELETE' })
+  },
+
+  runDatabaseBackupConfig(serverId: string, configId: string): Promise<{ files: string[] }> {
+    return request<{ files: string[] }>(`/servers/${encodeURIComponent(serverId)}/database-backups/${encodeURIComponent(configId)}/run`, { method: 'POST' })
+  },
+
+  databaseBackupFiles(serverId: string, configId: string): Promise<DatabaseBackupFile[]> {
+    return request<unknown>(`/servers/${encodeURIComponent(serverId)}/database-backups/${encodeURIComponent(configId)}/files`).then((raw) => {
+      const list = Array.isArray(raw) ? raw : extractList(raw, ['files', 'items'])
+      return list.map((item) => {
+        const entry = toRecord(item) ?? {}
+        return { name: toText(entry.name) ?? '', size: toNumber(entry.size) ?? 0, mod_time: toNumber(entry.mod_time) ?? 0 }
+      })
+    })
+  },
+
+  async downloadDatabaseBackupFile(serverId: string, configId: string, name: string): Promise<{ blob: Blob; filename: string }> {
+    const token = getToken()
+    const response = await fetch(`${API_PREFIX}/servers/${encodeURIComponent(serverId)}/database-backups/${encodeURIComponent(configId)}/files/${encodeURIComponent(name)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!response.ok) throw new ApiError(response.status, 'download_failed', t('s.0593', { '0': response.status }))
+    return { blob: await response.blob(), filename: name }
   },
 
   /** POST /servers/{id}/security/audit —— agent/SSH 只读安全基线体检 */

@@ -5,10 +5,11 @@ import AppIcon from '@/components/AppIcon.vue'
 import ServerFormDialog from '@/components/servers/ServerFormDialog.vue'
 import ServerOverviewTab from '@/components/server-detail/ServerOverviewTab.vue'
 import ServerAccessTab from '@/components/server-detail/ServerAccessTab.vue'
-import ServerAccountsTab from '@/components/server-detail/ServerAccountsTab.vue'
+import ServerAccountsTable from '@/components/server-detail/ServerAccountsTable.vue'
 import ServerLoginTab from '@/components/server-detail/ServerLoginTab.vue'
 import ServerChecksTab from '@/components/server-detail/ServerChecksTab.vue'
 import ServerSecurityAudit from '@/components/server-detail/ServerSecurityAudit.vue'
+import ServerMetricsPanel from '@/components/server-detail/ServerMetricsPanel.vue'
 import ServerDatabaseBackupTab from '@/components/server-detail/ServerDatabaseBackupTab.vue'
 import ServerLogsPanel from '@/components/server-tools/ServerLogsPanel.vue'
 import { useCan } from '@/composables/useCan'
@@ -56,11 +57,11 @@ import {
  */
 const TABS: { key: ServerDetailTab; labelKey: string }[] = [
   { key: 'overview', labelKey: 'server.tab.overview' },
-  { key: 'login', labelKey: 'server.tab.login' },
   { key: 'accounts', labelKey: 'server.tab.accounts' },
   { key: 'checks', labelKey: 'server.tab.checks' },
   { key: 'logs', labelKey: 'server.tab.logs' },
   { key: 'backups', labelKey: 'server.tab.backups' },
+  { key: 'login', labelKey: 'server.tab.login' },
   { key: 'access', labelKey: 'server.tab.access' },
 ]
 
@@ -341,7 +342,7 @@ let overviewMetricsTimer: ReturnType<typeof setInterval> | null = null
 let overviewDetailTimer: ReturnType<typeof setInterval> | null = null
 
 const onOverviewVisible = (): void => {
-  if (document.visibilityState !== 'visible' || tab.value !== 'overview') return
+  if (document.visibilityState !== 'visible' || (tab.value !== 'overview' && tab.value !== 'checks')) return
   void loadMetrics(true)
   void loadServer(false, true)
 }
@@ -356,7 +357,7 @@ function stopOverviewPolling(): void {
 
 function startOverviewPolling(): void {
   stopOverviewPolling()
-  if (tab.value !== 'overview') return
+  if (tab.value !== 'overview' && tab.value !== 'checks') return
   document.addEventListener('visibilitychange', onOverviewVisible)
   overviewMetricsTimer = setInterval(() => {
     if (document.visibilityState === 'hidden') return
@@ -662,13 +663,6 @@ onBeforeUnmount(stopOverviewPolling)
           :panel-error="panelError"
           :can-read="canRead"
           :can-write="canWrite"
-          :metrics="metrics"
-          :metrics-loading="metricsLoading"
-          :metrics-error="metricsError"
-          :metrics-window="metricsWindow"
-          :metrics-step="metricsStep"
-          :metrics-from="metricsFrom"
-          :metrics-to="metricsTo"
           :host-busy="hostBusy"
           :host-error="hostError"
           :host-notice="hostNotice"
@@ -679,17 +673,15 @@ onBeforeUnmount(stopOverviewPolling)
           :upgrade-result="upgradeResult"
           :upgrade-error="upgradeError"
           @open-panel="openPanel"
-          @metrics-window="metricsWindow = $event"
-          @metrics-step="metricsStep = $event"
-          @metrics-retry="loadMetrics"
           @refresh-host="refreshHost"
           @test-connection="testConnection"
           @agent-upgrade="submitAgentUpgrade"
         />
-        <ServerAccountsTab
+        <ServerAccountsTable
           v-else-if="tab === 'accounts'"
           :server="server"
           :can-write="canWrite"
+          manage
         />
         <ServerDatabaseBackupTab v-else-if="tab === 'backups'" :server="server" :can-write="canWrite" />
         <ServerAccessTab
@@ -724,6 +716,18 @@ onBeforeUnmount(stopOverviewPolling)
         />
         <div v-else-if="tab === 'checks'" class="ls-detail__stack">
           <ServerSecurityAudit :server-id="serverId" :can-run="canRead" :can-harden="canWrite" />
+          <ServerMetricsPanel
+            :metrics="metrics"
+            :metrics-loading="metricsLoading"
+            :metrics-error="metricsError"
+            :metrics-window="metricsWindow"
+            :metrics-step="metricsStep"
+            :metrics-from="metricsFrom"
+            :metrics-to="metricsTo"
+            @metrics-window="metricsWindow = $event"
+            @metrics-step="metricsStep = $event"
+            @metrics-retry="loadMetrics()"
+          />
           <ServerChecksTab
             :checks="serverChecks"
             :loading="checksLoading"

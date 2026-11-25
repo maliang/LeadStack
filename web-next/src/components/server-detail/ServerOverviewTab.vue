@@ -7,17 +7,9 @@ import { errorMessage } from '@/lib/errors'
 import { writeClipboard } from '@/lib/clipboard'
 import { serverStatusLabelKey, serverStatusTone } from '@/composables/useServers'
 import { useI18n } from '@/i18n'
-import type {
-  AgentUpgradeResult,
-  HostInfo,
-  MetricsResponse,
-  MetricsStep,
-  Server,
-  TestConnectionResult,
-} from '@/lib/api'
+import type { AgentUpgradeResult, HostInfo, Server, TestConnectionResult } from '@/lib/api'
 import {
   formatBytes,
-  formatClockTime,
   formatDateTime,
   formatOs,
   formatRelativeTime,
@@ -25,20 +17,13 @@ import {
   serverAddress,
 } from '@/lib/format'
 import {
-  METRICS_CHART_HEIGHT,
-  METRICS_CHART_WIDTH,
-  METRICS_STEPS,
-  METRICS_WINDOWS,
   agentUpgradeFieldError,
-  buildMetricCharts,
   normalizeAgentUpgradeDraft,
   type AgentUpgradeDraft,
-  type MetricsWindow,
 } from '@/lib/server-metrics'
 
 /**
- * 「概览」标签：这台机器是谁、通不通、跑什么版本，以及指标曲线 / 主机信息 /
- * 测试连接 / Agent 升级四个只读或写操作入口。
+ * 「概览」标签：这台机器是谁、通不通、跑什么版本，以及主机信息 / 测试连接 / Agent 升级。
  *
  * 纯展示：数据与异步状态全部由页面持有（本页是唯一 owner），这里只渲染 props
  * 并派发事件。面板入口只在服务器绑定了 panel_credential_id 时出现（未绑定时后端
@@ -53,13 +38,6 @@ const props = defineProps<{
   canRead: boolean
   /** server.write：刷新主机信息 / 测试连接 / Agent 升级 */
   canWrite: boolean
-  metrics: MetricsResponse | null
-  metricsLoading: boolean
-  metricsError: string | null
-  metricsWindow: MetricsWindow
-  metricsStep: MetricsStep
-  metricsFrom: number
-  metricsTo: number
   hostBusy: boolean
   hostError: string | null
   hostNotice: string | null
@@ -73,9 +51,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'open-panel'): void
-  (event: 'metrics-window', value: MetricsWindow): void
-  (event: 'metrics-step', value: MetricsStep): void
-  (event: 'metrics-retry'): void
   (event: 'refresh-host'): void
   (event: 'test-connection'): void
   (event: 'agent-upgrade', payload: AgentUpgradeDraft): void
@@ -128,17 +103,6 @@ const groupLabels = computed(() => {
   if (props.server.group_names.length > 0) return props.server.group_names
   return props.server.group ? [props.server.group] : []
 })
-
-/* 指标曲线：series → 每条曲线的点串/最新值/y 轴标签（纯函数在 lib/server-metrics） */
-const charts = computed(() =>
-  buildMetricCharts(props.metrics?.series ?? [], props.metricsFrom, props.metricsTo),
-)
-const metricsEmpty = computed(
-  () => !props.metricsLoading && props.metricsError === null && charts.value.length === 0,
-)
-const rangeLabel = computed(
-  () => `${formatClockTime(props.metricsFrom)} – ${formatClockTime(props.metricsTo)}`,
-)
 
 /* 主机信息：一行一个字段，值统一走 format 层 */
 interface HostRow {
@@ -363,104 +327,6 @@ function submitUpgrade(): void {
           <dd class="ls-kv__value--mono" :title="server.id">{{ server.id }}</dd>
         </div>
       </dl>
-    </section>
-
-    <!-- 指标曲线：只读（server.read）；无权限时整块不渲染，页面也不会发请求 -->
-    <section v-if="canRead" class="ls-card ls-metrics" :aria-label="t('servers.detail.metrics.title')">
-      <header class="ls-card__head">
-        <div class="ls-card__heading">
-          <h2 class="ls-card__title">
-            <AppIcon name="pulse" size="1rem" />
-            {{ t('servers.detail.metrics.title') }}
-          </h2>
-          <p class="ls-card__subtitle">{{ t('servers.detail.metrics.hint') }}</p>
-        </div>
-        <div class="ls-card__actions">
-          <div class="ls-seg" role="group" :aria-label="t('servers.detail.metrics.step')">
-            <button
-              v-for="option in METRICS_STEPS"
-              :key="option.key"
-              type="button"
-              class="ls-seg__btn"
-              :class="{ 'ls-seg__btn--active': metricsStep === option.key }"
-              :aria-pressed="metricsStep === option.key"
-              @click="emit('metrics-step', option.key)"
-            >
-              {{ t(option.labelKey) }}
-            </button>
-          </div>
-          <div class="ls-seg" role="group" :aria-label="t('servers.detail.metrics.window')">
-            <button
-              v-for="option in METRICS_WINDOWS"
-              :key="option.key"
-              type="button"
-              class="ls-seg__btn"
-              :class="{ 'ls-seg__btn--active': metricsWindow === option.key }"
-              :aria-pressed="metricsWindow === option.key"
-              @click="emit('metrics-window', option.key)"
-            >
-              {{ t(option.labelKey) }}
-            </button>
-          </div>
-          <button
-            class="ls-btn ls-btn--small"
-            type="button"
-            :disabled="metricsLoading"
-            @click="emit('metrics-retry')"
-          >
-            <AppIcon name="refresh" size="0.875rem" />
-            {{ t('common.refresh') }}
-          </button>
-        </div>
-      </header>
-
-      <div v-if="metricsLoading" class="ls-metrics__state" role="status" aria-busy="true">
-        <span class="ls-spinner" aria-hidden="true" />
-        {{ t('servers.detail.metrics.loading') }}
-      </div>
-
-      <div v-else-if="metricsError" class="ls-metrics__state" role="alert">
-        <p class="ls-inline-error">{{ metricsError }}</p>
-        <button class="ls-btn ls-btn--small" type="button" @click="emit('metrics-retry')">
-          {{ t('common.retry') }}
-        </button>
-      </div>
-
-      <div v-else-if="metricsEmpty" class="ls-metrics__state">
-        <p class="ls-card__note">{{ t('servers.detail.metrics.empty') }}</p>
-        <p class="ls-card__note">{{ t('servers.detail.metrics.emptyHint') }}</p>
-      </div>
-
-      <template v-else>
-        <p class="ls-metrics__range" :title="rangeLabel">{{ rangeLabel }}</p>
-        <div class="ls-metrics__grid">
-          <article v-for="chart in charts" :key="chart.metric" class="ls-metrics__item">
-            <header class="ls-metrics__itemHead">
-              <span class="ls-metrics__name" :title="chart.label">{{ chart.label }}</span>
-              <span class="ls-metrics__value">{{ chart.latest }}</span>
-            </header>
-            <svg
-              class="ls-metrics__chart"
-              :viewBox="`0 0 ${METRICS_CHART_WIDTH} ${METRICS_CHART_HEIGHT}`"
-              preserveAspectRatio="none"
-              role="img"
-              :aria-label="`${chart.label} ${chart.latest}`"
-              focusable="false"
-            >
-              <line
-                class="ls-metrics__baseline"
-                x1="0"
-                :y1="METRICS_CHART_HEIGHT"
-                :x2="METRICS_CHART_WIDTH"
-                :y2="METRICS_CHART_HEIGHT"
-              />
-              <polyline v-if="chart.line" class="ls-metrics__line" :points="chart.line" />
-              <circle class="ls-metrics__dot" :cx="chart.lastX" :cy="chart.lastY" r="3" />
-            </svg>
-            <p class="ls-metrics__axis">{{ chart.minLabel }} – {{ chart.maxLabel }}</p>
-          </article>
-        </div>
-      </template>
     </section>
 
     <!-- 主机信息 + 刷新按钮（server.write） -->

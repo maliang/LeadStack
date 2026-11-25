@@ -66,14 +66,14 @@ export function formatUptime(seconds: number | null | undefined): string {
  */
 export function formatServerOs(server: {
   os: string | null
-  host_info: { os: string | null; os_version: string | null } | null
+  host_info: { os: string | null; os_name: string | null; os_version: string | null } | null
 }): string {
   const version = server.host_info?.os_version?.trim() ?? ''
   const os = (server.host_info?.os ?? server.os ?? '').trim()
+  const distro = server.host_info?.os_name?.trim() ?? ''
   const hasName = /[A-Za-z]/.test(version)
   if (version !== '' && hasName) return version
-  const osName =
-    os === 'linux' ? 'Linux' : os === 'darwin' ? 'macOS' : os === 'windows' ? 'Windows' : os
+  const osName = distro || (os === 'linux' ? 'Linux' : os === 'darwin' ? 'macOS' : os === 'windows' ? 'Windows' : os)
   if (osName !== '' && version !== '') return `${osName} ${version}`
   return version || osName || '—'
 }

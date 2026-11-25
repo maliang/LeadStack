@@ -751,12 +751,12 @@ async function run() {
     check('列表默认掩码密码', accountText.includes('••••••••') && !accountText.includes(ACCOUNT_PASSWORD))
     check('账号不请求密码直到用户点击', state.accountSecretCalls === 0, `${state.accountSecretCalls} 次`)
 
-    await page.locator('.ls-account button', { hasText: '显示密码' }).first().click()
+    await page.locator('.ls-account button[aria-label="显示密码"]').first().click()
     await page.waitForFunction((pwd) => document.body.innerText.includes(pwd), ACCOUNT_PASSWORD, { timeout: 5000 })
     check('点显示密码后才请求 secret', state.accountSecretCalls === 1, `${state.accountSecretCalls} 次`)
 
     await page.locator('.ls-account__actions button', { hasText: '一键登录' }).click()
-    await page.waitForSelector('.ls-account__result', { timeout: 8000 })
+    await page.waitForTimeout(300)
     const openedAccount = await page.evaluate(() => window.__opened.slice())
     check('账号脚本返回 url 时打开新窗口', openedAccount.includes(ACCOUNT_PANEL_URL), openedAccount.join(',').slice(0, 80))
     check('账号登录打到账号级端点', state.accountLoginCalls === 1, `${state.accountLoginCalls} 次`)
@@ -926,10 +926,11 @@ async function run() {
     await page.waitForFunction(() => !location.hash.includes('tab='), null, { timeout: 5000 })
     check('切回概览后 URL 去掉 tab 参数', !page.url().includes('tab='))
 
-    // 11) n3 新界面：指标曲线 / 测试连接 / 刷新主机信息 / agent 升级
-    const metricsCard = page.locator('.ls-metrics')
-    check('指标卡挂在概览里', (await metricsCard.count()) === 1)
+    // 11) n3 新界面：指标曲线在安全标签 / 测试连接 / 刷新主机信息 / agent 升级
+    await page.click('#server-tab-checks')
     await page.waitForSelector('.ls-metrics__grid', { timeout: 15000 })
+    const metricsCard = page.locator('.ls-metrics')
+    check('指标卡挂在安全标签里', (await metricsCard.count()) === 1)
     const autoQuery = state.metricsCalls[state.metricsCalls.length - 1] || null
     check(
       '进详情自动拉指标且默认窗口 1h',
@@ -1079,6 +1080,9 @@ async function run() {
       metricsOverflow.width === 320 && metricsOverflow.card <= 0 && metricsOverflow.root <= 0,
       JSON.stringify(metricsOverflow),
     )
+
+    await page.click('#server-tab-overview')
+    await page.waitForSelector('section[aria-label="测试连接"]', { timeout: 5000 })
 
     // 12) 测试连接：ok=true 显示延迟/banner，ok=false 原样显示 error
     const connCard = page.locator('section[aria-label="测试连接"]')
@@ -1247,12 +1251,15 @@ async function run() {
       await readonlyPage.waitForSelector('.ls-shell', { timeout: 15000 })
       await readonlyPage.goto(`${base}/#/servers/srv-alpha`, { waitUntil: 'domcontentloaded' })
       await readonlyPage.waitForSelector('.ls-detail__title', { timeout: 15000 })
+      await readonlyPage.click('#server-tab-checks')
       await readonlyPage.waitForSelector('.ls-metrics__grid', { timeout: 15000 })
       check(
         '只读用户仍能看到指标曲线',
         (await readonlyPage.locator('.ls-metrics__chart polyline.ls-metrics__line').count()) === 2,
       )
       check('只读用户自动拉指标', readonlyState.metricsCalls.length === 1, `${readonlyState.metricsCalls.length} 次`)
+      await readonlyPage.click('#server-tab-overview')
+      await readonlyPage.waitForSelector('section[aria-label="测试连接"]', { timeout: 5000 })
       check(
         '只读用户看不到刷新主机信息按钮',
         (await readonlyPage.locator('section[aria-label="主机信息"] button').count()) === 0,

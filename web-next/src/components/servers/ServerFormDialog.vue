@@ -116,7 +116,7 @@ function hydrate(server: Server): void {
   notes.value = server.notes ?? ''
   customRows.value = Object.entries(server.custom_fields ?? {}).map(([key, value]) => ({ key, value }))
   // 先按 group_ids 匹配；历史数据只有文本 group 时落到「自定义」。
-  form.groupChoice = server.group_ids[0] ?? (server.group ? CUSTOM_GROUP : '')
+  form.groupChoice = server.group_ids[0] ?? ''
   form.customGroup = server.group ?? ''
 }
 
@@ -148,7 +148,7 @@ async function loadGroups(): Promise<void> {
     serverGroups.value = await api.serverGroups()
     groupsState.value = 'ready'
     // 历史数据只有 group 文本：若与已管理分组同名，自动切到该分组，避免重复文本。
-    if (form.groupChoice === CUSTOM_GROUP && form.customGroup.trim() !== '') {
+    if (form.customGroup.trim() !== '') {
       const matched = serverGroups.value.find((group) => group.name === form.customGroup.trim())
       if (matched) form.groupChoice = matched.id
     }
@@ -259,23 +259,21 @@ function customFields(): Record<string, string> {
 }
 
 async function buildGroup(): Promise<{ group: string; groupIds: string[] }> {
-  // PATCH 语义：空串表示清除；null/缺省表示不改。所以这里统一返回空串而不是 null。
-  if (form.groupChoice === '') return { group: '', groupIds: [] }
-  if (form.groupChoice === CUSTOM_GROUP) {
-    const name = form.customGroup.trim()
-    if (name === '') return { group: '', groupIds: [] }
-    const existing = serverGroups.value.find((item) => item.name === name)
+  // 自定义输入优先：即使下拉里还选着旧分组，只要输入了新名称就自动创建/复用。
+  const customName = form.customGroup.trim()
+  if (customName !== '') {
+    const existing = serverGroups.value.find((item) => item.name === customName)
     if (existing) return { group: existing.name, groupIds: [existing.id] }
-    if (!canGroupWrite.value) return { group: name, groupIds: [] }
-    // 保存时自动把没有的分组名称落库，随后绑定 group_ids。
+    if (!canGroupWrite.value) return { group: customName, groupIds: [] }
     try {
-      const created = await api.createServerGroup({ name, description: '' })
+      const created = await api.createServerGroup({ name: customName, description: '' })
       serverGroups.value = [...serverGroups.value, created]
       return { group: created.name, groupIds: [created.id] }
     } catch {
-      return { group: name, groupIds: [] }
+      return { group: customName, groupIds: [] }
     }
   }
+  if (form.groupChoice === '') return { group: '', groupIds: [] }
   return { group: selectedGroupName.value || props.server?.group || '', groupIds: [form.groupChoice] }
 }
 
@@ -584,11 +582,8 @@ watch(
             <option v-for="group in serverGroups" :key="group.id" :value="group.id">
               {{ group.name }}（{{ group.member_count }}）
             </option>
-            <option :value="CUSTOM_GROUP">{{ t('server.form.groupCustom') }}</option>
-
           </AppSelect>
           <input
-            v-if="form.groupChoice === CUSTOM_GROUP"
             v-model="form.customGroup"
             class="ls-input"
             type="text"

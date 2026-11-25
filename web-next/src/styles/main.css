@@ -9451,3 +9451,78 @@ body.ls-scroll-locked {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.ls-metrics__grid--security {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ls-metrics__grid--security .ls-metrics__chart {
+  height: 8rem;
+}
+
+.ls-metrics__hover {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.ls-metrics__hover:hover {
+  fill: var(--ls-primary);
+  fill-opacity: 0.35;
+}
+
+@media (max-width: 760px) {
+  .ls-metrics__grid--security {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.ls-db-backups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ls-space-2);
+  margin-top: var(--ls-space-3);
+}
+
+.ls-db-backup {
+  padding: var(--ls-space-2) var(--ls-space-3);
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius-md);
+  background: var(--ls-surface);
+}
+
+.ls-db-backup__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+}
+
+.ls-db-backup__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-1);
+  margin-left: auto;
+}
+
+.ls-db-backup__files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ls-space-1);
+  margin: var(--ls-space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ls-table__sort {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ls-table__sort:hover {
+  color: var(--ls-text);
+}

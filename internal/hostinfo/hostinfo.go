@@ -24,6 +24,7 @@ import (
 type Info struct {
 	Hostname       string   `json:"hostname"`
 	OS             string   `json:"os"` // linux | darwin | windows
+	OSName         string   `json:"os_name"`
 	OSVersion      string   `json:"os_version"`
 	Kernel         string   `json:"kernel"`
 	Arch           string   `json:"arch"`
@@ -87,6 +88,7 @@ if [ "$os" = "darwin" ]; then
 else
   os_version=$(sh -c '. /etc/os-release 2>/dev/null; printf "%s" "${PRETTY_NAME:-$NAME}"' 2>/dev/null)
 fi
+emit os_name "$([ "$os" = "darwin" ] && sw_vers -productName 2>/dev/null || sh -c '. /etc/os-release 2>/dev/null; printf "%s" "${NAME:-}"' 2>/dev/null)"
 emit os_version "$os_version"
 
 mem_total=""
@@ -196,6 +198,8 @@ func parseInfo(out string) Info {
 			info.Hostname = value
 		case "os":
 			info.OS = value
+		case "os_name":
+			info.OSName = value
 		case "os_version":
 			info.OSVersion = value
 		case "kernel":
@@ -273,6 +277,7 @@ func (i Info) ToProtocol() protocol.HostInfo {
 	return protocol.HostInfo{
 		Hostname:       i.Hostname,
 		OS:             i.OS,
+		OSName:         i.OSName,
 		OSVersion:      i.OSVersion,
 		Kernel:         i.Kernel,
 		Arch:           i.Arch,

@@ -383,6 +383,9 @@ func run() error {
 	// 在线 agent 版本巡检：默认每 6 小时自动升级到最新 release。
 	go srv.RunAgentAutoUpgrade(ctx)
 
+	// 服务器 MySQL/MariaDB 自动备份调度。
+	go srv.RunDatabaseBackupScheduler(ctx)
+
 	// 告警评估循环：服务器上下线巡检 + 指标阈值评估。
 	alertCtx, cancelAlerts := context.WithCancel(ctx)
 	defer cancelAlerts()

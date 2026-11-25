@@ -231,6 +231,8 @@ export interface MetricChart {
   maxLabel: string
   /** 该曲线的值域，模板里不用再算。 */
   bounds: ValueBounds
+  /** 每个点投影后的坐标，供 SVG hover 点显示时间/数值。 */
+  markers: { x: number; y: number; ts: number; value: number }[]
 }
 
 /**
@@ -276,6 +278,10 @@ export function buildMetricCharts(
       minLabel: formatMetricAxisValue(item.metric, bounds.min),
       maxLabel: formatMetricAxisValue(item.metric, bounds.max),
       bounds,
+      markers: plotted.map((point) => {
+        const pos = projectPoint(point.ts, point.value, from, to, bounds, width, height)
+        return { x: pos.x, y: pos.y, ts: point.ts, value: point.value }
+      }),
     })
   }
   return charts
