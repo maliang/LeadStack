@@ -14,6 +14,45 @@ const serverColumns = `id, name, host, port, mode, tags, status, last_seen_at,
 	agent_version, os, arch, kernel, created_at, credential_id, "group", host_key_policy, last_error,
 	panel_credential_id, login_script, notes, custom_fields`
 
+// serverListColumns 是列表页专用列：不读 notes/custom_fields 这类大文本，
+// 避免 /servers 每次把档案内容整包拉出来。
+const serverListColumns = `id, name, host, port, mode, tags, status, last_seen_at,
+	agent_version, os, arch, kernel, created_at, credential_id, "group", host_key_policy, last_error,
+	panel_credential_id, login_script`
+
+// scanServerList 与 scanServer 对齐，但少读 notes/custom_fields。
+func scanServerList(row interface{ Scan(...any) error }) (*Server, error) {
+	var (
+		srv                                                                Server
+		lastSeen                                                           sql.NullInt64
+		ver, osName, arch, kernel, credID, group, policy, lastErr, panelID sql.NullString
+	)
+	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.Mode, &srv.TagsJSON,
+		&srv.Status, &lastSeen, &ver, &osName, &arch, &kernel, &srv.CreatedAt,
+		&credID, &group, &policy, &lastErr, &panelID, &srv.LoginScript)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("查询服务器: %w", ErrNotFound)
+		}
+		return nil, fmt.Errorf("扫描服务器列表记录: %w", err)
+	}
+	srv.LastSeenAt = intPtr(lastSeen)
+	srv.AgentVersion = strPtr(ver)
+	srv.OS = strPtr(osName)
+	srv.Arch = strPtr(arch)
+	srv.Kernel = strPtr(kernel)
+	srv.CredentialID = strPtr(credID)
+	srv.Group = strPtr(group)
+	srv.LastError = strPtr(lastErr)
+	srv.PanelCredentialID = strPtr(panelID)
+	srv.HostKeyPolicy = HostKeyPolicyAcceptNew
+	if policy.Valid && policy.String != "" {
+		srv.HostKeyPolicy = policy.String
+	}
+	srv.CustomFieldsJSON = "{}"
+	return &srv, nil
+}
+
 // CreateServer 插入一台服务器。调用方负责填好 ID/CreatedAt。
 func (s *Store) CreateServer(ctx context.Context, srv *Server) error {
 	if srv == nil {
@@ -361,9 +400,13 @@ func (s *Store) LatestMetrics(ctx context.Context, serverIDs []string) (map[stri
 
 	query := `SELECT m.server_id, m.metric, m.value
 	            FROM metrics_samples m
-	           WHERE m.server_id IN (` + placeholders + `)
-	             AND m.ts = (SELECT MAX(ts) FROM metrics_samples
-	                          WHERE server_id = m.server_id AND metric = m.metric)`
+	            JOIN (SELECT server_id, metric, MAX(ts) AS max_ts
+	                    FROM metrics_samples
+	                   WHERE server_id IN (` + placeholders + `)
+	                   GROUP BY server_id, metric) latest
+	              ON latest.server_id = m.server_id
+	             AND latest.metric = m.metric
+	             AND latest.max_ts = m.ts`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("查询最新指标: %w", err)

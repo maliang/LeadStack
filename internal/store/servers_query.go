@@ -23,7 +23,7 @@ type ServerFilter struct {
 // group/mode 在 SQL 层过滤；tag（JSON 数组）与 status（需按模式实时推导）在 Go 层过滤，
 // 保证过滤口径与接口返回的状态完全一致。
 func (s *Store) ListServersFiltered(ctx context.Context, f ServerFilter, nowMS int64) ([]Server, error) {
-	query := `SELECT ` + serverColumns + ` FROM servers`
+	query := `SELECT ` + serverListColumns + ` FROM servers`
 	where := make([]string, 0, 2)
 	args := make([]any, 0, 2)
 	if strings.TrimSpace(f.Mode) != "" {
@@ -47,7 +47,7 @@ func (s *Store) ListServersFiltered(ctx context.Context, f ServerFilter, nowMS i
 
 	out := make([]Server, 0, 8)
 	for rows.Next() {
-		srv, err := scanServer(rows)
+		srv, err := scanServerList(rows)
 		if err != nil {
 			return nil, err
 		}
