@@ -417,7 +417,7 @@ async function handleFormSaved(saved: Server): Promise<void> {
       @reset="resetFilters"
     />
 
-    <div v-if="canWrite || tags.length > 0" class="ls-servers__selection">
+    <div v-if="tags.length > 0" class="ls-servers__selection">
       <div v-if="tags.length > 0" class="ls-servers__tag-filters" role="group" :aria-label="t('servers.filterByTag')">
         <button
           v-for="tag in tags"
