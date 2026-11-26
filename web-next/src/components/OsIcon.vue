@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { OS_ICON_PATHS } from '@/lib/os-icons'
 
 /**
- * 系统图标：直接使用 BaoTa 的 svgtofont 系统字形（Ubuntu/Debian/CentOS/Fedora/Linux/Windows）。
- * macOS 没有对应字形，保留一个简洁的 Apple 轮廓；其它 Linux 发行版使用通用 Linux 字形。
+ * 系统图标：使用 BaoTa svgtofont 字形提取并归一化后的路径。
+ * 所有 1000×1000 画布统一居中，避免字体 glyph 自带边距导致大小/基线不一致。
  */
 const props = withDefaults(
   defineProps<{
@@ -32,11 +33,14 @@ const kind = computed(() => {
     :style="{ fontSize: size }"
     aria-hidden="true"
   >
-    <svg v-if="kind === 'macos'" viewBox="0 0 24 24" focusable="false">
+    <svg v-if="kind === 'macos'" viewBox="3.5 3.5 15 15" focusable="false">
       <path
         d="M16.8 13.2c0 2.1-1.6 3.9-3.6 3.9-1 0-1.8-.5-2.7-.5s-1.7.5-2.7.5c-1.9 0-3.5-1.8-3.5-3.9 0-2.7 2.2-4.8 4.7-4.8 1 0 1.9.5 2.5.5.6 0 1.7-.6 2.8-.5.9.1 1.8.6 2.4 1.4-1.9 1.2-1.7 3.3-.1 4.4-.2.5-.4 1-.7 1.4z M12.6 6.3c.5-.7.9-1.6.8-2.5-.8 0-1.7.5-2.2 1.2-.4.6-.8 1.5-.7 2.4.9.1 1.7-.4 2.1-1.1z"
         fill="currentColor"
       />
+    </svg>
+    <svg v-else viewBox="0 0 1000 1000" focusable="false">
+      <path :d="OS_ICON_PATHS[kind]" fill="currentColor" />
     </svg>
   </span>
 </template>

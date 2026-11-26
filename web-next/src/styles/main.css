@@ -9669,6 +9669,7 @@ body.ls-scroll-locked {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
+  margin-left: 0;
   color: var(--ls-text-muted);
   font: 500 var(--ls-text-xs) / 1.35 var(--ls-font-sans);
 }
@@ -9751,15 +9752,7 @@ body.ls-scroll-locked {
   height: 11rem;
 }
 
-/* 系统图标字形来自 BaoTa svgtofont（Ubuntu/Debian/CentOS/Fedora/Linux/Windows）。 */
-@font-face {
-  font-family: 'ls-os-icons';
-  src: url('../assets/fonts/os-icons.woff2') format('woff2');
-  font-style: normal;
-  font-weight: 400;
-  font-display: block;
-}
-
+/* 系统图标：由 BaoTa svgtofont 字形提取的归一化路径。 */
 .ls-os-glyph {
   display: inline-flex;
   align-items: center;
@@ -9768,15 +9761,6 @@ body.ls-scroll-locked {
   height: 1em;
   flex: none;
   color: var(--ls-text);
-  font-family: 'ls-os-icons';
-  font-style: normal;
-  font-weight: 400;
-  line-height: 1;
-  speak: never;
-}
-
-.ls-os-glyph::before {
-  display: block;
   line-height: 1;
 }
 
@@ -9788,14 +9772,8 @@ body.ls-scroll-locked {
 .ls-os-glyph--macos { color: #4b5563; }
 .ls-os-glyph--linux { color: #374151; }
 
-.ls-os-glyph--ubuntu::before { content: '\ea93'; }
-.ls-os-glyph--debian::before { content: '\ea6f'; }
-.ls-os-glyph--centos::before { content: '\ea6c'; }
-.ls-os-glyph--fedora::before { content: '\ea73'; }
-.ls-os-glyph--linux::before { content: '\ea79'; }
-.ls-os-glyph--windows::before { content: '\ea97'; }
-
 .ls-os-glyph svg {
+  display: block;
   width: 100%;
   height: 100%;
 }
