@@ -9772,10 +9772,12 @@ body.ls-scroll-locked {
 .ls-os-glyph--macos { color: #4b5563; }
 .ls-os-glyph--linux { color: #374151; }
 
-.ls-os-glyph svg {
+.ls-os-glyph svg,
+.ls-os-glyph__img {
   display: block;
   width: 100%;
   height: 100%;
+  object-fit: contain;
 }
 
 /* 列表行：BaoTa 风格的系统图标，高度覆盖名称与系统版本两行。 */
@@ -9792,14 +9794,15 @@ body.ls-scroll-locked {
 .ls-srv-card__head {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
+  align-items: flex-start;
   gap: var(--ls-space-3);
   min-width: 0;
 }
 
 .ls-srv-card__os-logo {
-  width: 3rem;
-  height: 3rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-top: 0.1rem;
 }
 
 .ls-srv-card__identity {
@@ -9836,8 +9839,7 @@ body.ls-scroll-locked {
 }
 
 /* 两行布局：第一行名称，第二行系统名称/版本 + IP；logo 只占两行高度。 */
-.ls-srv-row__os-logo,
-.ls-srv-card__os-logo {
+.ls-srv-row__os-logo {
   width: 2.5rem;
   height: 2.5rem;
 }

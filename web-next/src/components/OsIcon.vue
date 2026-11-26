@@ -33,7 +33,8 @@ const kind = computed(() => {
     :style="{ fontSize: size }"
     aria-hidden="true"
   >
-    <svg v-if="kind === 'macos'" viewBox="3.5 3.5 15 15" focusable="false">
+    <img v-if="kind === 'centos'" class="ls-os-glyph__img" src="/os-icons/centos.png" alt="" />
+    <svg v-else-if="kind === 'macos'" viewBox="3.5 3.5 15 15" focusable="false">
       <path
         d="M16.8 13.2c0 2.1-1.6 3.9-3.6 3.9-1 0-1.8-.5-2.7-.5s-1.7.5-2.7.5c-1.9 0-3.5-1.8-3.5-3.9 0-2.7 2.2-4.8 4.7-4.8 1 0 1.9.5 2.5.5.6 0 1.7-.6 2.8-.5.9.1 1.8.6 2.4 1.4-1.9 1.2-1.7 3.3-.1 4.4-.2.5-.4 1-.7 1.4z M12.6 6.3c.5-.7.9-1.6.8-2.5-.8 0-1.7.5-2.2 1.2-.4.6-.8 1.5-.7 2.4.9.1 1.7-.4 2.1-1.1z"
         fill="currentColor"
