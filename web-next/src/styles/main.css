@@ -9680,8 +9680,8 @@ body.ls-scroll-locked {
 
 @media (max-width: 639.98px) {
   .ls-srv-row__os-logo {
-    width: 2.25rem;
-    height: 2.25rem;
+    width: 2.5rem;
+    height: 2.5rem;
   }
 }
 
@@ -9800,12 +9800,12 @@ body.ls-scroll-locked {
   height: 100%;
 }
 
-/* 列表行：BaoTa 风格的系统图标，紧凑贴左侧。 */
+/* 列表行：BaoTa 风格的系统图标，高度覆盖名称与系统版本两行。 */
 .ls-srv-row__identity {
-  gap: var(--ls-space-2);
+  gap: var(--ls-space-3);
 }
 
 .ls-srv-row__os-logo {
-  width: 2rem;
-  height: 2rem;
+  width: 3rem;
+  height: 3rem;
 }
