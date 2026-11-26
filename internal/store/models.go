@@ -332,6 +332,10 @@ type App struct {
 	KeepPaths       *string `json:"keep_paths"`
 	HealthcheckPort *int    `json:"healthcheck_port"`
 	RollbackScript  *string `json:"rollback_script"`
+	// 应用内联部署方案：脚本模式命令，或 release/compose/systemd 的默认模板内容。
+	DeployScript          *string `json:"deploy_script"`
+	DeployTemplateKind    *string `json:"deploy_template_kind"`
+	DeployTemplateContent *string `json:"deploy_template_content"`
 }
 
 // DeployTemplate 是部署模板（版本化文本，发布时冻结快照）。

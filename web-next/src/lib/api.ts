@@ -918,6 +918,12 @@ export interface AppItem {
   init_script: string | null
   /** 失败/健康检查不通过时执行的回滚脚本（script 模式） */
   rollback_script: string | null
+  /** 自定义脚本模式的完整更新脚本（内联方案） */
+  deploy_script?: string | null
+  /** 内联制品/Compose/Systemd 方案类型 */
+  deploy_template_kind?: TemplateKind | string | null
+  /** 内联制品/Compose/Systemd 方案内容 */
+  deploy_template_content?: string | null
   /** 环境变量 JSON 字符串 */
   env_json: string | null
   /** inplace 同步时保留的相对路径（逗号分隔） */
@@ -1026,6 +1032,9 @@ export interface CreateAppPayload {
   restart_cmd?: string | null
   init_script?: string | null
   rollback_script?: string | null
+  deploy_script?: string | null
+  deploy_template_kind?: TemplateKind | null
+  deploy_template_content?: string | null
   env_json?: string | null
   keep_paths?: string | null
   healthcheck_port?: number | null
@@ -2141,6 +2150,9 @@ export function normalizeApp(input: unknown): AppItem {
     restart_cmd: toText(raw.restart_cmd),
     init_script: typeof raw.init_script === 'string' ? raw.init_script : null,
     rollback_script: typeof raw.rollback_script === 'string' ? raw.rollback_script : null,
+    deploy_script: typeof raw.deploy_script === 'string' ? raw.deploy_script : null,
+    deploy_template_kind: toText(raw.deploy_template_kind),
+    deploy_template_content: typeof raw.deploy_template_content === 'string' ? raw.deploy_template_content : null,
     env_json: typeof raw.env_json === 'string' ? raw.env_json : null,
     keep_paths: toText(raw.keep_paths),
     healthcheck_port: toNumber(raw.healthcheck_port),

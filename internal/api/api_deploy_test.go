@@ -1269,3 +1269,54 @@ func TestCreateReleaseRejectsCanaryCountAboveServers(t *testing.T) {
 		t.Fatalf("message 应指名 canary_count，实际 %q", message)
 	}
 }
+
+// TestCreateReleaseUsesInlineRecipe 验证新应用的内联部署方案：
+// 不传 template_id 时使用应用里的脚本/启动方案，旧应用仍要求显式模板。
+func TestCreateReleaseUsesInlineRecipe(t *testing.T) {
+	env := newTestEnv(t)
+	jwt := env.login()
+	srv := env.createServerVia(jwt, map[string]any{"name": "inline", "host": "10.41.8.1"})
+
+	status, raw := env.request(http.MethodPost, "/api/v1/apps", jwt, map[string]any{
+		"name": "inline-app", "slug": "inline-app",
+		"deploy_mode": "script", "root": "/srv/inline-app",
+		"deploy_script": "#!/bin/sh\nset -eu\ncd /srv/inline-app\nsystemctl restart inline\n",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("创建内联应用失败: %d body=%s", status, raw)
+	}
+	var createdApp struct {
+		Data appPayload `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &createdApp); err != nil {
+		t.Fatalf("解析应用: %v", err)
+	}
+	if createdApp.Data.DeployScript == nil || *createdApp.Data.DeployScript == "" {
+		t.Fatalf("应用应回显内联脚本: %+v", createdApp.Data)
+	}
+
+	status, raw = env.request(http.MethodPost, "/api/v1/releases", jwt, map[string]any{
+		"app_id": createdApp.Data.ID, "version": "1.0.0", "server_ids": []string{srv.ID},
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("内联方案发布失败: %d body=%s", status, raw)
+	}
+	var created struct {
+		Data createReleaseResponse `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &created); err != nil {
+		t.Fatalf("解析发布: %v", err)
+	}
+	if created.Data.Release.TemplateID != "" || strings.TrimSpace(created.Data.Release.TemplateSnapshot) == "" {
+		t.Fatalf("内联发布应使用空 template_id + 冻结脚本快照: %+v", created.Data.Release)
+	}
+
+	// 旧应用没有任何内联方案时必须继续要求 template_id。
+	oldApp := env.createAppVia(jwt, "legacy", "legacy-app")
+	status, _ = env.request(http.MethodPost, "/api/v1/releases", jwt, map[string]any{
+		"app_id": oldApp.ID, "version": "1.0.0", "server_ids": []string{srv.ID},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("旧应用无内联方案时应要求模板，实际 %d", status)
+	}
+}

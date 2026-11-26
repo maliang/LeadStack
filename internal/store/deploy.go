@@ -17,14 +17,16 @@ func (s *Store) CreateApp(ctx context.Context, app *App) error {
 	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO apps (id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
-		                   deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                   deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script,
+		                   deploy_script, deploy_template_kind, deploy_template_content)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		app.ID, app.Name, app.Slug, nullableStr(app.Root), nullableStr(app.Description), app.CreatedAt,
 		defaultProvider(app.Provider), nullableStr(app.SiteName), nullableIntFromPtr(app.SitePort),
 		nullableStr(app.SiteType), nullableStr(app.HealthcheckPath),
 		defaultDeployMode(app.DeployMode), nullableStr(app.TargetDir), nullableStr(app.RestartCmd),
 		nullableStr(app.InitScript), nullableStr(app.EnvJSON), nullableStr(app.KeepPaths),
-		nullableIntFromPtr(app.HealthcheckPort), nullableStr(app.RollbackScript))
+		nullableIntFromPtr(app.HealthcheckPort), nullableStr(app.RollbackScript),
+		nullableStr(app.DeployScript), nullableStr(app.DeployTemplateKind), nullableStr(app.DeployTemplateContent))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return fmt.Errorf("应用 %s 已存在（slug 必须唯一）: %w", app.Slug, ErrConflict)
@@ -38,21 +40,21 @@ func (s *Store) CreateApp(ctx context.Context, app *App) error {
 func (s *Store) GetApp(ctx context.Context, id string) (*App, error) {
 	return scanApp(s.db.QueryRowContext(ctx,
 		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
-		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script FROM apps WHERE id = ?`, id))
+		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script, deploy_script, deploy_template_kind, deploy_template_content FROM apps WHERE id = ?`, id))
 }
 
 // GetAppBySlug 按 slug 查询应用。
 func (s *Store) GetAppBySlug(ctx context.Context, slug string) (*App, error) {
 	return scanApp(s.db.QueryRowContext(ctx,
 		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
-		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script FROM apps WHERE slug = ?`, slug))
+		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script, deploy_script, deploy_template_kind, deploy_template_content FROM apps WHERE slug = ?`, slug))
 }
 
 // ListApps 返回全部应用（按创建时间倒序）。
 func (s *Store) ListApps(ctx context.Context) ([]App, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, slug, root, description, created_at, provider, site_name, site_port, site_type, healthcheck_path,
-		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script FROM apps ORDER BY created_at DESC, id DESC`)
+		deploy_mode, target_dir, restart_cmd, init_script, env_json, keep_paths, healthcheck_port, rollback_script, deploy_script, deploy_template_kind, deploy_template_content FROM apps ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询应用列表: %w", err)
 	}
@@ -149,25 +151,27 @@ func (s *Store) CountAppReleases(ctx context.Context, appID string) (int, error)
 // scanApp 把一行映射为 App。
 func scanApp(row interface{ Scan(...any) error }) (*App, error) {
 	var (
-		app        App
-		root, desc sql.NullString
-		provider   sql.NullString
-		siteName   sql.NullString
-		sitePort   sql.NullInt64
-		siteType   sql.NullString
-		health     sql.NullString
-		deployMode sql.NullString
-		targetDir  sql.NullString
-		restartCmd sql.NullString
-		initScript sql.NullString
-		envJSON    sql.NullString
-		keepPaths  sql.NullString
-		healthPort sql.NullInt64
-		rbScript   sql.NullString
+		app                                                     App
+		root, desc                                              sql.NullString
+		provider                                                sql.NullString
+		siteName                                                sql.NullString
+		sitePort                                                sql.NullInt64
+		siteType                                                sql.NullString
+		health                                                  sql.NullString
+		deployMode                                              sql.NullString
+		targetDir                                               sql.NullString
+		restartCmd                                              sql.NullString
+		initScript                                              sql.NullString
+		envJSON                                                 sql.NullString
+		keepPaths                                               sql.NullString
+		healthPort                                              sql.NullInt64
+		rbScript                                                sql.NullString
+		deployScript, deployTemplateKind, deployTemplateContent sql.NullString
 	)
 	err := row.Scan(&app.ID, &app.Name, &app.Slug, &root, &desc, &app.CreatedAt,
 		&provider, &siteName, &sitePort, &siteType, &health,
-		&deployMode, &targetDir, &restartCmd, &initScript, &envJSON, &keepPaths, &healthPort, &rbScript)
+		&deployMode, &targetDir, &restartCmd, &initScript, &envJSON, &keepPaths, &healthPort, &rbScript,
+		&deployScript, &deployTemplateKind, &deployTemplateContent)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("查询应用: %w", ErrNotFound)
@@ -201,6 +205,9 @@ func scanApp(row interface{ Scan(...any) error }) (*App, error) {
 		app.HealthcheckPort = &v
 	}
 	app.RollbackScript = strPtr(rbScript)
+	app.DeployScript = strPtr(deployScript)
+	app.DeployTemplateKind = strPtr(deployTemplateKind)
+	app.DeployTemplateContent = strPtr(deployTemplateContent)
 	return &app, nil
 }
 
@@ -327,6 +334,40 @@ func (s *Store) UpdateAppDeploy(ctx context.Context, id string,
 	affected, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("更新应用 %s 后读取影响行数: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("更新应用 %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// UpdateAppRecipe 更新应用内联部署方案（PATCH 语义，nil 表示不改）。
+func (s *Store) UpdateAppRecipe(ctx context.Context, id string, script, kind, content *string) error {
+	sets := make([]string, 0, 3)
+	args := make([]any, 0, 4)
+	if script != nil {
+		sets = append(sets, "deploy_script = ?")
+		args = append(args, nullableStr(emptyToNil(*script)))
+	}
+	if kind != nil {
+		sets = append(sets, "deploy_template_kind = ?")
+		args = append(args, nullableStr(emptyToNil(*kind)))
+	}
+	if content != nil {
+		sets = append(sets, "deploy_template_content = ?")
+		args = append(args, nullableStr(emptyToNil(*content)))
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	args = append(args, id)
+	res, err := s.db.ExecContext(ctx, `UPDATE apps SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
+	if err != nil {
+		return fmt.Errorf("更新应用 %s 部署方案: %w", id, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("更新应用 %s 部署方案后读取影响行数: %w", id, err)
 	}
 	if affected == 0 {
 		return fmt.Errorf("更新应用 %s: %w", id, ErrNotFound)

@@ -9883,3 +9883,11 @@ body.ls-scroll-locked {
 .ls-srv-card__identity .ls-srv-card__mode {
   margin-left: auto;
 }
+
+.ls-mode-picker--wrap {
+  flex-wrap: wrap;
+}
+
+.ls-mode-picker--wrap .ls-mode-picker__item {
+  flex: 1 1 10rem;
+}

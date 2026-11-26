@@ -5,6 +5,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import { api, type AppItem, type DeployTemplate, type ReleasePreview, type Server } from '@/lib/api'
 import { errorMessage } from '@/lib/errors'
 import {
+  appHasInlineRecipe,
   canaryMaxFor,
   emptyReleaseForm,
   releasePayloadFromForm,
@@ -42,6 +43,9 @@ const form = reactive<ReleaseFormValues>(emptyReleaseForm())
 const errors = ref<ReleaseFormErrors>({})
 const attempted = ref(false)
 
+const selectedApp = computed(() => props.apps.find((app) => app.id === form.appId) ?? null)
+const useInlineRecipe = computed(() => Boolean(selectedApp.value && appHasInlineRecipe(selectedApp.value)))
+const isScriptOnly = computed(() => selectedApp.value?.deploy_mode === 'script')
 const preview = ref<ReleasePreview | null>(null)
 const previewing = ref(false)
 const previewError = ref<string | null>(null)
@@ -50,11 +54,18 @@ const artifactUploading = ref(false)
 const artifactError = ref<string | null>(null)
 const artifactName = ref('')
 
+function autoVersion(): string {
+  const now = new Date()
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+}
+
 watch(
   () => props.open,
   (open) => {
     if (!open) return
     Object.assign(form, emptyReleaseForm(props.initialAppId))
+    form.version = autoVersion()
     errors.value = {}
     attempted.value = false
     preview.value = null
@@ -99,6 +110,14 @@ async function onArtifactFile(event: Event): Promise<void> {
   }
 }
 
+function formErrors(): ReturnType<typeof validateReleaseForm> {
+  const found = validateReleaseForm(form)
+  if (!useInlineRecipe.value && form.templateId.trim() === '') {
+    found.templateId = 'apps.releaseForm.templateRequired'
+  }
+  return found
+}
+
 function previewPayload(): { app_id: string; template_id: string; version: string; artifact_id?: string; server_ids: string[] } {
   return {
     app_id: form.appId.trim(),
@@ -111,7 +130,7 @@ function previewPayload(): { app_id: string; template_id: string; version: strin
 
 async function runPreview(): Promise<void> {
   previewError.value = null
-  const found = validateReleaseForm(form)
+  const found = formErrors()
   errors.value = found
   attempted.value = true
   if (found.appId || found.version || found.templateId || found.serverIds) return
@@ -128,7 +147,7 @@ async function runPreview(): Promise<void> {
 
 function submit(): void {
   attempted.value = true
-  const found = validateReleaseForm(form)
+  const found = formErrors()
   errors.value = found
   if (Object.keys(found).length > 0) return
   emit('submit', releasePayloadFromForm(form))
@@ -158,7 +177,11 @@ function submit(): void {
           <input id="release-form-version" v-model="form.version" class="ls-input" type="text" autocomplete="off" />
           <span v-if="errors.version" class="ls-field__error" role="alert">{{ t(errors.version) }}</span>
         </label>
-        <label class="ls-field" for="release-form-template">
+        <div v-if="useInlineRecipe" class="ls-field">
+          <span class="ls-field__label">{{ t('apps.releaseForm.template') }}</span>
+          <p class="ls-field__hint">{{ t('apps.releaseForm.inlineRecipeHint') }}</p>
+        </div>
+        <label v-else class="ls-field" for="release-form-template">
           <span class="ls-field__label">{{ t('apps.releaseForm.template') }}</span>
           <AppSelect id="release-form-template" v-model="form.templateId" class="ls-input">
             <option value="">{{ t('apps.releaseForm.templatePlaceholder') }}</option>
@@ -169,7 +192,7 @@ function submit(): void {
           <span v-if="errors.templateId" class="ls-field__error" role="alert">{{ t(errors.templateId) }}</span>
         </label>
       </div>
-      <label class="ls-field" for="release-form-artifact">
+      <label v-if="!isScriptOnly" class="ls-field" for="release-form-artifact">
         <span class="ls-field__label">{{ t('apps.releaseForm.artifact') }}</span>
         <div class="ls-inline-actions">
           <input id="release-form-artifact" v-model="form.artifactId" class="ls-input" type="text" autocomplete="off" />

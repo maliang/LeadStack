@@ -8,7 +8,7 @@ import { useApps } from '@/composables/useApps'
 import { useCan } from '@/composables/useCan'
 import { useI18n } from '@/i18n'
 import type { AppItem, CreateAppPayload } from '@/lib/api'
-import { deployModeLabelKey, filterApps, releaseStatusLabelKey, releaseStatusTone } from '@/lib/deploy-domain'
+import { appScenario, appScenarioLabelKey, filterApps, releaseStatusLabelKey, releaseStatusTone } from '@/lib/deploy-domain'
 import { formatRelativeTime } from '@/lib/format'
 
 /**
@@ -179,7 +179,7 @@ const deleteDetails = computed(() => {
               <span class="ls-deploy__slug">{{ app.slug }}</span>
             </td>
             <td class="ls-deploy__mono" :title="app.root ?? ''">{{ app.root || t('common.na') }}</td>
-            <td>{{ t(deployModeLabelKey(app.deploy_mode)) }}</td>
+            <td>{{ t(appScenarioLabelKey(appScenario(app))) }}</td>
             <td>
               <span
                 v-if="app.last_release"
@@ -196,6 +196,12 @@ const deleteDetails = computed(() => {
             <td class="ls-deploy__num">{{ app.server_count ?? 0 }}</td>
             <td class="ls-deploy__actions-col">
               <div v-if="canWrite" class="ls-deploy__row-actions">
+                <RouterLink
+                  class="ls-btn ls-btn--small ls-btn--primary"
+                  :to="{ name: 'releases', query: { app: app.id } }"
+                >
+                  {{ t('apps.deployNow') }}
+                </RouterLink>
                 <button
                   type="button"
                   class="ls-btn ls-btn--small"

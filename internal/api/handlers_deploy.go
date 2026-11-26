@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,14 +83,17 @@ type appPayload struct {
 	SiteType        *string `json:"site_type"`
 	HealthcheckPath *string `json:"healthcheck_path"`
 
-	DeployMode      string  `json:"deploy_mode"`
-	TargetDir       *string `json:"target_dir"`
-	RestartCmd      *string `json:"restart_cmd"`
-	InitScript      *string `json:"init_script"`
-	EnvJSON         *string `json:"env_json"`
-	KeepPaths       *string `json:"keep_paths"`
-	HealthcheckPort *int    `json:"healthcheck_port"`
-	RollbackScript  *string `json:"rollback_script"`
+	DeployMode            string  `json:"deploy_mode"`
+	TargetDir             *string `json:"target_dir"`
+	RestartCmd            *string `json:"restart_cmd"`
+	InitScript            *string `json:"init_script"`
+	EnvJSON               *string `json:"env_json"`
+	KeepPaths             *string `json:"keep_paths"`
+	HealthcheckPort       *int    `json:"healthcheck_port"`
+	RollbackScript        *string `json:"rollback_script"`
+	DeployScript          *string `json:"deploy_script"`
+	DeployTemplateKind    *string `json:"deploy_template_kind"`
+	DeployTemplateContent *string `json:"deploy_template_content"`
 
 	ReleaseCount int `json:"release_count"`
 	// EnvKeys 是 env_json 的键名（字母序，最多 maxAppEnvKeys 个；**始终出现**）。
@@ -134,33 +138,38 @@ func envKeysOf(raw *string) ([]string, bool) {
 func visibleApp(app store.App, full bool, releaseCount int) appPayload {
 	keys, truncated := envKeysOf(app.EnvJSON)
 	payload := appPayload{
-		ID:               app.ID,
-		Name:             app.Name,
-		Slug:             app.Slug,
-		Root:             app.Root,
-		Description:      app.Description,
-		CreatedAt:        app.CreatedAt,
-		Provider:         app.Provider,
-		SiteName:         app.SiteName,
-		SitePort:         app.SitePort,
-		SiteType:         app.SiteType,
-		HealthcheckPath:  app.HealthcheckPath,
-		DeployMode:       app.DeployMode,
-		TargetDir:        app.TargetDir,
-		RestartCmd:       app.RestartCmd,
-		InitScript:       app.InitScript,
-		EnvJSON:          app.EnvJSON,
-		KeepPaths:        app.KeepPaths,
-		HealthcheckPort:  app.HealthcheckPort,
-		RollbackScript:   app.RollbackScript,
-		ReleaseCount:     releaseCount,
-		EnvKeys:          keys,
-		EnvKeysTruncated: truncated,
+		ID:                    app.ID,
+		Name:                  app.Name,
+		Slug:                  app.Slug,
+		Root:                  app.Root,
+		Description:           app.Description,
+		CreatedAt:             app.CreatedAt,
+		Provider:              app.Provider,
+		SiteName:              app.SiteName,
+		SitePort:              app.SitePort,
+		SiteType:              app.SiteType,
+		HealthcheckPath:       app.HealthcheckPath,
+		DeployMode:            app.DeployMode,
+		TargetDir:             app.TargetDir,
+		RestartCmd:            app.RestartCmd,
+		InitScript:            app.InitScript,
+		EnvJSON:               app.EnvJSON,
+		KeepPaths:             app.KeepPaths,
+		HealthcheckPort:       app.HealthcheckPort,
+		RollbackScript:        app.RollbackScript,
+		DeployScript:          app.DeployScript,
+		DeployTemplateKind:    app.DeployTemplateKind,
+		DeployTemplateContent: app.DeployTemplateContent,
+		ReleaseCount:          releaseCount,
+		EnvKeys:               keys,
+		EnvKeysTruncated:      truncated,
 	}
 	if !full {
 		payload.EnvJSON = nil
 		payload.InitScript = nil
 		payload.RestartCmd = nil
+		payload.DeployScript = nil
+		payload.DeployTemplateContent = nil
 		payload.Redacted = true
 	}
 	return payload
@@ -169,6 +178,79 @@ func visibleApp(app store.App, full bool, releaseCount int) appPayload {
 // newAppPayload 按调用者可见性构造应用表示（四个应用端点共用）。
 func (a *API) newAppPayload(r *http.Request, app store.App, releaseCount int) appPayload {
 	return visibleApp(app, a.appSensitiveVisible(r), releaseCount)
+}
+
+// validateAppRecipe 校验应用内联部署方案；空值表示继续使用发布时选择的模板。
+func validateAppRecipe(app *store.App) error {
+	if app.DeployScript != nil && len(*app.DeployScript) > maxTemplateContent {
+		return fmt.Errorf("deploy_script 不能超过 %d 字节", maxTemplateContent)
+	}
+	if app.DeployTemplateContent != nil && len(*app.DeployTemplateContent) > maxTemplateContent {
+		return fmt.Errorf("deploy_template_content 不能超过 %d 字节", maxTemplateContent)
+	}
+	if app.DeployTemplateKind != nil {
+		switch strings.TrimSpace(*app.DeployTemplateKind) {
+		case "", store.TemplateKindBinary, store.TemplateKindCompose, store.TemplateKindSystemd:
+		default:
+			return errors.New("deploy_template_kind 只能是 binary/compose/systemd")
+		}
+	}
+	return nil
+}
+
+// appDefaultRecipe 返回应用内是否已有完整默认方案。
+// inline=false 表示旧应用没有内联方案，发布仍需手动选择模板。
+func appDefaultRecipe(app *store.App) (kind, content string, inline bool) {
+	kind = store.TemplateKindBinary
+	if app.DeployTemplateKind != nil && strings.TrimSpace(*app.DeployTemplateKind) != "" {
+		kind = strings.TrimSpace(*app.DeployTemplateKind)
+	}
+	switch app.DeployMode {
+	case store.DeployModeScript:
+		if app.DeployScript != nil && strings.TrimSpace(*app.DeployScript) != "" {
+			return store.TemplateKindBinary, *app.DeployScript, true
+		}
+	case store.DeployModeInplace:
+		// 原地更新不需要模板内容；制品由发布表单选择。
+		return store.TemplateKindBinary, "", true
+	default:
+		if app.DeployTemplateContent != nil && strings.TrimSpace(*app.DeployTemplateContent) != "" {
+			return kind, *app.DeployTemplateContent, true
+		}
+		// binary 方案允许为空，表示发布后不额外重启；compose/systemd 必须有内容。
+		// 只有显式写入 kind 的新应用才算内联方案，避免旧应用被误判为空启动脚本。
+		if app.DeployTemplateKind != nil && kind == store.TemplateKindBinary {
+			return kind, "", true
+		}
+		if app.Provider == store.AppProviderBaota {
+			return store.TemplateKindBinary, "", true
+		}
+	}
+	return kind, "", false
+}
+
+// resolveReleaseRecipe 解析一次发布实际使用的模板快照。
+// 优先使用显式 template_id；没有时使用应用内联方案。template.ID 为空表示内联方案。
+func (a *API) resolveReleaseRecipe(ctx context.Context, app *store.App, templateID string) (*store.DeployTemplate, error) {
+	templateID = strings.TrimSpace(templateID)
+	if templateID != "" {
+		tmpl, err := a.st.GetDeployTemplate(ctx, templateID)
+		if err != nil {
+			return nil, err
+		}
+		return tmpl, nil
+	}
+	kind, content, inline := appDefaultRecipe(app)
+	if !inline {
+		return nil, errors.New("应用还没有默认部署方案，请先在应用设置中填写，或发布时选择模板")
+	}
+	if kind != store.TemplateKindBinary && strings.TrimSpace(content) == "" {
+		return nil, fmt.Errorf("%s 方案内容不能为空", kind)
+	}
+	if app.DeployMode == store.DeployModeScript && strings.TrimSpace(content) == "" {
+		return nil, errors.New("自定义脚本模式需要填写更新脚本")
+	}
+	return &store.DeployTemplate{ID: "", Name: "应用默认方案", Kind: kind, Content: content}, nil
 }
 
 // releaseDetailPayload 是发布详情的对外表示。
@@ -226,23 +308,26 @@ func (a *API) handleListApps(w http.ResponseWriter, r *http.Request) {
 // handleCreateApp 处理 POST /api/v1/apps。
 func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name            string `json:"name"`
-		Slug            string `json:"slug"`
-		Root            string `json:"root"`
-		Description     string `json:"description"`
-		Provider        string `json:"provider"`
-		SiteName        string `json:"site_name"`
-		SitePort        *int   `json:"site_port"`
-		SiteType        string `json:"site_type"`
-		HealthcheckPath string `json:"healthcheck_path"`
-		DeployMode      string `json:"deploy_mode"`
-		TargetDir       string `json:"target_dir"`
-		RestartCmd      string `json:"restart_cmd"`
-		InitScript      string `json:"init_script"`
-		EnvJSON         string `json:"env_json"`
-		KeepPaths       string `json:"keep_paths"`
-		HealthcheckPort *int   `json:"healthcheck_port"`
-		RollbackScript  string `json:"rollback_script"`
+		Name                  string `json:"name"`
+		Slug                  string `json:"slug"`
+		Root                  string `json:"root"`
+		Description           string `json:"description"`
+		Provider              string `json:"provider"`
+		SiteName              string `json:"site_name"`
+		SitePort              *int   `json:"site_port"`
+		SiteType              string `json:"site_type"`
+		HealthcheckPath       string `json:"healthcheck_path"`
+		DeployMode            string `json:"deploy_mode"`
+		TargetDir             string `json:"target_dir"`
+		RestartCmd            string `json:"restart_cmd"`
+		InitScript            string `json:"init_script"`
+		EnvJSON               string `json:"env_json"`
+		KeepPaths             string `json:"keep_paths"`
+		HealthcheckPort       *int   `json:"healthcheck_port"`
+		RollbackScript        string `json:"rollback_script"`
+		DeployScript          string `json:"deploy_script"`
+		DeployTemplateKind    string `json:"deploy_template_kind"`
+		DeployTemplateContent string `json:"deploy_template_content"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
@@ -288,12 +373,6 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	if dv2.DeployMode != nil {
 		app.DeployMode = *dv2.DeployMode
 	}
-	if (app.DeployMode == store.DeployModeInplace || app.DeployMode == store.DeployModeScript) &&
-		dv2.TargetDir == nil && app.Root == nil {
-		writeError(w, http.StatusBadRequest, codeInvalidArgument,
-			"inplace/script 模式需要 target_dir 或 root")
-		return
-	}
 	app.TargetDir = dv2.TargetDir
 	app.RestartCmd = dv2.RestartCmd
 	app.InitScript = dv2.InitScript
@@ -301,6 +380,13 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	app.KeepPaths = dv2.KeepPaths
 	app.HealthcheckPort = dv2.HealthcheckPort
 	app.RollbackScript = dv2.RollbackScript
+	app.DeployScript = strPtrOrNil(req.DeployScript)
+	app.DeployTemplateKind = strPtrOrNil(req.DeployTemplateKind)
+	app.DeployTemplateContent = strPtrOrNil(req.DeployTemplateContent)
+	if err := validateAppRecipe(app); err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+		return
+	}
 	if req.Root != "" {
 		root := strings.TrimSpace(req.Root)
 		if !strings.HasPrefix(root, "/") {
@@ -308,6 +394,12 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		app.Root = &root
+	}
+	if (app.DeployMode == store.DeployModeInplace || app.DeployMode == store.DeployModeScript) &&
+		app.TargetDir == nil && app.Root == nil {
+		writeError(w, http.StatusBadRequest, codeInvalidArgument,
+			"inplace/script 模式需要 target_dir 或 root")
+		return
 	}
 	if req.Description != "" {
 		desc := strings.TrimSpace(req.Description)
@@ -342,22 +434,25 @@ func (a *API) handlePatchApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name            *string `json:"name"`
-		Root            *string `json:"root"`
-		Description     *string `json:"description"`
-		Provider        *string `json:"provider"`
-		SiteName        *string `json:"site_name"`
-		SitePort        *int    `json:"site_port"`
-		SiteType        *string `json:"site_type"`
-		HealthcheckPath *string `json:"healthcheck_path"`
-		DeployMode      *string `json:"deploy_mode"`
-		TargetDir       *string `json:"target_dir"`
-		RestartCmd      *string `json:"restart_cmd"`
-		InitScript      *string `json:"init_script"`
-		EnvJSON         *string `json:"env_json"`
-		KeepPaths       *string `json:"keep_paths"`
-		HealthcheckPort *int    `json:"healthcheck_port"`
-		RollbackScript  *string `json:"rollback_script"`
+		Name                  *string `json:"name"`
+		Root                  *string `json:"root"`
+		Description           *string `json:"description"`
+		Provider              *string `json:"provider"`
+		SiteName              *string `json:"site_name"`
+		SitePort              *int    `json:"site_port"`
+		SiteType              *string `json:"site_type"`
+		HealthcheckPath       *string `json:"healthcheck_path"`
+		DeployMode            *string `json:"deploy_mode"`
+		TargetDir             *string `json:"target_dir"`
+		RestartCmd            *string `json:"restart_cmd"`
+		InitScript            *string `json:"init_script"`
+		EnvJSON               *string `json:"env_json"`
+		KeepPaths             *string `json:"keep_paths"`
+		HealthcheckPort       *int    `json:"healthcheck_port"`
+		RollbackScript        *string `json:"rollback_script"`
+		DeployScript          *string `json:"deploy_script"`
+		DeployTemplateKind    *string `json:"deploy_template_kind"`
+		DeployTemplateContent *string `json:"deploy_template_content"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument, "请求体格式错误: "+err.Error())
@@ -366,7 +461,8 @@ func (a *API) handlePatchApp(w http.ResponseWriter, r *http.Request) {
 	if req.Name == nil && req.Root == nil && req.Description == nil && req.Provider == nil &&
 		req.SiteName == nil && req.SitePort == nil && req.SiteType == nil && req.HealthcheckPath == nil &&
 		req.DeployMode == nil && req.TargetDir == nil && req.RestartCmd == nil && req.InitScript == nil &&
-		req.EnvJSON == nil && req.KeepPaths == nil && req.HealthcheckPort == nil && req.RollbackScript == nil {
+		req.EnvJSON == nil && req.KeepPaths == nil && req.HealthcheckPort == nil && req.RollbackScript == nil &&
+		req.DeployScript == nil && req.DeployTemplateKind == nil && req.DeployTemplateContent == nil {
 		writeError(w, http.StatusBadRequest, codeInvalidArgument,
 			"至少需要提供 name/root/description/provider/site_name/site_port/site_type/healthcheck_path 之一")
 		return
@@ -413,6 +509,26 @@ func (a *API) handlePatchApp(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := a.st.UpdateAppDeploy(r.Context(), app.ID, dv2.DeployMode, dv2.TargetDir, dv2.RestartCmd,
 			dv2.InitScript, dv2.EnvJSON, dv2.KeepPaths, dv2.RollbackScript, dv2.HealthcheckPort); err != nil {
+			a.writeStoreError(w, r, err)
+			return
+		}
+	}
+	if req.DeployScript != nil || req.DeployTemplateKind != nil || req.DeployTemplateContent != nil {
+		probe := *app
+		if req.DeployScript != nil {
+			probe.DeployScript = req.DeployScript
+		}
+		if req.DeployTemplateKind != nil {
+			probe.DeployTemplateKind = req.DeployTemplateKind
+		}
+		if req.DeployTemplateContent != nil {
+			probe.DeployTemplateContent = req.DeployTemplateContent
+		}
+		if verr := validateAppRecipe(&probe); verr != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, verr.Error())
+			return
+		}
+		if err := a.st.UpdateAppRecipe(r.Context(), app.ID, req.DeployScript, req.DeployTemplateKind, req.DeployTemplateContent); err != nil {
 			a.writeStoreError(w, r, err)
 			return
 		}
@@ -999,21 +1115,25 @@ func (a *API) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 		a.writeStoreError(w, r, err)
 		return
 	}
-	tmpl, err := a.st.GetDeployTemplate(ctx, strings.TrimSpace(req.TemplateID))
+	tmpl, err := a.resolveReleaseRecipe(ctx, app, req.TemplateID)
 	if err != nil {
-		a.writeStoreError(w, r, err)
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeStoreError(w, r, err)
+		} else {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+		}
 		return
 	}
-	// 脚本模式：模板内容就是更新脚本，必须是 binary 模板且非空；制品可省略。
+	// 脚本模式：方案内容就是更新脚本，必须是 binary 类型且非空；制品可省略。
 	if app.DeployMode == store.DeployModeScript {
 		if tmpl.Kind != store.TemplateKindBinary {
 			writeError(w, http.StatusBadRequest, codeInvalidArgument,
-				"脚本模式的模板必须是 binary 类型（模板内容即更新脚本）")
+				"脚本模式的方案必须是 binary 类型（内容即更新脚本）")
 			return
 		}
 		if strings.TrimSpace(tmpl.Content) == "" {
 			writeError(w, http.StatusBadRequest, codeInvalidArgument,
-				"脚本模式的模板内容不能为空（它就是更新脚本）")
+				"脚本模式需要填写更新脚本")
 			return
 		}
 	}

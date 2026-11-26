@@ -272,10 +272,14 @@ func (o *deployOrchestrator) executeReleaseRuns(ctx context.Context, release *st
 		o.failAll(ctx, release.ID, "应用不存在: "+err.Error())
 		return
 	}
-	tmpl, err := o.st.GetDeployTemplate(ctx, release.TemplateID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		o.failAll(ctx, release.ID, "读取模板失败: "+err.Error())
-		return
+	var tmpl *store.DeployTemplate
+	if strings.TrimSpace(release.TemplateID) != "" {
+		var terr error
+		tmpl, terr = o.st.GetDeployTemplate(ctx, release.TemplateID)
+		if terr != nil && !errors.Is(terr, store.ErrNotFound) {
+			o.failAll(ctx, release.ID, "读取模板失败: "+terr.Error())
+			return
+		}
 	}
 
 	// 模板快照优先：即使模板已被删除或修改，本次发布仍按创建时的内容执行。
@@ -283,6 +287,8 @@ func (o *deployOrchestrator) executeReleaseRuns(ctx context.Context, release *st
 	kind := store.TemplateKindBinary
 	if tmpl != nil {
 		kind = tmpl.Kind
+	} else if recipeKind, _, inline := appDefaultRecipe(app); inline {
+		kind = recipeKind
 	}
 	var artifact *store.Artifact
 	if release.ArtifactID != nil {
@@ -662,8 +668,12 @@ func (o *deployOrchestrator) Rollback(releaseID string, serverIDs []string) (int
 
 	// 回滚虽然不下载制品，但 deploy.Build 会校验 Kind/Artifact，必须传真实值。
 	kind := store.TemplateKindBinary
-	if tmpl, terr := o.st.GetDeployTemplate(ctx, release.TemplateID); terr == nil {
-		kind = tmpl.Kind
+	if strings.TrimSpace(release.TemplateID) != "" {
+		if tmpl, terr := o.st.GetDeployTemplate(ctx, release.TemplateID); terr == nil {
+			kind = tmpl.Kind
+		}
+	} else if recipeKind, _, inline := appDefaultRecipe(app); inline {
+		kind = recipeKind
 	}
 	var artifact *store.Artifact
 	if release.ArtifactID != nil {
@@ -1211,8 +1221,12 @@ func (o *deployOrchestrator) rollbackToOne(ctx context.Context, release *store.R
 		// release 模式：用「目标版本 + 上一版本 = 目标」的方式生成回滚步骤，
 		// 得到「切 current 到目标目录 + 跑目标版本的启动脚本」。
 		kind := store.TemplateKindBinary
-		if tmpl, terr := o.st.GetDeployTemplate(ctx, target.TemplateID); terr == nil {
-			kind = tmpl.Kind
+		if strings.TrimSpace(target.TemplateID) != "" {
+			if tmpl, terr := o.st.GetDeployTemplate(ctx, target.TemplateID); terr == nil {
+				kind = tmpl.Kind
+			}
+		} else if recipeKind, _, inline := appDefaultRecipe(app); inline {
+			kind = recipeKind
 		}
 		var artifact *store.Artifact
 		if target.ArtifactID != nil {

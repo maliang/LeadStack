@@ -8,7 +8,8 @@ import { useCan } from '@/composables/useCan'
 import { useI18n } from '@/i18n'
 import { api, type AppItem, type CreateAppPayload, type Release } from '@/lib/api'
 import {
-  deployModeLabelKey,
+  appScenario,
+  appScenarioLabelKey,
   releaseDurationSeconds,
   releaseStats,
   releaseStatusLabelKey,
@@ -126,7 +127,7 @@ async function submitRollback(targetReleaseId: string): Promise<void> {
         <h1 id="app-detail-title" class="ls-deploy__title">{{ title }}</h1>
         <p class="ls-deploy__subtitle">
           <span class="ls-deploy__mono">{{ app?.slug || appId }}</span>
-          <span v-if="app"> · {{ t(deployModeLabelKey(app.deploy_mode)) }}</span>
+          <span v-if="app"> · {{ t(appScenarioLabelKey(appScenario(app))) }}</span>
         </p>
       </div>
       <div class="ls-deploy__actions">
@@ -178,12 +179,12 @@ async function submitRollback(targetReleaseId: string): Promise<void> {
           </header>
           <dl class="ls-kv">
             <div class="ls-kv__row">
-              <dt>{{ t('apps.form.root') }}</dt>
-              <dd class="ls-kv__value ls-deploy__mono">{{ app.root || t('common.na') }}</dd>
+              <dt>{{ t('apps.form.scenario') }}</dt>
+              <dd class="ls-kv__value">{{ t(appScenarioLabelKey(appScenario(app))) }}</dd>
             </div>
             <div class="ls-kv__row">
-              <dt>{{ t('apps.form.deployMode') }}</dt>
-              <dd class="ls-kv__value">{{ t(deployModeLabelKey(app.deploy_mode)) }}</dd>
+              <dt>{{ app.deploy_mode === 'inplace' ? t('apps.form.targetDir') : t('apps.form.root') }}</dt>
+              <dd class="ls-kv__value ls-deploy__mono">{{ app.target_dir || app.root || t('common.na') }}</dd>
             </div>
             <div class="ls-kv__row">
               <dt>{{ t('appDetail.healthcheck') }}</dt>

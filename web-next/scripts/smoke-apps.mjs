@@ -236,7 +236,7 @@ async function run() {
 
     // 4) 编辑：表单预填 + PUT
     const shopRow = page.locator('.ls-deploy__row[data-app-id="app-shop"]')
-    await shopRow.locator('.ls-btn--small:not(.ls-btn--danger)').click()
+    await shopRow.locator('button[aria-label^="编辑"]').click()
     await page.waitForSelector('[data-testid="app-form-dialog"]', { timeout: 5000 })
     check(
       '编辑弹窗预填应用名',

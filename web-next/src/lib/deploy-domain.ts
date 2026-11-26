@@ -9,11 +9,14 @@ import type { AppItem, CreateAppPayload, Release, ReleaseStatus } from './api'
  */
 
 /** 应用表单值（全部是字符串，方便直接绑 input）。 */
+export type AppScenario = 'command' | 'inplace' | 'release' | 'compose' | 'systemd' | 'baota'
+
 export interface AppFormValues {
   name: string
   slug: string
   root: string
   description: string
+  scenario: AppScenario
   deployMode: string
   healthcheckPath: string
   healthcheckPort: string
@@ -27,6 +30,16 @@ export interface AppFormValues {
   initScript: string
   /** 失败/健康检查失败时回滚脚本 */
   rollbackScript: string
+  /** 自定义脚本模式的完整更新脚本 */
+  deployScript: string
+  /** 内联方案类型 */
+  deployTemplateKind: 'binary' | 'compose' | 'systemd'
+  /** 内联方案内容 */
+  deployTemplateContent: string
+  /** 宝塔站点 */
+  siteName: string
+  sitePort: string
+  siteType: 'static' | 'php'
 }
 
 export type AppFormErrors = Partial<Record<keyof AppFormValues, string>>
@@ -37,6 +50,7 @@ export function emptyAppForm(): AppFormValues {
     slug: '',
     root: '',
     description: '',
+    scenario: 'release',
     deployMode: 'release',
     healthcheckPath: '',
     healthcheckPort: '',
@@ -46,7 +60,31 @@ export function emptyAppForm(): AppFormValues {
     keepPaths: '',
     initScript: '',
     rollbackScript: '',
+    deployScript: '',
+    deployTemplateKind: 'binary',
+    deployTemplateContent: '',
+    siteName: '',
+    sitePort: '',
+    siteType: 'static',
   }
+}
+
+/** 从应用数据反推用户可理解的部署场景。 */
+export function appScenario(app: AppItem): AppScenario {
+  if (app.provider === 'baota') return 'baota'
+  if (app.deploy_mode === 'script') return 'command'
+  if (app.deploy_mode === 'inplace') return 'inplace'
+  if (app.deploy_template_kind === 'compose') return 'compose'
+  if (app.deploy_template_kind === 'systemd') return 'systemd'
+  return 'release'
+}
+
+/** 应用是否已有内联方案；旧应用没有时会回退到发布时选择模板。 */
+export function appHasInlineRecipe(app: AppItem): boolean {
+  if (app.provider === 'baota') return true
+  if (app.deploy_mode === 'inplace') return true
+  if (app.deploy_mode === 'script') return Boolean(app.deploy_script?.trim())
+  return Boolean(app.deploy_template_kind)
 }
 
 export function appFormFromItem(app: AppItem): AppFormValues {
@@ -55,6 +93,7 @@ export function appFormFromItem(app: AppItem): AppFormValues {
     slug: app.slug,
     root: app.root ?? '',
     description: app.description ?? '',
+    scenario: appScenario(app),
     deployMode: app.deploy_mode || 'release',
     healthcheckPath: app.healthcheck_path ?? '',
     healthcheckPort: app.healthcheck_port === null ? '' : String(app.healthcheck_port),
@@ -64,6 +103,12 @@ export function appFormFromItem(app: AppItem): AppFormValues {
     keepPaths: app.keep_paths ?? '',
     initScript: app.init_script ?? '',
     rollbackScript: app.rollback_script ?? '',
+    deployScript: app.deploy_script ?? '',
+    deployTemplateKind: (app.deploy_template_kind as 'binary' | 'compose' | 'systemd') || 'binary',
+    deployTemplateContent: app.deploy_template_content ?? '',
+    siteName: app.site_name ?? '',
+    sitePort: app.site_port === null ? '' : String(app.site_port),
+    siteType: (app.site_type as 'static' | 'php') || 'static',
   }
 }
 
@@ -78,25 +123,70 @@ export function validateAppForm(values: AppFormValues): AppFormErrors {
   else if (name.length > 64) errors.name = 'apps.form.nameTooLong'
   if (slug === '') errors.slug = 'apps.form.slugRequired'
   else if (!SLUG_PATTERN.test(slug.toLowerCase())) errors.slug = 'apps.form.slugInvalid'
+  if (values.scenario === 'command' && values.deployScript.trim() === '') {
+    errors.deployScript = 'apps.form.deployScriptRequired'
+  }
+  if (values.scenario === 'inplace' && values.root.trim() === '') {
+    errors.root = 'apps.form.targetDirRequired'
+  }
+  if ((values.scenario === 'compose' || values.scenario === 'systemd') && values.deployTemplateContent.trim() === '') {
+    errors.deployTemplateContent = 'apps.form.templateContentRequired'
+  }
   return errors
 }
 
 export function appPayloadFromForm(values: AppFormValues): CreateAppPayload {
-  const mode = values.deployMode === 'inplace' ? 'inplace' : values.deployMode === 'script' ? 'script' : 'release'
-  return {
+  const base: CreateAppPayload = {
     name: values.name.trim(),
     slug: values.slug.trim().toLowerCase(),
-    root: values.root.trim() || undefined,
     description: values.description.trim() || undefined,
-    deploy_mode: mode,
     healthcheck_path: values.healthcheckPath.trim() || null,
     healthcheck_port: parseHealthcheckPort(values.healthcheckPort),
-    restart_cmd: values.restartCmd.trim() || null,
     env_json: values.envJson.trim() || null,
-    target_dir: values.targetDir.trim() || null,
-    keep_paths: values.keepPaths.trim() || null,
-    init_script: values.initScript.trim() || null,
-    rollback_script: values.rollbackScript.trim() || null,
+  }
+  if (values.scenario === 'command') {
+    return {
+      ...base,
+      root: values.root.trim() || undefined,
+      deploy_mode: 'script',
+      deploy_script: values.deployScript.trim() || null,
+      rollback_script: values.rollbackScript.trim() || null,
+      deploy_template_kind: 'binary',
+      deploy_template_content: null,
+    }
+  }
+  if (values.scenario === 'inplace') {
+    return {
+      ...base,
+      deploy_mode: 'inplace',
+      root: values.root.trim() || undefined,
+      target_dir: values.root.trim() || null,
+      keep_paths: values.keepPaths.trim() || null,
+      restart_cmd: values.restartCmd.trim() || null,
+      init_script: values.initScript.trim() || null,
+      deploy_template_kind: 'binary',
+      deploy_template_content: null,
+    }
+  }
+  if (values.scenario === 'baota') {
+    return {
+      ...base,
+      provider: 'baota',
+      site_name: values.siteName.trim() || undefined,
+      site_port: values.sitePort.trim() ? Number(values.sitePort) : undefined,
+      site_type: values.siteType,
+      deploy_mode: 'release',
+      root: values.root.trim() || undefined,
+    }
+  }
+  const kind = values.scenario === 'compose' ? 'compose' : values.scenario === 'systemd' ? 'systemd' : 'binary'
+  return {
+    ...base,
+    deploy_mode: 'release',
+    root: values.root.trim() || undefined,
+    restart_cmd: values.scenario === 'release' ? values.restartCmd.trim() || null : null,
+    deploy_template_kind: values.deployTemplateContent.trim() ? kind : null,
+    deploy_template_content: values.deployTemplateContent.trim() || null,
   }
 }
 
@@ -121,6 +211,10 @@ export function filterApps(apps: readonly AppItem[], keyword: string): AppItem[]
   const needle = keyword.trim().toLowerCase()
   if (needle === '') return apps.slice()
   return apps.filter((app) => appSearchText(app).includes(needle))
+}
+
+export function appScenarioLabelKey(scenario: AppScenario): string {
+  return `apps.scenario.${scenario}`
 }
 
 export function deployModeLabelKey(mode: string | null | undefined): string {
@@ -256,7 +350,6 @@ export function validateReleaseForm(values: ReleaseFormValues): ReleaseFormError
   if (values.appId.trim() === '') errors.appId = 'apps.releaseForm.appRequired'
   if (values.version.trim() === '') errors.version = 'apps.releaseForm.versionRequired'
   else if (!VERSION_PATTERN.test(values.version.trim())) errors.version = 'apps.releaseForm.versionInvalid'
-  if (values.templateId.trim() === '') errors.templateId = 'apps.releaseForm.templateRequired'
   if (values.serverIds.length === 0) errors.serverIds = 'apps.releaseForm.serversRequired'
   if (values.strategy === 'canary') {
     if (values.serverIds.length < 2) errors.canaryCount = 'release.canaryNeedTwo'

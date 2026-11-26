@@ -401,7 +401,7 @@ async function run() {
     check('打开弹窗后按需拉到模板与服务器', (await page.locator('#release-form-template option').count()) === 3)
     await page.click('#release-form-submit')
     await page.waitForTimeout(150)
-    check('空表单出现字段错误', (await page.locator('[data-testid="release-form-dialog"] .ls-field__error').count()) >= 3)
+    check('空表单出现字段错误', (await page.locator('[data-testid="release-form-dialog"] .ls-field__error').count()) >= 2)
     check('空表单不发 POST /releases', posts().length === 0, `${posts().length} 次`)
 
     await page.selectOption('#release-form-app', 'app-shop')

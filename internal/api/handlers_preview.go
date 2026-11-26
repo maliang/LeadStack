@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -51,15 +52,19 @@ func (a *API) handlePreviewRelease(w http.ResponseWriter, r *http.Request) {
 		a.writeStoreError(w, r, err)
 		return
 	}
-	tmpl, err := a.st.GetDeployTemplate(ctx, strings.TrimSpace(req.TemplateID))
+	tmpl, err := a.resolveReleaseRecipe(ctx, app, req.TemplateID)
 	if err != nil {
-		a.writeStoreError(w, r, err)
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeStoreError(w, r, err)
+		} else {
+			writeError(w, http.StatusBadRequest, codeInvalidArgument, err.Error())
+		}
 		return
 	}
 	if app.DeployMode == store.DeployModeScript {
 		if tmpl.Kind != store.TemplateKindBinary || strings.TrimSpace(tmpl.Content) == "" {
 			writeError(w, http.StatusBadRequest, codeInvalidArgument,
-				"脚本模式需要 binary 模板且内容非空（模板内容即更新脚本）")
+				"脚本模式需要填写更新脚本")
 			return
 		}
 	}
