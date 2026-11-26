@@ -204,19 +204,19 @@ func alternateAgentUpgradeURL(raw string) string {
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
 		return ""
 	}
-	switch u.Host {
+	switch strings.ToLower(u.Host) {
 	case "github.com":
 		const prefix = "/maliang/leadstack/releases/download/"
-		if strings.HasPrefix(u.Path, prefix) {
+		if strings.HasPrefix(strings.ToLower(u.Path), prefix) {
 			u.Host = "gitee.com"
-			u.Path = "/maliang47/leadstack/releases/download/" + strings.TrimPrefix(u.Path, prefix)
+			u.Path = "/maliang47/leadstack/releases/download/" + u.Path[len(prefix):]
 			return u.String()
 		}
 	case "gitee.com":
 		const prefix = "/maliang47/leadstack/releases/download/"
-		if strings.HasPrefix(u.Path, prefix) {
+		if strings.HasPrefix(strings.ToLower(u.Path), prefix) {
 			u.Host = "github.com"
-			u.Path = "/maliang/leadstack/releases/download/" + strings.TrimPrefix(u.Path, prefix)
+			u.Path = "/maliang/leadstack/releases/download/" + u.Path[len(prefix):]
 			return u.String()
 		}
 	}

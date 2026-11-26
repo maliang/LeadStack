@@ -268,7 +268,7 @@ func (c *updateChecker) fetchReleaseFrom(ctx context.Context, apiBase string) (*
 //
 // 只对官方仓库启用：自建镜像 fork 不一定同步到 Gitee，生成错误地址只会掩盖真实错误。
 func alternateAssetURL(repo string, isGitee bool, tag, name string) string {
-	if repo != "maliang/leadstack" || strings.TrimSpace(tag) == "" || strings.TrimSpace(name) == "" {
+	if !strings.EqualFold(strings.TrimSpace(repo), "maliang/leadstack") || strings.TrimSpace(tag) == "" || strings.TrimSpace(name) == "" {
 		return ""
 	}
 	if isGitee {

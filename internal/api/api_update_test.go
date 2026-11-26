@@ -384,6 +384,8 @@ func TestAlternateAgentUpgradeURL(t *testing.T) {
 	cases := map[string]string{
 		"https://github.com/maliang/leadstack/releases/download/v0.1.15/leadstack-agent_0.1.15_linux_amd64.tar.gz":  "https://gitee.com/maliang47/leadstack/releases/download/v0.1.15/leadstack-agent_0.1.15_linux_amd64.tar.gz",
 		"https://gitee.com/maliang47/leadstack/releases/download/v0.1.15/leadstack-agent_0.1.15_linux_amd64.tar.gz": "https://github.com/maliang/leadstack/releases/download/v0.1.15/leadstack-agent_0.1.15_linux_amd64.tar.gz",
+		"https://github.com/maliang/LeadStack/releases/download/v0.1.54/leadstack-agent_0.1.54_linux_amd64.tar.gz":  "https://gitee.com/maliang47/leadstack/releases/download/v0.1.54/leadstack-agent_0.1.54_linux_amd64.tar.gz",
+		"https://github.com/MALIANG/LEADSTACK/releases/download/v0.1.54/leadstack-agent_0.1.54_linux_amd64.tar.gz":  "https://gitee.com/maliang47/leadstack/releases/download/v0.1.54/leadstack-agent_0.1.54_linux_amd64.tar.gz",
 		"https://mirror.example.com/leadstack-agent_0.1.15_linux_amd64.tar.gz":                                      "",
 		"not-a-url": "",
 	}
