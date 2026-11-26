@@ -62,6 +62,9 @@ func (a *API) autoUpgradeAgents(ctx context.Context) {
 		}
 		asset, ok := pickAgentAsset(info.AgentAssets, deref(srv.OS), deref(srv.Arch))
 		if !ok {
+			a.logger.Warn("agent 自动升级：没有匹配的 agent 资产（或缺 sha256）",
+				"server_id", srv.ID, "os", deref(srv.OS), "arch", deref(srv.Arch),
+				"assets", len(info.AgentAssets))
 			continue
 		}
 		if err := a.sendAgentUpgrade(ctx, srv.ID, info.Latest, asset.URL, asset.SHA256); err != nil {

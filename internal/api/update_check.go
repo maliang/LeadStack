@@ -168,7 +168,7 @@ func (c *updateChecker) refresh(ctx context.Context) UpdateInfo {
 	}
 	if len(agentAssets) > 0 {
 		// 同一次响应内只下载一次 checksums.txt；失败则 sha256 留空但仍返回资产。
-		if content := c.fetchChecksums(ctx, agentAssets[0].URL); content != "" {
+		if content := c.fetchChecksums(ctx, agentAssets[0].URL, agentAssets[0].FallbackURL); content != "" {
 			for i := range agentAssets {
 				agentAssets[i].SHA256 = lookupChecksum(content, agentAssets[i].Name)
 			}
@@ -398,49 +398,83 @@ func classifyAgentAsset(name string) (osName, arch string, ok bool) {
 	return parts[1], parts[2], true
 }
 
-// fetchChecksums 下载与 assetURL 同目录的 checksums.txt；失败返回空串（不阻断检查更新）。
+// fetchChecksums 下载与 assetURL 同目录的 checksums.txt；失败后尝试镜像源。
 //
+// 只取主源 checksums 会让「GitHub API 正常但资产下载很慢/不通」时 agent_assets 的
+// sha256 留下空值，自动升级于是静默跳过；这里与升级包下载保持同一套 GitHub↔Gitee 回退。
 // 带独立超时，且对同一 URL 做一次内存缓存：检查更新是周期任务，
 // 不能每次刷新都重新拉一遍 1MB 的 checksums.txt。
-func (c *updateChecker) fetchChecksums(ctx context.Context, assetURL string) string {
-	url := checksumsURLFor(UpdateAsset{URL: assetURL})
-	if url == "" {
-		return ""
+func (c *updateChecker) fetchChecksums(ctx context.Context, assetURL, fallbackURL string) string {
+	urls := make([]string, 0, 2)
+	for _, raw := range []string{assetURL, fallbackURL} {
+		url := checksumsURLFor(UpdateAsset{URL: raw})
+		if url == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range urls {
+			if existing == url {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			urls = append(urls, url)
+		}
 	}
-	c.mu.Lock()
-	if c.checksumsURL == url && c.checksumsBody != "" {
-		body := c.checksumsBody
+	var lastErr string
+	for index, url := range urls {
+		c.mu.Lock()
+		if c.checksumsURL == url && c.checksumsBody != "" {
+			body := c.checksumsBody
+			c.mu.Unlock()
+			return body
+		}
 		c.mu.Unlock()
+
+		reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+		if err != nil {
+			cancel()
+			c.logger.Debug("构造 checksums.txt 请求失败", "err", err)
+			lastErr = err.Error()
+			continue
+		}
+		req.Header.Set("User-Agent", "leadstack-updater")
+		resp, err := c.client.Do(req)
+		if err != nil {
+			cancel()
+			lastErr = err.Error()
+			c.logger.Warn("下载 checksums.txt 失败，尝试下一个源", "url", url, "err", err)
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Sprintf("HTTP %d", resp.StatusCode)
+			_ = resp.Body.Close()
+			cancel()
+			c.logger.Warn("下载 checksums.txt 失败，尝试下一个源", "url", url, "status", resp.StatusCode)
+			continue
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+		cancel()
+		if readErr != nil {
+			lastErr = readErr.Error()
+			c.logger.Warn("读取 checksums.txt 失败，尝试下一个源", "url", url, "err", readErr)
+			continue
+		}
+		body := string(raw)
+		c.mu.Lock()
+		c.checksumsURL, c.checksumsBody = url, body
+		c.mu.Unlock()
+		if index > 0 {
+			c.logger.Info("checksums.txt 已切换备用源", "url", url)
+		}
 		return body
 	}
-	c.mu.Unlock()
-
-	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
-	if err != nil {
-		c.logger.Debug("构造 checksums.txt 请求失败", "err", err)
+	if len(urls) == 0 {
 		return ""
 	}
-	req.Header.Set("User-Agent", "leadstack-updater")
-	resp, err := c.client.Do(req)
-	if err != nil {
-		c.logger.Warn("下载 checksums.txt 失败（agent_assets 的 sha256 将为空）", "url", url, "err", err)
-		return ""
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		c.logger.Warn("下载 checksums.txt 失败（agent_assets 的 sha256 将为空）", "url", url, "status", resp.StatusCode)
-		return ""
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		c.logger.Warn("读取 checksums.txt 失败", "url", url, "err", err)
-		return ""
-	}
-	body := string(raw)
-	c.mu.Lock()
-	c.checksumsURL, c.checksumsBody = url, body
-	c.mu.Unlock()
-	return body
+	c.logger.Warn("checksums.txt 所有源均失败（agent_assets 的 sha256 将为空）", "err", lastErr)
+	return ""
 }

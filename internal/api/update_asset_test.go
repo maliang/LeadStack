@@ -317,3 +317,29 @@ func TestDownloadReleaseAssetFallsBack(t *testing.T) {
 		t.Fatalf("备用源下载后应按同源 checksums 校验通过: %v", err)
 	}
 }
+
+func TestFetchChecksumsFallsBackToMirror(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "primary checksums unavailable", http.StatusBadGateway)
+	}))
+	defer primary.Close()
+
+	const want = "abcdef  leadstack-agent_1.2.3_linux_amd64.tar.gz\n"
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/checksums.txt") {
+			t.Fatalf("备用源请求了意外路径: %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, want)
+	}))
+	defer fallback.Close()
+
+	checker := &updateChecker{client: fallback.Client(), logger: noopLogger{}}
+	got := checker.fetchChecksums(
+		context.Background(),
+		primary.URL+"/download/v1.2.3/leadstack-agent_1.2.3_linux_amd64.tar.gz",
+		fallback.URL+"/download/v1.2.3/leadstack-agent_1.2.3_linux_amd64.tar.gz",
+	)
+	if got != want {
+		t.Fatalf("主源 checksums 失败后应使用备用源，实际 %q", got)
+	}
+}
