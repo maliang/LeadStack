@@ -61,7 +61,6 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/apps', labelKey: 'nav.apps', icon: 'list-checks', permission: 'deploy.read' },
       { to: '/releases', labelKey: 'nav.releases', icon: 'play', permission: 'deploy.read' },
-      { to: '/templates', labelKey: 'nav.templates', icon: 'file-text', permission: 'deploy.read' },
     ],
   },
   {

@@ -215,7 +215,7 @@ async function run() {
     await gotoPage(page, base, '/templates', '.ls-templates__row')
 
     /* ============ ① 列表渲染 ============ */
-    check('模板页标题为「应用模板」', (await page.locator('#templates-title').innerText()).trim() === '应用模板')
+    check('部署预设页标题为「部署预设」', (await page.locator('#templates-title').innerText()).trim() === '部署预设')
     check('列表渲染 mock 的 3 条模板', (await page.locator('.ls-templates__row').count()) === 3)
 
     const names = await page.locator('.ls-templates__name').allInnerTexts()
@@ -240,8 +240,8 @@ async function run() {
       `${times.join('|')} ≠ ${expectedTimes.join('|')}`,
     )
     check(
-      '顶部计数文案为「共 3 个模板」',
-      (await page.locator('.ls-templates__count').innerText()).trim() === '共 3 个模板',
+      '顶部计数文案为「共 3 个预设」',
+      (await page.locator('.ls-templates__count').innerText()).trim() === '共 3 个预设',
       (await page.locator('.ls-templates__count').innerText()).trim(),
     )
 
@@ -456,7 +456,7 @@ async function run() {
       .waitForFunction(
         () =>
           document.querySelector('.ls-templates') !== null &&
-          document.querySelector('#templates-title')?.textContent?.trim() === '应用模板' &&
+          document.querySelector('#templates-title')?.textContent?.trim() === '部署预设' &&
           document.querySelectorAll('.ls-templates__row').length === 3,
         null,
         { timeout: 15000 },

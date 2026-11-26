@@ -408,7 +408,12 @@ const deploy: Record<string, string> = {
   'apps.deployNow': '立即发布',
   'apps.form.deployScriptRequired': '请填写更新脚本。',
   'apps.form.targetDirRequired': '请填写接管目录。',
-  'apps.form.templateContentRequired': '请填写方案内容。'
+  'apps.form.templateContentRequired': '请填写方案内容。',
+  'apps.col.scenario': '部署场景',
+  'apps.col.target': '目标目录',
+  'apps.presets': '部署预设',
+  'apps.form.next': '下一步',
+  'apps.form.back': '上一步',
 }
 
 export default deploy

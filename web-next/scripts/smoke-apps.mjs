@@ -217,6 +217,7 @@ async function run() {
     await page.click('#apps-new')
     await page.waitForSelector('[data-testid="app-form-dialog"]', { timeout: 5000 })
     check('新建弹窗标题为新建应用', (await page.locator('[data-testid="app-form-dialog"] .ls-modal__title').innerText()).includes('新建应用'))
+    await page.click('#app-form-next')
     await page.click('#app-form-submit')
     await page.waitForTimeout(150)
     check('空表单提交出现字段错误', (await page.locator('[data-testid="app-form-dialog"] .ls-field__error').count()) === 2)

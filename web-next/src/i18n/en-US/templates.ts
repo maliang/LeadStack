@@ -4,12 +4,12 @@
  * keys use the templates.* prefix, plus the new nav.templates label.
  */
 const templates: Record<string, string> = {
-  'nav.templates': 'Templates',
+  'nav.templates': 'Deployment presets',
 
-  'templates.title': 'App templates',
+  'templates.title': 'Deployment presets',
   'templates.description': 'Maintain Compose, systemd and binary templates and reuse them when starting a release.',
-  'templates.new': 'New template',
-  'templates.count': '{count} template(s)',
+  'templates.new': 'New preset',
+  'templates.count': '{count} presets',
   'templates.searchPlaceholder': 'Search name / kind',
   'templates.noPermissionTitle': 'No permission to view templates',
   'templates.noPermissionText':

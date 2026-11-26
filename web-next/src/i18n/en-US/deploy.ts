@@ -408,7 +408,12 @@ const deploy: Record<string, string> = {
   'apps.deployNow': 'Deploy now',
   'apps.form.deployScriptRequired': 'Please enter the update script.',
   'apps.form.targetDirRequired': 'Please enter the target directory.',
-  'apps.form.templateContentRequired': 'Please enter the recipe content.'
+  'apps.form.templateContentRequired': 'Please enter the recipe content.',
+  'apps.col.scenario': 'Scenario',
+  'apps.col.target': 'Target directory',
+  'apps.presets': 'Presets',
+  'apps.form.next': 'Next',
+  'apps.form.back': 'Back',
 }
 
 export default deploy

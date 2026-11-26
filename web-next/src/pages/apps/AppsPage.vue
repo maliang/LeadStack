@@ -92,6 +92,7 @@ const deleteDetails = computed(() => {
         <p class="ls-deploy__subtitle">{{ t('apps.description') }}</p>
       </div>
       <div class="ls-deploy__actions">
+        <RouterLink class="ls-btn" to="/templates">{{ t('apps.presets') }}</RouterLink>
         <button id="apps-refresh" type="button" class="ls-btn" :disabled="state === 'loading'" @click="refresh">
           <AppIcon name="refresh" size="1rem" />
           {{ t('common.refresh') }}
@@ -163,8 +164,8 @@ const deleteDetails = computed(() => {
         <thead>
           <tr>
             <th scope="col">{{ t('apps.col.name') }}</th>
-            <th scope="col">{{ t('apps.col.root') }}</th>
-            <th scope="col">{{ t('apps.col.mode') }}</th>
+            <th scope="col">{{ t('apps.col.scenario') }}</th>
+            <th scope="col">{{ t('apps.col.target') }}</th>
             <th scope="col">{{ t('apps.col.lastRelease') }}</th>
             <th scope="col" class="ls-deploy__num">{{ t('apps.col.servers') }}</th>
             <th scope="col" class="ls-deploy__actions-col">{{ t('common.actions') }}</th>
@@ -178,8 +179,8 @@ const deleteDetails = computed(() => {
               </RouterLink>
               <span class="ls-deploy__slug">{{ app.slug }}</span>
             </td>
-            <td class="ls-deploy__mono" :title="app.root ?? ''">{{ app.root || t('common.na') }}</td>
             <td>{{ t(appScenarioLabelKey(appScenario(app))) }}</td>
+            <td class="ls-deploy__mono" :title="app.target_dir || app.root || ''">{{ app.target_dir || app.root || t('common.na') }}</td>
             <td>
               <span
                 v-if="app.last_release"

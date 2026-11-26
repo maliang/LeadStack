@@ -36,6 +36,7 @@ const { t } = useI18n()
 const form = reactive<AppFormValues>(emptyAppForm())
 const errors = ref<AppFormErrors>({})
 const attempted = ref(false)
+const step = ref<1 | 2>(1)
 
 watch(
   () => props.open,
@@ -44,6 +45,7 @@ watch(
     Object.assign(form, props.app ? appFormFromItem(props.app) : emptyAppForm())
     errors.value = {}
     attempted.value = false
+    step.value = props.app ? 2 : 1
   },
   { immediate: true },
 )
@@ -107,6 +109,7 @@ const scenarioHint = computed(() => {
         <span v-if="errors.slug" class="ls-field__error" role="alert">{{ t(errors.slug) }}</span>
         <span v-else class="ls-field__hint">{{ t('apps.form.slugHint') }}</span>
       </label>
+      <template v-if="step === 1">
       <div class="ls-field">
         <span id="app-form-scenario-label" class="ls-field__label">{{ t('apps.form.scenario') }}</span>
         <div id="app-form-scenario" class="ls-mode-picker ls-mode-picker--wrap" role="radiogroup" aria-labelledby="app-form-scenario-label">
@@ -127,6 +130,9 @@ const scenarioHint = computed(() => {
         <span class="ls-field__hint">{{ scenarioHint }}</span>
       </div>
 
+      </template>
+
+      <template v-if="step === 2">
       <label v-if="form.scenario !== 'baota'" class="ls-field" for="app-form-root">
         <span class="ls-field__label">
           {{ form.scenario === 'command' ? t('apps.form.workDir') : form.scenario === 'inplace' ? t('apps.form.targetDir') : t('apps.form.root') }}
@@ -236,6 +242,7 @@ const scenarioHint = computed(() => {
         <textarea id="app-form-description" v-model="form.description" class="ls-input ls-textarea" rows="2" :placeholder="t('apps.form.notePlaceholder')" />
         <span class="ls-field__hint">{{ t('apps.form.noteHint') }}</span>
       </label>
+      </template>
       <p v-if="error" class="ls-inline-error" role="alert">{{ error }}</p>
       <p v-if="attempted && Object.keys(errors).length > 0" class="ls-inline-error" role="alert">
         {{ t('apps.form.invalid') }}
@@ -243,7 +250,21 @@ const scenarioHint = computed(() => {
     </form>
     <template #footer>
       <button type="button" class="ls-btn" :disabled="busy" @click="emit('close')">{{ t('common.cancel') }}</button>
+      <button v-if="step === 2" type="button" class="ls-btn" :disabled="busy" @click="step = 1">
+        {{ t('apps.form.back') }}
+      </button>
       <button
+        v-if="step === 1"
+        id="app-form-next"
+        type="button"
+        class="ls-btn ls-btn--primary"
+        :disabled="busy"
+        @click="step = 2"
+      >
+        {{ t('apps.form.next') }}
+      </button>
+      <button
+        v-else
         id="app-form-submit"
         type="button"
         class="ls-btn ls-btn--primary"

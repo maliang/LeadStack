@@ -4,12 +4,12 @@
  * 仅导航标签沿用 nav.templates（同为新增键，不覆盖既有键）。
  */
 const templates: Record<string, string> = {
-  'nav.templates': '模板',
+  'nav.templates': '部署预设',
 
-  'templates.title': '应用模板',
-  'templates.description': '维护 Compose、systemd 与二进制脚本模板，发起发布时直接复用。',
-  'templates.new': '新建模板',
-  'templates.count': '共 {count} 个模板',
+  'templates.title': '部署预设',
+  'templates.description': '维护可复用的部署方案；新应用可以从预设套用，也可以另存为预设。',
+  'templates.new': '新建预设',
+  'templates.count': '共 {count} 个预设',
   'templates.searchPlaceholder': '搜索模板名 / 类型',
   'templates.noPermissionTitle': '没有模板查看权限',
   'templates.noPermissionText': '当前账号缺少 deploy.read 权限，模板列表不可见。请联系管理员分配权限。',
