@@ -9868,3 +9868,16 @@ body.ls-scroll-locked {
 .ls-srv-card__os-line .ls-srv-card__mode {
   margin-left: auto;
 }
+
+/* 卡片：IP 与接入方式独占一行，系统名称/版本保持单独一行。 */
+.ls-srv-card__identity .ls-srv-card__address {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin: 0;
+  text-align: left;
+}
+
+.ls-srv-card__identity .ls-srv-card__mode {
+  margin-left: auto;
+}
