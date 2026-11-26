@@ -115,8 +115,6 @@ function openDetailFromRow(event: MouseEvent): void {
           </div>
           <div class="ls-srv-row__os-line">
             <span class="ls-srv-row__os" :title="osLabel">{{ osLabel }}</span>
-          </div>
-          <div class="ls-srv-row__address-line">
             <span class="ls-srv-row__address" :title="address">{{ address }}</span>
           </div>
         </div>

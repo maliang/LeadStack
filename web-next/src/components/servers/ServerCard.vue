@@ -93,9 +93,11 @@ const modeLabel = computed(() =>
             {{ t('common.edit') }}
           </button>
         </div>
-        <p class="ls-srv-card__os" :title="osLabel">{{ osLabel }}</p>
-        <p class="ls-srv-card__address" :title="address">
-          <span class="ls-srv-card__address-text">{{ address }}</span>
+        <p class="ls-srv-card__os-line">
+          <span class="ls-srv-card__os" :title="osLabel">{{ osLabel }}</span>
+          <span class="ls-srv-card__address" :title="address">
+            <span class="ls-srv-card__address-text">{{ address }}</span>
+          </span>
           <span v-if="mode" class="ls-chip ls-chip--muted ls-srv-card__mode">{{ modeLabel }}</span>
         </p>
       </div>

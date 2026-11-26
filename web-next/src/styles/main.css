@@ -9788,16 +9788,6 @@ body.ls-scroll-locked {
   height: 3rem;
 }
 
-.ls-srv-row__address-line {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.ls-srv-row__address-line .ls-srv-row__address {
-  text-align: left;
-}
-
 /* 卡片模式：与列表一致，系统 logo 左侧占两行，名称/系统版本/IP 左对齐。 */
 .ls-srv-card__head {
   display: grid;
@@ -9843,4 +9833,38 @@ body.ls-scroll-locked {
 
 .ls-srv-card__identity .ls-srv-card__address {
   font-size: var(--ls-text-2xs);
+}
+
+/* 两行布局：第一行名称，第二行系统名称/版本 + IP；logo 只占两行高度。 */
+.ls-srv-row__os-logo,
+.ls-srv-card__os-logo {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.ls-srv-row__os-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.9rem;
+  min-width: 0;
+}
+
+.ls-srv-card__os-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.ls-srv-card__os-line .ls-srv-card__os,
+.ls-srv-card__os-line .ls-srv-card__address {
+  margin: 0;
+  text-align: left;
+}
+
+.ls-srv-card__os-line .ls-srv-card__mode {
+  margin-left: auto;
 }
