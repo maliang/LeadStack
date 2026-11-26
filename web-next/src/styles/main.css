@@ -9787,3 +9787,60 @@ body.ls-scroll-locked {
   width: 3rem;
   height: 3rem;
 }
+
+.ls-srv-row__address-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.ls-srv-row__address-line .ls-srv-row__address {
+  text-align: left;
+}
+
+/* 卡片模式：与列表一致，系统 logo 左侧占两行，名称/系统版本/IP 左对齐。 */
+.ls-srv-card__head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--ls-space-3);
+  min-width: 0;
+}
+
+.ls-srv-card__os-logo {
+  width: 3rem;
+  height: 3rem;
+}
+
+.ls-srv-card__identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.ls-srv-card__title-line {
+  display: flex;
+  align-items: center;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-srv-card__title-line .ls-srv-card__title {
+  flex: 1 1 auto;
+}
+
+.ls-srv-card__identity .ls-srv-card__os,
+.ls-srv-card__identity .ls-srv-card__address {
+  margin: 0;
+  text-align: left;
+}
+
+.ls-srv-card__identity .ls-srv-card__os {
+  color: var(--ls-text-muted);
+  font: 500 var(--ls-text-xs) / 1.35 var(--ls-font-sans);
+}
+
+.ls-srv-card__identity .ls-srv-card__address {
+  font-size: var(--ls-text-2xs);
+}

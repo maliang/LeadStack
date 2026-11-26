@@ -583,6 +583,7 @@ async function run() {
     // 3) 卡片视图 + localStorage 记忆
     await page.click('#servers-view-card')
     await page.waitForSelector('.ls-servers__cards', { timeout: 5000 })
+    await shot(page, 'servers-1280-cards')
     const storedCard = await page.evaluate((key) => window.localStorage.getItem(key), VIEW_KEY)
     check('切到卡片视图写入 localStorage', storedCard === 'card', String(storedCard))
     await page.reload({ waitUntil: 'domcontentloaded' })

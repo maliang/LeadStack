@@ -95,13 +95,13 @@ function openDetailFromRow(event: MouseEvent): void {
         <OsIcon class="ls-srv-row__os-logo" :os-id="osId" size="2.5rem" />
         <div class="ls-srv-row__identity-text">
           <div class="ls-srv-row__name-line">
+            <h2 class="ls-srv-row__name" :title="server.name">
+              <RouterLink class="ls-srv-row__name-link" :to="detailTarget" @click.stop>{{ server.name }}</RouterLink>
+            </h2>
             <span class="ls-srv-status" :class="`ls-srv-status--${serverStatusTone(server.status)}`">
               <span class="ls-srv-status__dot" aria-hidden="true" />
               {{ t(serverStatusLabelKey(server.status)) }}
             </span>
-            <h2 class="ls-srv-row__name" :title="server.name">
-              <RouterLink class="ls-srv-row__name-link" :to="detailTarget" @click.stop>{{ server.name }}</RouterLink>
-            </h2>
             <button
               v-if="props.canEdit"
               :id="`server-${server.id}-edit`"
@@ -115,6 +115,8 @@ function openDetailFromRow(event: MouseEvent): void {
           </div>
           <div class="ls-srv-row__os-line">
             <span class="ls-srv-row__os" :title="osLabel">{{ osLabel }}</span>
+          </div>
+          <div class="ls-srv-row__address-line">
             <span class="ls-srv-row__address" :title="address">{{ address }}</span>
           </div>
         </div>

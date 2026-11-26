@@ -72,34 +72,34 @@ const modeLabel = computed(() =>
 <template>
   <article class="ls-srv-card" :aria-labelledby="titleId">
     <header class="ls-srv-card__head">
-      <h2 :id="titleId" class="ls-srv-card__title" :title="server.name">
-        <RouterLink class="ls-srv-card__title-link" :to="detailTarget">{{ server.name }}</RouterLink>
-      </h2>
-      <button
-        v-if="props.canEdit"
-        :id="`server-card-${server.id}-edit`"
-        class="ls-btn ls-btn--small ls-srv-card__inline-edit"
-        type="button"
-        @click="emit('edit', server.id)"
-      >
-        <AppIcon name="settings" size="0.75rem" />
-        {{ t('common.edit') }}
-      </button>
-      <span class="ls-srv-status" :class="`ls-srv-status--${serverStatusTone(server.status)}`">
-        <span class="ls-srv-status__dot" aria-hidden="true" />
-        {{ t(serverStatusLabelKey(server.status)) }}
-      </span>
+      <OsIcon class="ls-srv-card__os-logo" :os-id="osId" size="3rem" />
+      <div class="ls-srv-card__identity">
+        <div class="ls-srv-card__title-line">
+          <h2 :id="titleId" class="ls-srv-card__title" :title="server.name">
+            <RouterLink class="ls-srv-card__title-link" :to="detailTarget">{{ server.name }}</RouterLink>
+          </h2>
+          <span class="ls-srv-status" :class="`ls-srv-status--${serverStatusTone(server.status)}`">
+            <span class="ls-srv-status__dot" aria-hidden="true" />
+            {{ t(serverStatusLabelKey(server.status)) }}
+          </span>
+          <button
+            v-if="props.canEdit"
+            :id="`server-card-${server.id}-edit`"
+            class="ls-btn ls-btn--small ls-srv-card__inline-edit"
+            type="button"
+            @click="emit('edit', server.id)"
+          >
+            <AppIcon name="settings" size="0.75rem" />
+            {{ t('common.edit') }}
+          </button>
+        </div>
+        <p class="ls-srv-card__os" :title="osLabel">{{ osLabel }}</p>
+        <p class="ls-srv-card__address" :title="address">
+          <span class="ls-srv-card__address-text">{{ address }}</span>
+          <span v-if="mode" class="ls-chip ls-chip--muted ls-srv-card__mode">{{ modeLabel }}</span>
+        </p>
+      </div>
     </header>
-    <p class="ls-srv-card__os" :title="osLabel">
-      <OsIcon :os-id="osId" size="0.875rem" />
-      {{ osLabel }}
-    </p>
-
-    <p class="ls-srv-card__address" :title="address">
-      <AppIcon name="server" size="0.875rem" />
-      <span class="ls-srv-card__address-text">{{ address }}</span>
-      <span v-if="mode" class="ls-chip ls-chip--muted ls-srv-card__mode">{{ modeLabel }}</span>
-    </p>
 
     <div v-if="server.metrics_summary" class="ls-srv-metrics ls-srv-card__metrics">
       <ServerMetricBar :label="t('servers.metricCpu')" :value="server.metrics_summary.cpu_pct" />
