@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
+import ScriptUploadButton from '@/components/ScriptUploadButton.vue'
 import AppModal from '@/components/AppModal.vue'
 import { useCan } from '@/composables/useCan'
 import { useI18n } from '@/i18n'
@@ -508,6 +509,7 @@ onMounted(() => {
         <label class="ls-field">
           <span class="ls-field__label">{{ t('schedules.command') }}</span>
           <textarea id="scheduled-command" v-model="form.command" class="ls-input" rows="4"></textarea>
+          <ScriptUploadButton :accept="'.sh,.bash,.zsh,.txt'" @load="form.command = $event" />
           <span class="ls-field__hint">{{ t('schedules.commandWarning') }}</span>
         </label>
 

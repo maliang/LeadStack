@@ -4,6 +4,7 @@ import AppSelect from '@/components/AppSelect.vue'
 
 import AppIcon from '@/components/AppIcon.vue'
 import AppModal from '@/components/AppModal.vue'
+import ScriptUploadButton from '@/components/ScriptUploadButton.vue'
 import { useCan } from '@/composables/useCan'
 import { useI18n } from '@/i18n'
 import { api, TEMPLATE_PLACEHOLDERS, type CreateTemplatePayload, type DeployTemplate } from '@/lib/api'
@@ -435,6 +436,7 @@ function firstLine(content: string): string {
             :aria-invalid="Boolean(formErrors.content)"
             :aria-describedby="formErrors.content ? undefined : 'template-form-content-hint'"
           />
+          <ScriptUploadButton :accept="form.kind === 'compose' || form.kind === 'systemd' ? '.yml,.yaml,.service,.txt,.conf' : '.sh,.bash,.zsh,.txt'" @load="form.content = $event" />
           <span v-if="formErrors.content" class="ls-field__error" role="alert">
             {{ t(formErrors.content) }}
           </span>

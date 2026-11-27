@@ -412,6 +412,8 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 > 旧应用没有内联方案时，发布弹窗仍会显示模板选择，保证历史数据可继续发布。
 
+> 所有脚本/配置输入框（应用更新脚本、回滚脚本、首版脚本、启动脚本、Compose/Systemd 内容、部署预设、服务器登录脚本、访问账号脚本、定时任务命令）都支持「上传脚本文件」，直接把本地 `.sh` / `.yaml` / `.service` / `.txt` 内容填入输入框；文件上限 256KB，二进制文件会被拒绝。
+
 **中止发布**：发到一半后悔了点「中止发布」，二次确认会写明「已完成的 N 台不会回滚」，只取消排队/执行中的机器。
 中止后整体状态是**琥珀色「已取消」**，成功若干台 + 主动中止不会被判成失败。
 
@@ -867,7 +869,7 @@ make dev               # 开发模式（另开 make web-dev 走前端热更新�
 make release-snapshot  # goreleaser 快照（5 平台 10 二进制）
 make docker-check      # Docker 构建 + 容器内健康检查 + 备份校验
 node scripts/capture-screenshots.mjs   # 重采 README 截图（需带演示数据的控制端）
-node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3459 校验总数）
+node web-next/scripts/check-i18n-keys.mjs   # i18n 键集合闸门（zh/en 逐字相等，--expect 3463 校验总数）
 ```
 
 > **内嵌前端 = `web-next/`**：`make build` 先构建 `web-next/dist/`，再由 `make web-embed` 复制到 `internal/webui/dist/`、经 `go:embed` 打进二进制。

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
+import ScriptUploadButton from '@/components/ScriptUploadButton.vue'
 import AppModal from '@/components/AppModal.vue'
 import { useI18n } from '@/i18n'
 import { api, type ServerAccount } from '@/lib/api'
@@ -278,6 +279,7 @@ async function submit(): Promise<void> {
           :placeholder="t('server.account.form.scriptPlaceholder')"
           :aria-invalid="Boolean(fieldErrors.script)"
         />
+        <ScriptUploadButton @load="form.loginScript = $event" />
         <span class="ls-field__hint">
           {{ t('server.account.form.loginScriptHint') }}
         </span>

@@ -181,6 +181,10 @@ const common: Record<string, string> = {
   'notFound.home': 'Back to home',
   'notFound.servers': 'Open servers',
   'errors.requestId': 'Request ID {id}',
+  'common.uploadScript': 'Upload script',
+  'common.scriptFileTooLarge': 'Script file must be smaller than {size} KB',
+  'common.scriptFileBinary': 'Binary files cannot be used as scripts',
+  'common.scriptFileReadFailed': 'Failed to read script file'
 }
 
 export default common

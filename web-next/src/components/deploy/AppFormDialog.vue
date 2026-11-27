@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import AppSelect from '@/components/AppSelect.vue'
+import ScriptUploadButton from '@/components/ScriptUploadButton.vue'
 import type { AppItem, CreateAppPayload } from '@/lib/api'
 import {
   appFormFromItem,
@@ -148,12 +149,14 @@ const scenarioHint = computed(() => {
         <label class="ls-field" for="app-form-deploy-script">
           <span class="ls-field__label">{{ t('apps.form.deployScript') }}</span>
           <textarea id="app-form-deploy-script" v-model="form.deployScript" class="ls-input ls-textarea" rows="7" spellcheck="false" :placeholder="t('apps.form.deployScriptPlaceholder')" />
+          <ScriptUploadButton @load="form.deployScript = $event" />
           <span v-if="errors.deployScript" class="ls-field__error" role="alert">{{ t(errors.deployScript) }}</span>
           <span class="ls-field__hint">{{ t('apps.form.deployScriptHint') }}</span>
         </label>
         <label class="ls-field" for="app-form-rollback-script">
           <span class="ls-field__label">{{ t('apps.form.rollbackScript') }}</span>
           <textarea id="app-form-rollback-script" v-model="form.rollbackScript" class="ls-input ls-textarea" rows="4" spellcheck="false" :placeholder="t('apps.form.scriptPlaceholder')" />
+          <ScriptUploadButton @load="form.rollbackScript = $event" />
           <span class="ls-field__hint">{{ t('apps.form.rollbackScriptHint') }}</span>
         </label>
       </template>
@@ -172,6 +175,7 @@ const scenarioHint = computed(() => {
         <label class="ls-field" for="app-form-init-script">
           <span class="ls-field__label">{{ t('apps.form.initScript') }}</span>
           <textarea id="app-form-init-script" v-model="form.initScript" class="ls-input ls-textarea" rows="3" spellcheck="false" :placeholder="t('apps.form.scriptPlaceholder')" />
+          <ScriptUploadButton @load="form.initScript = $event" />
           <span class="ls-field__hint">{{ t('apps.form.initScriptHint') }}</span>
         </label>
       </template>
@@ -180,6 +184,7 @@ const scenarioHint = computed(() => {
         <label class="ls-field" for="app-form-template-content">
           <span class="ls-field__label">{{ t('apps.form.startScript') }}</span>
           <textarea id="app-form-template-content" v-model="form.deployTemplateContent" class="ls-input ls-textarea" rows="7" spellcheck="false" :placeholder="t('apps.form.startScriptPlaceholder')" />
+          <ScriptUploadButton @load="form.deployTemplateContent = $event" />
           <span class="ls-field__hint">{{ t('apps.form.startScriptHint') }}</span>
         </label>
       </template>
@@ -188,6 +193,7 @@ const scenarioHint = computed(() => {
         <label class="ls-field" for="app-form-template-content">
           <span class="ls-field__label">{{ form.scenario === 'compose' ? t('apps.form.composeContent') : t('apps.form.systemdContent') }}</span>
           <textarea id="app-form-template-content" v-model="form.deployTemplateContent" class="ls-input ls-textarea" rows="10" spellcheck="false" :placeholder="form.scenario === 'compose' ? t('apps.form.composePlaceholder') : t('apps.form.systemdPlaceholder')" />
+          <ScriptUploadButton :accept="'.yml,.yaml,.service,.txt,.conf'" @load="form.deployTemplateContent = $event" />
           <span v-if="errors.deployTemplateContent" class="ls-field__error" role="alert">{{ t(errors.deployTemplateContent) }}</span>
           <span class="ls-field__hint">{{ t('apps.form.templateContentHint') }}</span>
         </label>

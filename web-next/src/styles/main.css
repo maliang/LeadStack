@@ -9891,3 +9891,15 @@ body.ls-scroll-locked {
 .ls-mode-picker--wrap .ls-mode-picker__item {
   flex: 1 1 10rem;
 }
+
+.ls-script-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ls-space-2);
+  min-width: 0;
+}
+
+.ls-script-upload__input {
+  display: none;
+}

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
+import ScriptUploadButton from '@/components/ScriptUploadButton.vue'
 import { useI18n } from '@/i18n'
 import type { Credential, Server, ServerLoginResult } from '@/lib/api'
 import { api } from '@/lib/api'
@@ -218,6 +219,11 @@ watch(
     pendingClear.value = false
   },
 )
+
+function loadScript(content: string): void {
+  draft.value = content
+  markEdited()
+}
 
 function markEdited(): void {
   issue.value = null
@@ -459,6 +465,7 @@ onBeforeUnmount(() => {
           rows="10"
           @input="markEdited"
         />
+        <ScriptUploadButton :disabled="!canWrite || scriptSaving" @load="loadScript" />
         <p class="ls-field__hint">{{ t('server.login.scriptCountHint') }}</p>
         <p v-if="issue !== null" :id="editorErrorId" class="ls-inline-error" role="alert">
           {{ issueText }}

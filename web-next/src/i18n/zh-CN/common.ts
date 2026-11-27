@@ -181,6 +181,10 @@ const common: Record<string, string> = {
   'notFound.home': '返回首页',
   'notFound.servers': '去服务器列表',
   'errors.requestId': '请求编号 {id}',
+  'common.uploadScript': '上传脚本文件',
+  'common.scriptFileTooLarge': '脚本文件不能超过 {size} KB',
+  'common.scriptFileBinary': '这是二进制文件，不能作为脚本上传',
+  'common.scriptFileReadFailed': '读取脚本文件失败'
 }
 
 export default common
